@@ -28,6 +28,7 @@ const allowedOrigins = [
   "http://localhost:3000",
   "http://localhost:3001",
   "http://localhost:5173",
+  "https://aliceblue-oryx-690662.hostingersite.com",
 ].filter(Boolean);
 
 app.use(helmet());
@@ -37,7 +38,9 @@ app.use(
       if (!origin) return callback(null, true);
       if (
         allowedOrigins.includes(origin) ||
-        process.env.NODE_ENV !== "production"
+        process.env.NODE_ENV !== "production" ||
+        origin.endsWith(".hostingersite.com") ||
+        origin.endsWith(".vercel.app")
       ) {
         return callback(null, true);
       }
