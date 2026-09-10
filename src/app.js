@@ -28,7 +28,8 @@ const allowedOrigins = [
   "http://localhost:3000",
   "http://localhost:3001",
   "http://localhost:5173",
-  "https://aliceblue-oryx-690662.hostingersite.com",
+  "https://papayawhip-parrot-520523.hostingersite.com",
+  "https://chipper-babka-a4b9e2.netlify.app",
 ].filter(Boolean);
 
 app.use(helmet());
@@ -40,6 +41,7 @@ app.use(
         allowedOrigins.includes(origin) ||
         process.env.NODE_ENV !== "production" ||
         origin.endsWith(".hostingersite.com") ||
+        origin.endsWith(".netlify.app") ||
         origin.endsWith(".vercel.app")
       ) {
         return callback(null, true);
