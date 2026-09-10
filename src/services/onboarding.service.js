@@ -1,0 +1,907 @@
+const crypto = require("crypto");
+const bcrypt = require("bcryptjs");
+const prisma = require("../config/database");
+
+class OnboardingService {
+  /**
+   * 1. HR/Admin: Create New Joiner invitation
+   */
+  async createJoiner(organizationId, hrUserId, data) {
+    const {
+      firstName,
+      lastName,
+      email,
+      phone,
+      designation,
+      departmentId,
+      branchId,
+      shiftId,
+      expectedJoinDate,
+      proposedSalary,
+    } = data;
+
+    if (!firstName || !firstName.trim()) {
+      const error = new Error("Candidate first name is required");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    if (!email || !email.trim()) {
+      const error = new Error("Candidate email is required");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    if (!designation || !designation.trim()) {
+      const error = new Error("Candidate designation/title is required");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    if (!expectedJoinDate) {
+      const error = new Error("Expected joining date is required");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+
+    // Check if an active user already exists with this email
+    const existingUser = await prisma.user.findUnique({
+      where: { email: cleanEmail },
+    });
+    if (existingUser) {
+      const error = new Error(`A user account with email '${cleanEmail}' already exists`);
+      error.statusCode = 400;
+      throw error;
+    }
+
+    // Check if an onboarding candidate with this email is currently active in the pipeline
+    const existingCandidate = await prisma.onboardingCandidate.findFirst({
+      where: {
+        organizationId,
+        email: cleanEmail,
+        status: { notIn: ["ACTIVATED", "REJECTED"] },
+      },
+    });
+    if (existingCandidate) {
+      const error = new Error(`An active onboarding record for '${cleanEmail}' already exists in pipeline`);
+      error.statusCode = 400;
+      throw error;
+    }
+
+    // Validate branch if provided
+    if (branchId) {
+      const branch = await prisma.branch.findFirst({
+        where: { id: branchId, organizationId },
+      });
+      if (!branch) {
+        const error = new Error("Selected branch was not found in this organization");
+        error.statusCode = 404;
+        throw error;
+      }
+    }
+
+    // Validate department if provided
+    if (departmentId) {
+      const department = await prisma.department.findFirst({
+        where: { id: departmentId, organizationId },
+      });
+      if (!department) {
+        const error = new Error("Selected department was not found in this organization");
+        error.statusCode = 404;
+        throw error;
+      }
+    }
+
+    // Validate shift if provided
+    if (shiftId) {
+      const shift = await prisma.shift.findFirst({
+        where: { id: shiftId, organizationId },
+      });
+      if (!shift) {
+        const error = new Error("Selected shift was not found in this organization");
+        error.statusCode = 404;
+        throw error;
+      }
+    }
+
+    const token = crypto.randomUUID();
+    const joinDateOnly = new Date(expectedJoinDate);
+
+    const candidate = await prisma.onboardingCandidate.create({
+      data: {
+        organizationId,
+        token,
+        firstName: firstName.trim(),
+        lastName: lastName ? lastName.trim() : null,
+        email: cleanEmail,
+        phone: phone ? phone.trim() : null,
+        designation: designation.trim(),
+        departmentId: departmentId || null,
+        branchId: branchId || null,
+        shiftId: shiftId || null,
+        expectedJoinDate: joinDateOnly,
+        proposedSalary: proposedSalary ? Number(proposedSalary) : null,
+        status: "INVITED",
+        hrReviewerId: hrUserId || null,
+      },
+      include: {
+        branch: { select: { id: true, name: true } },
+        department: { select: { id: true, name: true } },
+      },
+    });
+
+    return {
+      candidate,
+      onboardingUrl: `/onboarding/${token}`,
+    };
+  }
+
+  /**
+   * 2. Public Candidate Portal: Retrieve candidate information by token
+   */
+  async getCandidateByToken(token) {
+    if (!token) {
+      const error = new Error("Onboarding token is required");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const candidate = await prisma.onboardingCandidate.findUnique({
+      where: { token },
+      include: {
+        organization: { select: { id: true, name: true } },
+        branch: { select: { id: true, name: true, address: true } },
+        department: { select: { id: true, name: true } },
+        documents: {
+          select: {
+            id: true,
+            documentType: true,
+            fileName: true,
+            fileUrl: true,
+            status: true,
+            rejectionReason: true,
+            createdAt: true,
+          },
+        },
+      },
+    });
+
+    if (!candidate) {
+      const error = new Error("Invalid or expired onboarding invitation link");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    return candidate;
+  }
+
+  /**
+   * 3. Candidate: Submit or update complete profile
+   */
+  async updateCandidateProfile(token, profileData) {
+    const candidate = await prisma.onboardingCandidate.findUnique({
+      where: { token },
+    });
+
+    if (!candidate) {
+      const error = new Error("Invalid or expired onboarding link");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (candidate.status === "ACTIVATED") {
+      const error = new Error("This profile has already been activated and cannot be edited");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const {
+      dateOfBirth,
+      gender,
+      bloodGroup,
+      maritalStatus,
+      currentAddress,
+      permanentAddress,
+      emergencyContactName,
+      emergencyContactPhone,
+      bankName,
+      accountNumber,
+      ifscCode,
+      panNumber,
+      aadhaarNumber,
+    } = profileData;
+
+    const updateFields = {};
+    if (dateOfBirth) updateFields.dateOfBirth = new Date(dateOfBirth);
+    if (gender !== undefined) updateFields.gender = gender ? String(gender).trim() : null;
+    if (bloodGroup !== undefined) updateFields.bloodGroup = bloodGroup ? String(bloodGroup).trim() : null;
+    if (maritalStatus !== undefined) updateFields.maritalStatus = maritalStatus ? String(maritalStatus).trim() : null;
+    if (currentAddress !== undefined) updateFields.currentAddress = currentAddress ? String(currentAddress).trim() : null;
+    if (permanentAddress !== undefined) updateFields.permanentAddress = permanentAddress ? String(permanentAddress).trim() : null;
+    if (emergencyContactName !== undefined) updateFields.emergencyContactName = emergencyContactName ? String(emergencyContactName).trim() : null;
+    if (emergencyContactPhone !== undefined) updateFields.emergencyContactPhone = emergencyContactPhone ? String(emergencyContactPhone).trim() : null;
+    if (bankName !== undefined) updateFields.bankName = bankName ? String(bankName).trim() : null;
+    if (accountNumber !== undefined) updateFields.accountNumber = accountNumber ? String(accountNumber).trim() : null;
+    if (ifscCode !== undefined) updateFields.ifscCode = ifscCode ? String(ifscCode).trim().toUpperCase() : null;
+    if (panNumber !== undefined) updateFields.panNumber = panNumber ? String(panNumber).trim().toUpperCase() : null;
+    if (aadhaarNumber !== undefined) updateFields.aadhaarNumber = aadhaarNumber ? String(aadhaarNumber).trim() : null;
+
+    // Advance status from INVITED to PROFILE_SUBMITTED if initial submission
+    if (candidate.status === "INVITED") {
+      updateFields.status = "PROFILE_SUBMITTED";
+    }
+
+    return await prisma.onboardingCandidate.update({
+      where: { token },
+      data: updateFields,
+      include: {
+        documents: true,
+        branch: { select: { id: true, name: true } },
+        department: { select: { id: true, name: true } },
+      },
+    });
+  }
+
+  /**
+   * 4. Candidate: Upload onboarding document
+   */
+  async uploadCandidateDocument(token, docData) {
+    const candidate = await prisma.onboardingCandidate.findUnique({
+      where: { token },
+      include: { documents: true },
+    });
+
+    if (!candidate) {
+      const error = new Error("Invalid or expired onboarding link");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const { documentType, fileName, fileUrl, fileSize, mimeType } = docData;
+
+    if (!documentType || !fileName || !fileUrl) {
+      const error = new Error("documentType, fileName, and fileUrl are required");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const validTypes = [
+      "GOVT_ID",
+      "TAX_ID",
+      "DEGREE_CERTIFICATE",
+      "PREVIOUS_EXPERIENCE",
+      "BANK_PROOF",
+      "PHOTO",
+      "OTHER",
+    ];
+
+    const cleanType = String(documentType).toUpperCase();
+    if (!validTypes.includes(cleanType)) {
+      const error = new Error(`Invalid documentType. Must be one of: ${validTypes.join(", ")}`);
+      error.statusCode = 400;
+      throw error;
+    }
+
+    // Save document
+    const document = await prisma.onboardingDocument.create({
+      data: {
+        candidateId: candidate.id,
+        documentType: cleanType,
+        fileName: fileName.trim(),
+        fileUrl: fileUrl.trim(),
+        fileSize: fileSize ? Number(fileSize) : null,
+        mimeType: mimeType ? String(mimeType).trim() : null,
+        status: "PENDING",
+      },
+    });
+
+    // Advance candidate status to UNDER_HR_REVIEW if profile was already submitted
+    if (["INVITED", "PROFILE_SUBMITTED"].includes(candidate.status)) {
+      await prisma.onboardingCandidate.update({
+        where: { id: candidate.id },
+        data: { status: "UNDER_HR_REVIEW" },
+      });
+    }
+
+    return document;
+  }
+
+  /**
+   * 5. HR/Admin: List all candidates in pipeline
+   */
+  async listCandidates(organizationId, filters = {}) {
+    const { status, departmentId, branchId, search } = filters;
+
+    const where = { organizationId };
+
+    if (status && status !== "ALL") {
+      where.status = status;
+    }
+    if (departmentId && departmentId !== "ALL") {
+      where.departmentId = departmentId;
+    }
+    if (branchId && branchId !== "ALL") {
+      where.branchId = branchId;
+    }
+    if (search && search.trim()) {
+      const term = search.trim();
+      where.OR = [
+        { firstName: { contains: term, mode: "insensitive" } },
+        { lastName: { contains: term, mode: "insensitive" } },
+        { email: { contains: term, mode: "insensitive" } },
+        { designation: { contains: term, mode: "insensitive" } },
+      ];
+    }
+
+    return await prisma.onboardingCandidate.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      include: {
+        branch: { select: { id: true, name: true } },
+        department: { select: { id: true, name: true } },
+        documents: {
+          select: {
+            id: true,
+            documentType: true,
+            status: true,
+          },
+        },
+      },
+    });
+  }
+
+  /**
+   * 6. HR/Admin: Get single candidate complete dossier
+   */
+  async getCandidateDetails(organizationId, candidateId) {
+    const candidate = await prisma.onboardingCandidate.findFirst({
+      where: { id: candidateId, organizationId },
+      include: {
+        organization: { select: { id: true, name: true } },
+        branch: { select: { id: true, name: true, address: true } },
+        department: { select: { id: true, name: true } },
+        documents: { orderBy: { createdAt: "asc" } },
+      },
+    });
+
+    if (!candidate) {
+      const error = new Error("Candidate record not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    return candidate;
+  }
+
+  /**
+   * 7. HR: Verify Candidate Profile and Documents
+   */
+  async hrVerifyCandidate(organizationId, candidateId, hrUserId, verificationData) {
+    const candidate = await prisma.onboardingCandidate.findFirst({
+      where: { id: candidateId, organizationId },
+      include: { documents: true },
+    });
+
+    if (!candidate) {
+      const error = new Error("Candidate record not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (candidate.status === "ACTIVATED") {
+      const error = new Error("Candidate has already been activated");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const { hrNotes, documentVerifications = [], action = "APPROVE" } = verificationData;
+
+    // Update individual document statuses if supplied
+    for (const docReview of documentVerifications) {
+      const { documentId, status, rejectionReason } = docReview;
+      if (documentId && ["VERIFIED", "REJECTED"].includes(status)) {
+        await prisma.onboardingDocument.update({
+          where: { id: documentId },
+          data: {
+            status,
+            rejectionReason: status === "REJECTED" ? rejectionReason || "Document rejected by HR" : null,
+            verifiedBy: hrUserId,
+            verifiedAt: new Date(),
+          },
+        });
+      }
+    }
+
+    // Refresh document records to check verification completion
+    const updatedDocs = await prisma.onboardingDocument.findMany({
+      where: { candidateId: candidate.id },
+    });
+
+    let newStatus = candidate.status;
+    if (action === "REJECT") {
+      newStatus = "REJECTED";
+    } else {
+      // If HR explicitly verifies candidate, transition to HR_VERIFIED
+      newStatus = "HR_VERIFIED";
+    }
+
+    return await prisma.onboardingCandidate.update({
+      where: { id: candidate.id },
+      data: {
+        status: newStatus,
+        hrReviewerId: hrUserId,
+        hrNotes: hrNotes ? String(hrNotes).trim() : candidate.hrNotes,
+        hrVerifiedAt: new Date(),
+      },
+      include: {
+        documents: true,
+        branch: { select: { id: true, name: true } },
+        department: { select: { id: true, name: true } },
+      },
+    });
+  }
+
+  /**
+   * 8. Admin: Final Approval and Automatic Account Activation
+   */
+  async adminApproveAndActivate(organizationId, candidateId, adminUserId, approvalData = {}) {
+    const candidate = await prisma.onboardingCandidate.findFirst({
+      where: { id: candidateId, organizationId },
+      include: {
+        organization: true,
+        branch: true,
+        department: true,
+        documents: true,
+      },
+    });
+
+    if (!candidate) {
+      const error = new Error("Candidate record not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (candidate.status === "ACTIVATED") {
+      const error = new Error("This candidate profile has already been activated");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    // Double check email uniqueness
+    const existingUser = await prisma.user.findUnique({
+      where: { email: candidate.email },
+    });
+    if (existingUser) {
+      const error = new Error(`User account with email '${candidate.email}' already exists in system`);
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const {
+      adminNotes,
+      initialPassword = "Welcome@WorkPulse2026",
+      employeeCode,
+      role = "EMPLOYEE",
+    } = approvalData;
+
+    const passwordHash = await bcrypt.hash(initialPassword, 10);
+    const finalEmployeeCode =
+      employeeCode?.trim() || `EMP-${Date.now().toString().slice(-6)}`;
+
+    // Prepare Offer Letter data compilation
+    const offerLetterRef = `WP-OFF-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const salaryVal = candidate.proposedSalary ? Number(candidate.proposedSalary) : 50000;
+    const basic = Math.round(salaryVal * 0.5);
+    const hra = Math.round(salaryVal * 0.3);
+    const specialAllowance = Math.round(salaryVal * 0.2);
+
+    const offerLetterData = {
+      referenceNo: offerLetterRef,
+      issuedDate: new Date().toISOString().split("T")[0],
+      candidateName: `${candidate.firstName} ${candidate.lastName || ""}`.trim(),
+      email: candidate.email,
+      phone: candidate.phone,
+      currentAddress: candidate.currentAddress || "Not specified",
+      designation: candidate.designation,
+      department: candidate.department?.name || "General",
+      branch: candidate.branch?.name || "Corporate Headquarters",
+      expectedJoinDate: candidate.expectedJoinDate.toISOString().split("T")[0],
+      organizationName: candidate.organization.name,
+      compensation: {
+        ctcAnnual: salaryVal * 12,
+        grossMonthly: salaryVal,
+        basicMonthly: basic,
+        hraMonthly: hra,
+        specialAllowanceMonthly: specialAllowance,
+      },
+      terms: {
+        probationMonths: 3,
+        noticePeriodDays: 30,
+        workingHours: "09:00 AM - 06:00 PM (Monday to Friday)",
+      },
+    };
+
+    // Execute atomic transaction for user, employee, candidate activation, and offer letter
+    const result = await prisma.$transaction(async (tx) => {
+      // 1. Create User
+      const newUser = await tx.user.create({
+        data: {
+          organizationId,
+          email: candidate.email,
+          passwordHash,
+          role,
+        },
+      });
+
+      // 2. Create Employee
+      const newEmployee = await tx.employee.create({
+        data: {
+          organizationId,
+          userId: newUser.id,
+          employeeCode: finalEmployeeCode,
+          firstName: candidate.firstName,
+          lastName: candidate.lastName,
+          phone: candidate.phone,
+          status: "ACTIVE",
+          branchId: candidate.branchId,
+          departmentId: candidate.departmentId,
+          shiftId: candidate.shiftId,
+        },
+      });
+
+      // 3. Create initial Salary Structure
+      await tx.salaryStructure.create({
+        data: {
+          organizationId,
+          employeeId: newEmployee.id,
+          baseSalary: basic,
+          hra: hra,
+          special: specialAllowance,
+        },
+      });
+
+      // 4. Update Candidate Record to ACTIVATED with offer letter details
+      const activatedCandidate = await tx.onboardingCandidate.update({
+        where: { id: candidate.id },
+        data: {
+          status: "ACTIVATED",
+          adminApproverId: adminUserId,
+          adminNotes: adminNotes ? String(adminNotes).trim() : null,
+          adminApprovedAt: new Date(),
+          employeeId: newEmployee.id,
+          offerLetterRef,
+          offerLetterData,
+          offerLetterGeneratedAt: new Date(),
+        },
+        include: {
+          branch: { select: { id: true, name: true } },
+          department: { select: { id: true, name: true } },
+          documents: true,
+        },
+      });
+
+      return {
+        user: newUser,
+        employee: newEmployee,
+        candidate: activatedCandidate,
+        offerLetter: offerLetterData,
+        temporaryPassword: initialPassword,
+      };
+    });
+
+    return result;
+  }
+
+  /**
+   * 9. Generate or Retrieve Offer Letter
+   */
+  async generateOfferLetter(organizationId, candidateId) {
+    const candidate = await prisma.onboardingCandidate.findFirst({
+      where: { id: candidateId, organizationId },
+      include: {
+        organization: true,
+        branch: true,
+        department: true,
+      },
+    });
+
+    if (!candidate) {
+      const error = new Error("Candidate record not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (candidate.offerLetterData) {
+      return {
+        offerLetter: candidate.offerLetterData,
+        referenceNo: candidate.offerLetterRef,
+        generatedAt: candidate.offerLetterGeneratedAt,
+      };
+    }
+
+    // Generate on demand if not yet cached
+    const offerLetterRef =
+      candidate.offerLetterRef ||
+      `WP-OFF-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const salaryVal = candidate.proposedSalary ? Number(candidate.proposedSalary) : 50000;
+    const basic = Math.round(salaryVal * 0.5);
+    const hra = Math.round(salaryVal * 0.3);
+    const specialAllowance = Math.round(salaryVal * 0.2);
+
+    const offerLetterData = {
+      referenceNo: offerLetterRef,
+      issuedDate: new Date().toISOString().split("T")[0],
+      candidateName: `${candidate.firstName} ${candidate.lastName || ""}`.trim(),
+      email: candidate.email,
+      phone: candidate.phone,
+      currentAddress: candidate.currentAddress || "Not specified",
+      designation: candidate.designation,
+      department: candidate.department?.name || "General",
+      branch: candidate.branch?.name || "Corporate Headquarters",
+      expectedJoinDate: candidate.expectedJoinDate.toISOString().split("T")[0],
+      organizationName: candidate.organization.name,
+      compensation: {
+        ctcAnnual: salaryVal * 12,
+        grossMonthly: salaryVal,
+        basicMonthly: basic,
+        hraMonthly: hra,
+        specialAllowanceMonthly: specialAllowance,
+      },
+      terms: {
+        probationMonths: 3,
+        noticePeriodDays: 30,
+        workingHours: "09:00 AM - 06:00 PM (Monday to Friday)",
+      },
+    };
+
+    await prisma.onboardingCandidate.update({
+      where: { id: candidate.id },
+      data: {
+        offerLetterRef,
+        offerLetterData,
+        offerLetterGeneratedAt: new Date(),
+      },
+    });
+
+    return {
+      offerLetter: offerLetterData,
+      referenceNo: offerLetterRef,
+      generatedAt: new Date(),
+    };
+  }
+
+  /**
+   * 10. Admin Approval -> Generate Offer Letter
+   */
+  async adminApproveAndGenerateOffer(organizationId, candidateId, adminUserId, approvalData = {}) {
+    const candidate = await prisma.onboardingCandidate.findFirst({
+      where: { id: candidateId, organizationId },
+      include: { organization: true, branch: true, department: true },
+    });
+
+    if (!candidate) {
+      const error = new Error("Candidate record not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const { adminNotes } = approvalData;
+
+    // Generate Offer Letter
+    const offerLetterRef = `WP-OFF-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const salaryVal = candidate.proposedSalary ? Number(candidate.proposedSalary) : 50000;
+    const basic = Math.round(salaryVal * 0.5);
+    const hra = Math.round(salaryVal * 0.3);
+    const specialAllowance = Math.round(salaryVal * 0.2);
+
+    const offerLetterData = {
+      referenceNo: offerLetterRef,
+      issuedDate: new Date().toISOString().split("T")[0],
+      candidateName: `${candidate.firstName} ${candidate.lastName || ""}`.trim(),
+      email: candidate.email,
+      phone: candidate.phone,
+      currentAddress: candidate.currentAddress || "Not specified",
+      designation: candidate.designation,
+      department: candidate.department?.name || "General",
+      branch: candidate.branch?.name || "Corporate Headquarters",
+      expectedJoinDate: candidate.expectedJoinDate.toISOString().split("T")[0],
+      organizationName: candidate.organization.name,
+      compensation: {
+        ctcAnnual: salaryVal * 12,
+        grossMonthly: salaryVal,
+        basicMonthly: basic,
+        hraMonthly: hra,
+        specialAllowanceMonthly: specialAllowance,
+      },
+      terms: {
+        probationMonths: 3,
+        noticePeriodDays: 30,
+        workingHours: "09:00 AM - 06:00 PM (Monday to Friday)",
+      },
+    };
+
+    return await prisma.onboardingCandidate.update({
+      where: { id: candidate.id },
+      data: {
+        status: "OFFER_GENERATED",
+        adminApproverId: adminUserId,
+        adminNotes: adminNotes ? String(adminNotes).trim() : null,
+        adminApprovedAt: new Date(),
+        offerLetterRef,
+        offerLetterData,
+        offerLetterGeneratedAt: new Date(),
+      },
+      include: {
+        branch: { select: { id: true, name: true } },
+        department: { select: { id: true, name: true } },
+        documents: true,
+      },
+    });
+  }
+
+  /**
+   * 11. HR Review -> Send to Employee
+   */
+  async hrReviewAndSendOffer(organizationId, candidateId, hrUserId, sendData = {}) {
+    const candidate = await prisma.onboardingCandidate.findFirst({
+      where: { id: candidateId, organizationId },
+    });
+
+    if (!candidate) {
+      const error = new Error("Candidate record not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (!candidate.offerLetterData) {
+      const error = new Error("Offer letter has not been generated yet by Admin");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const { hrReviewNotes } = sendData;
+
+    return await prisma.onboardingCandidate.update({
+      where: { id: candidate.id },
+      data: {
+        status: "OFFER_SENT",
+        offerSentAt: new Date(),
+        hrNotes: hrReviewNotes ? String(hrReviewNotes).trim() : candidate.hrNotes,
+      },
+      include: {
+        branch: { select: { id: true, name: true } },
+        department: { select: { id: true, name: true } },
+        documents: true,
+      },
+    });
+  }
+
+  /**
+   * 12. Employee Accept / Reject Offer
+   */
+  async respondToOffer(token, responseData) {
+    const candidate = await prisma.onboardingCandidate.findUnique({
+      where: { token },
+      include: { organization: true, branch: true, department: true },
+    });
+
+    if (!candidate) {
+      const error = new Error("Invalid or expired onboarding token");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const { action, signature, reason } = responseData;
+
+    if (!["ACCEPT", "REJECT"].includes(action)) {
+      const error = new Error("Invalid action. Must be 'ACCEPT' or 'REJECT'");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    if (action === "REJECT") {
+      const rejected = await prisma.onboardingCandidate.update({
+        where: { id: candidate.id },
+        data: {
+          status: "OFFER_REJECTED",
+          offerRejectReason: reason ? String(reason).trim() : "Candidate declined offer terms",
+          offerRespondedAt: new Date(),
+        },
+      });
+      return {
+        status: "OFFER_REJECTED",
+        message: "Offer declined successfully",
+        candidate: rejected,
+      };
+    }
+
+    // action === "ACCEPT"
+    if (!signature || !signature.trim()) {
+      const error = new Error("Digital signature is required to accept the offer letter");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    // Provision user & employee account upon acceptance if not already created
+    let employeeId = candidate.employeeId;
+    let newEmployee = null;
+
+    if (!employeeId) {
+      const passwordHash = await bcrypt.hash("Welcome@WorkPulse2026", 10);
+      const finalEmployeeCode = `EMP-${Date.now().toString().slice(-6)}`;
+      const salaryVal = candidate.proposedSalary ? Number(candidate.proposedSalary) : 50000;
+      const basic = Math.round(salaryVal * 0.5);
+      const hra = Math.round(salaryVal * 0.3);
+      const specialAllowance = Math.round(salaryVal * 0.2);
+
+      const created = await prisma.$transaction(async (tx) => {
+        let u = await tx.user.findUnique({ where: { email: candidate.email } });
+        if (!u) {
+          u = await tx.user.create({
+            data: {
+              organizationId: candidate.organizationId,
+              email: candidate.email,
+              passwordHash,
+              role: "EMPLOYEE",
+            },
+          });
+        }
+
+        const emp = await tx.employee.create({
+          data: {
+            organizationId: candidate.organizationId,
+            userId: u.id,
+            employeeCode: finalEmployeeCode,
+            firstName: candidate.firstName,
+            lastName: candidate.lastName,
+            phone: candidate.phone,
+            status: "ACTIVE",
+            branchId: candidate.branchId,
+            departmentId: candidate.departmentId,
+            shiftId: candidate.shiftId,
+          },
+        });
+
+        await tx.salaryStructure.create({
+          data: {
+            organizationId: candidate.organizationId,
+            employeeId: emp.id,
+            baseSalary: basic,
+            hra: hra,
+            special: specialAllowance,
+          },
+        });
+
+        return { user: u, employee: emp };
+      });
+
+      employeeId = created.employee.id;
+      newEmployee = created.employee;
+    }
+
+    const accepted = await prisma.onboardingCandidate.update({
+      where: { id: candidate.id },
+      data: {
+        status: "OFFER_ACCEPTED",
+        candidateSignature: signature.trim(),
+        offerRespondedAt: new Date(),
+        employeeId,
+      },
+      include: {
+        branch: { select: { id: true, name: true } },
+        department: { select: { id: true, name: true } },
+      },
+    });
+
+    return {
+      status: "OFFER_ACCEPTED",
+      message: "Offer letter accepted successfully! Welcome to the team.",
+      candidate: accepted,
+      employee: newEmployee,
+    };
+  }
+}
+
+module.exports = new OnboardingService();
