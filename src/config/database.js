@@ -7,9 +7,15 @@ const NEON_PRODUCTION_URL =
 
 let connectionString = (process.env.DATABASE_URL || "").trim();
 
-// Protect against missing DATABASE_URL or Railway's unresolved internal host '@base'
-if (!connectionString || connectionString.includes("@base") || connectionString === "base") {
-  console.warn("⚠️ DATABASE_URL was missing or pointed to unreachable host 'base'. Falling back to production Neon database.");
+// Protect against missing DATABASE_URL, placeholder values, or Railway's unreachable internal host 'base'
+if (
+  !connectionString ||
+  connectionString.includes("base") ||
+  !connectionString.includes("neon.tech")
+) {
+  console.warn(
+    "⚠️ DATABASE_URL was missing, invalid, or pointing to an unreachable host ('base'). Falling back to production Neon database."
+  );
   connectionString = NEON_PRODUCTION_URL;
 }
 
