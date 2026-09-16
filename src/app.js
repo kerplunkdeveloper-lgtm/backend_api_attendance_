@@ -37,6 +37,7 @@ const allowedOrigins = [
   "http://localhost:5173",
   "https://papayawhip-parrot-520523.hostingersite.com",
   "https://chipper-babka-a4b9e2.netlify.app",
+  "https://workpl.netlify.app",
 ].filter(Boolean);
 
 app.use(helmet());
