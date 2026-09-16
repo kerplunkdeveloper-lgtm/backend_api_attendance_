@@ -117,7 +117,7 @@ app.use("/compoff", compOffRoutes);
 app.use("/overtime", overtimeRoutes);
 app.use("/shift-overrides", shiftOverrideRoutes);
 
-app.get("/", (req, res) => {
+app.get(["/", "/api"], (req, res) => {
   res.json({
     success: true,
     message: "WorkPulse Workforce Backend API is running",
