@@ -2,7 +2,7 @@ const prisma = require("../config/database");
 const { getScheduledDurationMinutes } = require("../utils/shiftCalculator");
 
 const createShift = async (organizationId, data) => {
-  const { name, startTime, endTime, graceMinutes } = data;
+  const { name, startTime, endTime, graceMinutes, workingDays = "1,2,3,4,5,6" } = data;
 
   if (!name || !name.trim()) {
     throw new Error("Shift name is required");
@@ -19,6 +19,7 @@ const createShift = async (organizationId, data) => {
       startTime: startTime.trim(),
       endTime: endTime.trim(),
       graceMinutes: graceMinutes ? parseInt(graceMinutes, 10) : 10,
+      workingDays: workingDays ? workingDays.trim() : "1,2,3,4,5,6",
     },
     include: {
       _count: {
@@ -100,7 +101,7 @@ const updateShift = async (organizationId, shiftId, data) => {
     throw new Error("Shift not found in this organization");
   }
 
-  const { name, startTime, endTime, graceMinutes } = data;
+  const { name, startTime, endTime, graceMinutes, workingDays } = data;
 
   const updated = await prisma.shift.update({
     where: { id: shiftId },
@@ -109,6 +110,7 @@ const updateShift = async (organizationId, shiftId, data) => {
       ...(startTime ? { startTime: startTime.trim() } : {}),
       ...(endTime ? { endTime: endTime.trim() } : {}),
       ...(graceMinutes !== undefined ? { graceMinutes: parseInt(graceMinutes, 10) } : {}),
+      ...(workingDays ? { workingDays: workingDays.trim() } : {}),
     },
     include: {
       _count: {

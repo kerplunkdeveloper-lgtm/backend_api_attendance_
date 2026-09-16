@@ -87,10 +87,27 @@ const remove = async (req, res) => {
   }
 };
 
+const invite = async (req, res) => {
+  try {
+    const result = await employeeService.inviteEmployee(
+      req.user.organizationId,
+      req.user.id,
+      req.body
+    );
+    return res.status(201).json(result);
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 module.exports = {
   create,
   list,
   getById,
   update,
   remove,
+  invite,
 };

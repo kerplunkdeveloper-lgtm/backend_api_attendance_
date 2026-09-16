@@ -20,6 +20,13 @@ const deviceRoutes = require("./routes/device.routes");
 const auditRoutes = require("./routes/audit.routes");
 const holidayRoutes = require("./routes/holiday.routes");
 const onboardingRoutes = require("./routes/onboarding.routes");
+const uploadRoutes = require("./routes/upload.routes");
+const expenseRoutes = require("./routes/expense.routes");
+const policyRoutes = require("./routes/policy.routes");
+const compOffRoutes = require("./routes/compoff.routes");
+const overtimeRoutes = require("./routes/overtime.routes");
+const shiftOverrideRoutes = require("./routes/shiftoverride.routes");
+const { authRateLimiter, apiRateLimiter } = require("./middleware/rateLimiter.middleware");
 
 const app = express();
 
@@ -52,9 +59,12 @@ app.use(
   })
 );
 app.use(cookieParser());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: "25mb" }));
+app.use(express.urlencoded({ extended: true, limit: "25mb" }));
 app.use(morgan("dev"));
+
+// Apply general rate limiter to all API routes
+app.use("/api", apiRateLimiter);
 
 // API Modules
 app.use("/api/auth", authRoutes);
@@ -74,6 +84,12 @@ app.use("/api/devices", deviceRoutes);
 app.use("/api/audit-logs", auditRoutes);
 app.use("/api/holidays", holidayRoutes);
 app.use("/api/onboarding", onboardingRoutes);
+app.use("/api/upload", uploadRoutes);
+app.use("/api/expenses", expenseRoutes);
+app.use("/api/policy", policyRoutes);
+app.use("/api/compoff", compOffRoutes);
+app.use("/api/overtime", overtimeRoutes);
+app.use("/api/shift-overrides", shiftOverrideRoutes);
 
 app.get("/", (req, res) => {
   res.json({

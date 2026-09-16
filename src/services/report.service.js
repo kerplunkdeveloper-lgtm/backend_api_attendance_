@@ -34,12 +34,14 @@ class ReportService {
     let late = 0;
     let halfDay = 0;
     let onLeave = 0;
+    let wfh = 0;
 
     records.forEach((r) => {
       if (r.status === "PRESENT") present++;
       if (r.status === "LATE") late++;
       if (r.status === "HALF_DAY") halfDay++;
       if (r.status === "ON_LEAVE") onLeave++;
+      if (r.status === "WORK_FROM_HOME") wfh++;
     });
 
     const totalMarked = records.length;
@@ -53,9 +55,10 @@ class ReportService {
         present,
         late,
         halfDay,
+        wfh,
         onLeave,
         absent,
-        attendanceRate: totalEmployees > 0 ? Math.round(((present + late) / totalEmployees) * 100) : 0,
+        attendanceRate: totalEmployees > 0 ? Math.round(((present + late + wfh) / totalEmployees) * 100) : 0,
       },
       records,
     };
@@ -102,11 +105,16 @@ class ReportService {
       let presentDays = 0;
       let lateDays = 0;
       let halfDays = 0;
+      let wfhDays = 0;
       let totalOvertimeMinutes = 0;
       let totalWorkingMinutes = 0;
 
       empAttendances.forEach((att) => {
         if (att.status === "PRESENT") presentDays++;
+        if (att.status === "WORK_FROM_HOME") {
+          presentDays++;
+          wfhDays++;
+        }
         if (att.status === "LATE") {
           presentDays++;
           lateDays++;
@@ -131,6 +139,7 @@ class ReportService {
         presentDays,
         lateDays,
         halfDays,
+        wfhDays,
         approvedLeaveDays,
         totalWorkingHours: (totalWorkingMinutes / 60).toFixed(1),
         overtimeHours: (totalOvertimeMinutes / 60).toFixed(1),

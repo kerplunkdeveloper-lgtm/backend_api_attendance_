@@ -1,6 +1,8 @@
 const prisma = require("../config/database");
 const { getTodayDateOnly } = require("./attendance.service");
 const holidayService = require("./holiday.service");
+const emailService = require("./email.service");
+const whatsappService = require("./whatsapp.service");
 
 class LeaveService {
   /**
@@ -321,7 +323,14 @@ class LeaveService {
 
     const request = await prisma.leaveRequest.findFirst({
       where: { id: requestId, organizationId },
-      include: { leaveType: true, employee: true },
+      include: {
+        leaveType: true,
+        employee: {
+          include: {
+            user: { select: { email: true } },
+          },
+        },
+      },
     });
 
     if (!request) {
@@ -427,6 +436,40 @@ class LeaveService {
 
       return updated;
     });
+
+    // Asynchronously dispatch Email & WhatsApp notifications
+    const empUser = request.employee?.user;
+    const empEmail = empUser?.email;
+    const empPhone = request.employee?.phone;
+    const empName = `${request.employee?.firstName} ${request.employee?.lastName || ""}`.trim();
+
+    if (empEmail) {
+      emailService
+        .sendLeaveStatusEmail(empEmail, empName, {
+          status,
+          leaveType: request.leaveType?.name,
+          startDate: request.startDate,
+          endDate: request.endDate,
+          totalDays: Number(request.totalDays),
+          reviewNote,
+        })
+        .catch((err) => console.warn("[LeaveNotification:Email] Error:", err.message));
+    }
+
+    if (empPhone) {
+      whatsappService
+        .sendLeaveStatusWhatsApp(empPhone, empName, {
+          status,
+          leaveType: request.leaveType?.name,
+          startDate: request.startDate,
+          endDate: request.endDate,
+          totalDays: Number(request.totalDays),
+          reviewNote,
+        })
+        .catch((err) => console.warn("[LeaveNotification:WhatsApp] Error:", err.message));
+    }
+
+    return result;
   }
 
   /**

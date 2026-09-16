@@ -1,18 +1,27 @@
 const express = require("express");
 const authController = require("../controllers/auth.controller");
 const { authenticate, authorizeRoles } = require("../middleware/auth.middleware");
+const { authRateLimiter } = require("../middleware/rateLimiter.middleware");
 
 const router = express.Router();
 
 // Public Authentication Endpoints
-router.post("/register", authController.register);
-router.post("/login", authController.login);
+router.get("/plans", authController.getPlans);
+router.post("/register", authRateLimiter, authController.register);
+router.post("/login", authRateLimiter, authController.login);
 router.post("/refresh-token", authController.refreshToken);
 router.post("/refresh", authController.refreshToken);
 router.post("/logout", authController.logout);
 
 // Protected Authentication Endpoints
 router.get("/me", authenticate, authController.getMe);
+
+// Plan unlock — admin enters the code from their registration email
+router.post("/activate-plan", authenticate, authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"), authController.activatePlan);
+
+// Password change — works for all authenticated users (forced on first employee login)
+router.post("/change-password", authenticate, authController.changePassword);
+
 
 // RBAC Demonstration Endpoints
 router.get(
@@ -58,9 +67,11 @@ router.get("/register", (req, res) => {
     exampleBody: {
       email: "user@example.com",
       password: "Password123!",
-      organizationName: "Optional Org Name",
+      organizationName: "Acme Corp",
       firstName: "John",
-      lastName: "Doe"
+      lastName: "Doe",
+      subscriptionPlan: "PROFESSIONAL",                                   
+      billingCycle: "MONTHLY" // MONTHLY, ANNUAL
     }
   });
 });

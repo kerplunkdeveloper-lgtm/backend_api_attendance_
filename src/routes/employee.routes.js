@@ -41,4 +41,11 @@ router.delete(
   employeeController.remove
 );
 
+// Invite employee by email — auto-creates account + sends credentials via email
+router.post(
+  "/invite",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
+  employeeController.invite
+);
+
 module.exports = router;

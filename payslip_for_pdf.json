@@ -1,0 +1,86 @@
+{
+  "payslipId": "d6576bfe-b0b4-41c1-bc7e-4fa5baa95543",
+  "referenceNo": "WP-PAY-2026-09-EMP-934116",
+  "period": {
+    "month": 9,
+    "monthName": "September",
+    "year": 2026,
+    "periodLabel": "September 2026"
+  },
+  "organization": {
+    "name": "webzivo",
+    "address": "Corporate Headquarters, Cyber City, Phase II"
+  },
+  "employee": {
+    "id": "41769c4a-25bc-45e3-8368-6e4566702ac1",
+    "name": "Kumaran s",
+    "employeeCode": "EMP-934116",
+    "designation": "Staff Professional",
+    "department": "General",
+    "branch": "Main Campus",
+    "email": "kumaran@gmail.com",
+    "phone": "N/A",
+    "dateOfJoining": "N/A",
+    "panNumber": "ABCDE1234F",
+    "bankName": "HDFC Bank Ltd.",
+    "accountNumber": "••••••••4892",
+    "ifscCode": "HDFC0001824"
+  },
+  "attendance": {
+    "workingDays": 22,
+    "presentDays": 0,
+    "paidLeaveDays": 0,
+    "unpaidLeaveDays": 22,
+    "overtimeHours": 0
+  },
+  "earnings": [
+    {
+      "label": "Basic Salary",
+      "amount": 25000
+    },
+    {
+      "label": "House Rent Allowance (HRA)",
+      "amount": 12500
+    },
+    {
+      "label": "Transport Allowance",
+      "amount": 3000
+    },
+    {
+      "label": "Special Allowance",
+      "amount": 6500
+    }
+  ],
+  "deductions": [
+    {
+      "label": "Loss of Pay (LWP - 22 days)",
+      "amount": 25000
+    },
+    {
+      "label": "Provident Fund (PF)",
+      "amount": 1800
+    },
+    {
+      "label": "Employee State Insurance (ESI)",
+      "amount": 0
+    },
+    {
+      "label": "Professional Tax (PT)",
+      "amount": 200
+    }
+  ],
+  "totals": {
+    "grossSalary": 47000,
+    "totalDeductions": 27000,
+    "netSalary": 20000,
+    "netSalaryInWords": "Twenty Thousand Rupees Only"
+  },
+  "governance": {
+    "status": "APPROVED",
+    "approvedBy": "d04ab4f5-0ceb-440c-85e7-0ad32e4792cf",
+    "approvedAt": "2026-09-12T06:36:32.269Z",
+    "disbursedAt": null,
+    "remarks": "Batch approved by authorized HR Admin",
+    "generatedAt": "2026-09-12T06:36:27.248Z"
+  }
+}

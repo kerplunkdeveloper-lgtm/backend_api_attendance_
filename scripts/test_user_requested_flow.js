@@ -8,13 +8,13 @@ async function testUserRequestedOnboardingFlow() {
   console.log('New Joiner -> HR Verification -> Admin Approval -> Generate Offer -> HR Review -> Send to Employee -> Employee Accept / Reject');
   console.log('===============================================================\n');
 
-  const org = await prisma.organization.findFirst();
-  if (!org) throw new Error('Organization not found');
-
   const adminUser = await prisma.user.findFirst({
-    where: { organizationId: org.id, role: { in: ['SUPER_ADMIN', 'COMPANY_ADMIN'] } },
+    where: { role: { in: ['SUPER_ADMIN', 'COMPANY_ADMIN'] } },
   });
   if (!adminUser) throw new Error('Admin user not found');
+
+  const org = await prisma.organization.findUnique({ where: { id: adminUser.organizationId } });
+  if (!org) throw new Error('Organization not found');
 
   // STEP 1: New Joiner
   console.log('Step 1: HR creates New Joiner...');

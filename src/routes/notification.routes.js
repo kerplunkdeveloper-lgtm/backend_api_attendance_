@@ -1,5 +1,7 @@
 const express = require("express");
 const notificationService = require("../services/notification.service");
+const emailService = require("../services/email.service");
+const whatsappService = require("../services/whatsapp.service");
 const { authenticate } = require("../middleware/auth.middleware");
 
 const router = express.Router();
@@ -11,6 +13,94 @@ router.get("/", async (req, res) => {
   try {
     const result = await notificationService.getUserNotifications(req.user.id, req.user.organizationId);
     res.json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Communication channels health and configuration status
+router.get("/communication-status", async (req, res) => {
+  try {
+    const smtpCheck = await emailService.verifyConnection();
+    res.json({
+      success: true,
+      email: {
+        isConfigured: emailService.isConfigured,
+        provider: "Nodemailer (SMTP)",
+        status: smtpCheck,
+        from: process.env.EMAIL_FROM || "WorkPulse <noreply@workpulse.com>",
+      },
+      whatsapp: {
+        isConfigured: whatsappService.isConfigured,
+        provider: "Twilio",
+        senderNumber: process.env.TWILIO_WHATSAPP_NUMBER || "whatsapp:+14155238886",
+        mode: whatsappService.isConfigured ? "LIVE" : "SIMULATION",
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Diagnostic endpoint: Dispatch test email
+router.post("/test-email", async (req, res) => {
+  try {
+    const recipient = req.body.to || req.user.email;
+    if (!recipient) {
+      return res.status(400).json({ success: false, message: "Target email address required in 'to' body field" });
+    }
+
+    const testHtml = emailService.buildHtmlTemplate({
+      title: "WorkPulse Test Notification",
+      badge: "Diagnostic Test",
+      badgeColor: "#10b981",
+      contentHtml: `
+        <p class="text">Hello <strong>${req.user.name || "Colleague"}</strong>,</p>
+        <p class="text">This is a verified test email sent from the <strong>WorkPulse Automation & Communication Gateway</strong>.</p>
+        <div class="info-card">
+          <div class="info-row"><span class="info-label">Sender:</span><span class="info-value">WorkPulse Automated Dispatch</span></div>
+          <div class="info-row"><span class="info-label">Recipient:</span><span class="info-value">${recipient}</span></div>
+          <div class="info-row"><span class="info-label">Status:</span><span class="info-value" style="color:#10b981;font-weight:bold;">Operational</span></div>
+        </div>
+      `,
+      ctaText: "Open WorkPulse Portal",
+      ctaUrl: process.env.FRONTEND_URL || "http://localhost:3000",
+    });
+
+    const result = await emailService.sendEmail({
+      to: recipient,
+      subject: "[WorkPulse Diagnostic] System Communication Test",
+      html: testHtml,
+    });
+
+    res.json({
+      success: true,
+      message: `Test email dispatched to ${recipient}`,
+      deliveryResult: result,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Diagnostic endpoint: Dispatch test WhatsApp alert
+router.post("/test-whatsapp", async (req, res) => {
+  try {
+    const recipient = req.body.to || req.user.phone;
+    if (!recipient) {
+      return res.status(400).json({ success: false, message: "Target phone number required in 'to' body field" });
+    }
+
+    const result = await whatsappService.sendMessage({
+      to: recipient,
+      message: `*WorkPulse Notification System Test* 🚀\nHello ${req.user.name || "User"},\nYour WorkPulse WhatsApp alerts are active and running!\nTime: ${new Date().toLocaleTimeString("en-IN")}`,
+    });
+
+    res.json({
+      success: true,
+      message: `Test WhatsApp message processed for ${recipient}`,
+      deliveryResult: result,
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

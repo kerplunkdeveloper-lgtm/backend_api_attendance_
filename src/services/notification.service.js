@@ -1,4 +1,6 @@
 const prisma = require("../config/database");
+const emailService = require("./email.service");
+const whatsappService = require("./whatsapp.service");
 
 class NotificationService {
   /**
@@ -87,7 +89,10 @@ class NotificationService {
         userId: true,
         firstName: true,
         lastName: true,
+        phone: true,
         organizationId: true,
+        user: { select: { email: true } },
+        shift: { select: { name: true, startTime: true } },
       },
     });
 
@@ -118,15 +123,39 @@ class NotificationService {
         });
 
         if (!existingNotification) {
+          const shiftTime = emp.shift?.startTime || "09:00 AM";
+          const shiftName = emp.shift?.name || "General Morning Shift";
+
           await prisma.notification.create({
             data: {
               organizationId: emp.organizationId,
               userId: emp.userId,
               title: "⏰ Morning Shift Check-In Reminder (08:50 AM)",
-              message: `Good morning, ${emp.firstName}! Shift starts at 09:00 AM. Please remember to clock in within the 15-minute grace period to prevent late marks.`,
+              message: `Good morning, ${emp.firstName}! Shift starts at ${shiftTime}. Please remember to clock in within the grace period to prevent late marks.`,
               type: "ATTENDANCE",
             },
           });
+
+          // Dispatch Email
+          if (emp.user?.email) {
+            emailService
+              .sendShiftReminderEmail(emp.user.email, emp.firstName, {
+                shiftName,
+                shiftTime,
+              })
+              .catch((e) => console.warn(`[MorningReminder:Email] ${e.message}`));
+          }
+
+          // Dispatch WhatsApp
+          if (emp.phone) {
+            whatsappService
+              .sendShiftReminderWhatsApp(emp.phone, emp.firstName, {
+                shiftName,
+                shiftTime,
+              })
+              .catch((e) => console.warn(`[MorningReminder:WhatsApp] ${e.message}`));
+          }
+
           sentCount++;
           sentUsers.push(`${emp.firstName} (${emp.userId})`);
         }
@@ -226,14 +255,19 @@ class NotificationService {
       const hours = now.getHours();
       const minutes = now.getMinutes();
 
-      // Check for Morning Window: Starts 10 minutes before 9:00 AM (08:50 AM) through the morning
+      // Morning Window: 08:50 – 17:59 → Check-In reminders
       if ((hours === 8 && minutes >= 50) || (hours >= 9 && hours < 18)) {
         await this.sendMorningCheckInReminders();
       }
 
-      // Check for Evening Window: 6:00 PM and later (18:00+)
-      if (hours >= 18) {
+      // Evening Window: 18:00–22:59 → Check-Out reminders
+      if (hours >= 18 && hours < 23) {
         await this.sendEveningCheckOutReminders();
+      }
+
+      // Nightly Window: 23:00+ → EOD Absent auto-marking
+      if (hours >= 23) {
+        await this.markAbsentEmployees();
       }
     } catch (err) {
       console.error("[NotificationScheduler] Error evaluating reminders:", err.message);
@@ -241,11 +275,115 @@ class NotificationService {
   }
 
   /**
+   * 3. EOD Absent Auto-Marking (23:00+)
+   * Creates ABSENT attendance records for active employees who never punched in today.
+   * Skips employees who are on approved leave or holiday.
+   */
+  async markAbsentEmployees(organizationId = null) {
+    const startOfToday = this.getStartOfToday();
+    const today = new Date(startOfToday);
+    today.setUTCHours(0, 0, 0, 0);
+
+    const whereEmployee = { status: "ACTIVE", userId: { not: null } };
+    if (organizationId) whereEmployee.organizationId = organizationId;
+
+    const activeEmployees = await prisma.employee.findMany({
+      where: whereEmployee,
+      select: { id: true, organizationId: true, branchId: true, shiftId: true, firstName: true, lastName: true },
+    });
+
+    let markedCount = 0;
+    const markedEmployees = [];
+
+    for (const emp of activeEmployees) {
+      // Check if already has any attendance record for today
+      const existing = await prisma.attendance.findUnique({
+        where: { employeeId_date: { employeeId: emp.id, date: today } },
+      });
+
+      if (existing) continue; // Already marked (PRESENT, ON_LEAVE, HOLIDAY, etc.)
+
+      // Check if today is a holiday for this employee's branch
+      const holiday = await prisma.holiday.findFirst({
+        where: {
+          organizationId: emp.organizationId,
+          date: today,
+          isOptional: false,
+          OR: [{ branchId: null }, ...(emp.branchId ? [{ branchId: emp.branchId }] : [])],
+        },
+      });
+
+      if (holiday) continue; // Holiday — skip
+
+      // Check for approved leave
+      const approvedLeave = await prisma.leaveRequest.findFirst({
+        where: {
+          employeeId: emp.id,
+          status: "APPROVED",
+          startDate: { lte: today },
+          endDate: { gte: today },
+        },
+      });
+
+      if (approvedLeave) continue; // On leave — skip
+
+      // Check if today is a scheduled rest day (WEEK_OFF)
+      if (emp.shiftId) {
+        const shift = await prisma.shift.findUnique({ where: { id: emp.shiftId } });
+        if (shift && shift.workingDays) {
+          const workingDays = shift.workingDays.split(",").map((d) => parseInt(d.trim()));
+          const dayOfWeek = today.getDay(); // 0=Sun, 1=Mon...
+          if (!workingDays.includes(dayOfWeek)) {
+            try {
+              await prisma.attendance.create({
+                data: {
+                  organizationId: emp.organizationId,
+                  employeeId: emp.id,
+                  branchId: emp.branchId || null,
+                  shiftId: emp.shiftId || null,
+                  date: today,
+                  status: "WEEK_OFF",
+                  workingMinutes: 0,
+                },
+              });
+            } catch (_) {}
+            continue; // Week-off — skip marking absent
+          }
+        }
+      }
+
+      // Mark as ABSENT
+      try {
+        await prisma.attendance.create({
+          data: {
+            organizationId: emp.organizationId,
+            employeeId: emp.id,
+            branchId: emp.branchId || null,
+            shiftId: emp.shiftId || null,
+            date: today,
+            status: "ABSENT",
+            workingMinutes: 0,
+          },
+        });
+        markedCount++;
+        markedEmployees.push(`${emp.firstName} ${emp.lastName || ""}`.trim());
+      } catch (err) {
+        // Ignore unique constraint errors (race condition)
+        if (!err.message?.includes("Unique constraint")) {
+          console.error(`[AbsentMarker] Failed for employee ${emp.id}:`, err.message);
+        }
+      }
+    }
+
+    console.log(`[AbsentMarker] Marked ${markedCount} employees ABSENT for ${today.toISOString().split("T")[0]}`);
+    return { success: true, markedCount, markedEmployees, date: today.toISOString().split("T")[0] };
+  }
+
+  /**
    * Start the recurring 60-second timer
    */
   startScheduler() {
-    console.log("[NotificationScheduler] Initializing 60s attendance reminder daemon (08:50 AM morning & 06:00 PM evening)...");
-    // Run an initial check after 5 seconds, then every 60 seconds
+    console.log("[NotificationScheduler] Starting scheduler: Morning (08:50), Evening (18:00), Absent marking (23:00)...");
     setTimeout(() => this.evaluateScheduledReminders(), 5000);
     setInterval(() => this.evaluateScheduledReminders(), 60000);
   }

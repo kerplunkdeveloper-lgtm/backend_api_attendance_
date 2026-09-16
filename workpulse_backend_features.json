@@ -1,0 +1,378 @@
+{
+  "project": "WorkPulse Enterprise Workforce Management Backend",
+  "version": "2.0.0",
+  "environment": "Node.js (Express) + Prisma ORM + Neon Serverless PostgreSQL",
+  "port": 5000,
+  "generatedAt": "2026-09-12T17:30:00+05:30",
+  "summary": {
+    "totalModules": 16,
+    "totalRouteFiles": 21,
+    "totalServiceFiles": 22,
+    "totalApiEndpoints": 78,
+    "databaseModels": 24,
+    "status": "Production Ready"
+  },
+  "modules": [
+    {
+      "id": "auth-security",
+      "name": "Authentication, RBAC & Multi-Tenant Security",
+      "route": "/api/auth",
+      "services": ["auth.service.js"],
+      "status": "ACTIVE",
+      "features": [
+        "JWT dual-token architecture (short-lived Access Token + HTTP-only Cookie Refresh Token)",
+        "Role-Based Access Control (RBAC): SUPER_ADMIN, COMPANY_ADMIN, MANAGER, EMPLOYEE",
+        "Scoped Brute-Force Rate Limiting (express-rate-limit)",
+        "Subscription tier auto-provisioning upon organization registration",
+        "Password hashing with bcrypt (10 rounds)",
+        "Session identity resolution via /api/auth/me"
+      ],
+      "endpoints": [
+        "POST /api/auth/register",
+        "POST /api/auth/login",
+        "POST /api/auth/refresh-token",
+        "POST /api/auth/logout",
+        "GET /api/auth/me",
+        "GET /api/auth/plans"
+      ]
+    },
+    {
+      "id": "attendance-engine",
+      "name": "Geofenced Smart Attendance & Punch System",
+      "route": "/api/attendance",
+      "services": ["attendance.service.js", "policy.service.js"],
+      "status": "ACTIVE",
+      "features": [
+        "Haversine GPS geofence distance calculation against registered branch coordinates",
+        "Multi-mode punch verification: Mobile GPS, Web Dashboard, QR-code, and Biometric device",
+        "Work-from-Home (WFH) remote clock-in with manager approval status",
+        "Automatic late arrival calculation against shift start and grace period",
+        "Break tracking (Break Start / Break End) with total break duration",
+        "Early departure and half-day threshold detection",
+        "Weekend & Rest-day punch unblocking with 100% overtime auto-credit"
+      ],
+      "endpoints": [
+        "POST /api/attendance/check-in",
+        "POST /api/attendance/check-out",
+        "POST /api/attendance/break-start",
+        "POST /api/attendance/break-end",
+        "GET /api/attendance/today",
+        "GET /api/attendance/history",
+        "GET /api/attendance/summary"
+      ]
+    },
+    {
+      "id": "working-days-overtime",
+      "name": "6-Day Work Schedule & Overtime (OT) Engine",
+      "route": "/api/overtime & /api/shift-overrides",
+      "services": ["overtime.service.js", "shiftoverride.service.js"],
+      "status": "ACTIVE",
+      "features": [
+        "Monday to Saturday standard working week ('1,2,3,4,5,6') with 26 working days/month standard",
+        "Off-day unblocked check-in: Sunday, holiday, or leave punches automatically tagged as pure Overtime (OT)",
+        "Daily overtime accumulation exceeding scheduled shift working hours",
+        "Overtime manager approval/rejection workflows",
+        "Shift overrides & temporary roster reassignments with employee self-service access"
+      ],
+      "endpoints": [
+        "GET /api/overtime/pending",
+        "POST /api/overtime/:id/review",
+        "GET /api/overtime/my",
+        "GET /api/shift-overrides/my",
+        "POST /api/shift-overrides",
+        "DELETE /api/shift-overrides/:id"
+      ]
+    },
+    {
+      "id": "compoff-management",
+      "name": "Compensatory Off (Comp-Off) Ledger & Redemption",
+      "route": "/api/compoff",
+      "services": ["compoff.service.js"],
+      "status": "ACTIVE",
+      "features": [
+        "Auto-crediting comp-off balances when working on rest days or public holidays",
+        "Employee self-service balance inquiries with automatic profile resolution",
+        "Comp-off leave redemption request and manager approval cycle",
+        "Expiry management for accrued comp-off credits"
+      ],
+      "endpoints": [
+        "GET /api/compoff/balance",
+        "POST /api/compoff/redeem",
+        "GET /api/compoff/history",
+        "POST /api/compoff/:id/review"
+      ]
+    },
+    {
+      "id": "leave-management",
+      "name": "Leave Management & Entitlement Engine",
+      "route": "/api/leaves",
+      "services": ["leave.service.js"],
+      "status": "ACTIVE",
+      "features": [
+        "Multi-type leave quotas: Casual (CL), Sick (SL), Earned/Privilege (EL/PL), Maternity/Paternity, Unpaid (LOP)",
+        "Leave balance deduction and dynamic remaining entitlement checks",
+        "Overlapping leave request validation preventing duplicate bookings",
+        "Multi-tier approval pipeline (Manager / HR / Admin) with review notes",
+        "Automated transactional HTML email & WhatsApp dispatch on review"
+      ],
+      "endpoints": [
+        "POST /api/leaves/apply",
+        "GET /api/leaves/my",
+        "GET /api/leaves/pending",
+        "POST /api/leaves/:id/review",
+        "GET /api/leaves/balances"
+      ]
+    },
+    {
+      "id": "attendance-corrections",
+      "name": "Attendance Regularization & Correction Workflow",
+      "route": "/api/corrections",
+      "services": ["correction.service.js"],
+      "status": "ACTIVE",
+      "features": [
+        "Employee miss-punch regularization requests with reason and supporting note",
+        "Manager audit and approval updating original attendance record in atomic transaction",
+        "Historical audit trail preventing tampering"
+      ],
+      "endpoints": [
+        "POST /api/corrections/request",
+        "GET /api/corrections/my",
+        "GET /api/corrections/pending",
+        "POST /api/corrections/:id/review"
+      ]
+    },
+    {
+      "id": "payroll-statutory",
+      "name": "Payroll Processing & Statutory Compliance Engine",
+      "route": "/api/payroll",
+      "services": ["payroll.service.js"],
+      "status": "ACTIVE",
+      "features": [
+        "Comprehensive salary breakdown: Basic, HRA, Special Allowance, Conveyance, Medical, Performance Bonus",
+        "Statutory deductions: Employee Provident Fund (PF), ESI, Professional Tax, TDS withholding",
+        "Attendance-linked salary calculations deducting Loss of Pay (LOP) while crediting WFH and OT",
+        "Batch monthly payroll generation and disbursement",
+        "Automated Payslip distribution via Email & WhatsApp with downloadable HTML/PDF"
+      ],
+      "endpoints": [
+        "POST /api/payroll/generate-batch",
+        "POST /api/payroll/disburse-batch",
+        "GET /api/payroll/history",
+        "GET /api/payroll/my-payslips",
+        "GET /api/payroll/payslip/:id"
+      ]
+    },
+    {
+      "id": "onboarding-candidate",
+      "name": "Digital Onboarding & Offer Letter Pipeline",
+      "route": "/api/onboarding",
+      "services": ["onboarding.service.js"],
+      "status": "ACTIVE",
+      "features": [
+        "Candidate tracking across hiring stages: APPLIED, INTERVIEWING, OFFERED, ACCEPTED, REJECTED, ONBOARDED",
+        "Digital document submission (Aadhaar, PAN, Degree, Relieving Letter) with review workflow",
+        "Automated offer letter generation with candidate portal token",
+        "Automated Email & WhatsApp offer dispatch with one-click portal links",
+        "One-click candidate activation into full employee account respecting subscription employee limits"
+      ],
+      "endpoints": [
+        "POST /api/onboarding/candidates",
+        "GET /api/onboarding/candidates",
+        "POST /api/onboarding/candidates/:id/offer",
+        "POST /api/onboarding/candidates/:id/activate",
+        "POST /api/onboarding/documents/upload",
+        "POST /api/onboarding/documents/:id/verify"
+      ]
+    },
+    {
+      "id": "automation-communication",
+      "name": "Multi-Channel Communication & Alert Gateway",
+      "route": "/api/notifications",
+      "services": ["notification.service.js", "email.service.js", "whatsapp.service.js"],
+      "status": "ACTIVE",
+      "features": [
+        "Transactional HTML email dispatch powered by Nodemailer (responsive branded WorkPulse templates)",
+        "Instant WhatsApp alerts powered by Twilio with automatic E.164 phone formatting",
+        "Zero-crash resilience with automatic Simulation Mode when credentials are not configured",
+        "Non-blocking asynchronous dispatches preventing API slowdowns",
+        "Automated 08:50 AM morning shift punch reminder scheduler",
+        "Leave, Payroll, Shift, and Offer Letter automated triggers",
+        "Communication health diagnostic endpoints"
+      ],
+      "endpoints": [
+        "GET /api/notifications",
+        "PUT /api/notifications/:id/read",
+        "PUT /api/notifications/read-all",
+        "GET /api/notifications/communication-status",
+        "POST /api/notifications/test-email",
+        "POST /api/notifications/test-whatsapp",
+        "POST /api/notifications/trigger-reminders"
+      ]
+    },
+    {
+      "id": "expense-management",
+      "name": "Expense Claims & Reimbursement Management",
+      "route": "/api/expenses",
+      "services": ["expense.service.js"],
+      "status": "ACTIVE",
+      "features": [
+        "Categorized expense submissions: TRAVEL, FOOD, ACCOMMODATION, SUPPLIES, UTILITIES, MISCELLANEOUS",
+        "Receipt bill upload attachment support",
+        "Manager and Finance review workflows (SUBMITTED, UNDER_REVIEW, APPROVED, REJECTED, PAID)",
+        "Settlement tracking and direct reimbursement recording"
+      ],
+      "endpoints": [
+        "POST /api/expenses",
+        "GET /api/expenses/my",
+        "GET /api/expenses/all",
+        "POST /api/expenses/:id/review",
+        "POST /api/expenses/:id/settle"
+      ]
+    },
+    {
+      "id": "organization-hierarchy",
+      "name": "Organization, Branches & Department Hierarchy",
+      "route": "/api/branches & /api/departments",
+      "services": ["branch.service.js", "department.service.js"],
+      "status": "ACTIVE",
+      "features": [
+        "Multi-branch geofence mapping (latitude, longitude, radius in meters)",
+        "Department grouping and manager assignment",
+        "Branch-specific employee allocation and check-in radius policies"
+      ],
+      "endpoints": [
+        "GET /api/branches",
+        "POST /api/branches",
+        "PUT /api/branches/:id",
+        "DELETE /api/branches/:id",
+        "GET /api/departments",
+        "POST /api/departments",
+        "PUT /api/departments/:id"
+      ]
+    },
+    {
+      "id": "shift-planning",
+      "name": "Shift Management & Rostering",
+      "route": "/api/shifts",
+      "services": ["shift.service.js"],
+      "status": "ACTIVE",
+      "features": [
+        "Custom shift schedules with start time, end time, and grace minutes",
+        "Working days bitmask/comma-separated definition ('1,2,3,4,5,6')",
+        "Half-day threshold configurations",
+        "Shift assignment to employees, departments, or branches"
+      ],
+      "endpoints": [
+        "GET /api/shifts",
+        "POST /api/shifts",
+        "PUT /api/shifts/:id",
+        "DELETE /api/shifts/:id"
+      ]
+    },
+    {
+      "id": "device-biometrics",
+      "name": "Biometric & Trusted Device Security",
+      "route": "/api/devices",
+      "services": ["device.service.js"],
+      "status": "ACTIVE",
+      "features": [
+        "Trusted employee device binding (preventing buddy punching via shared devices)",
+        "Biometric hardware device synchronization and heartbeat monitor",
+        "Device registration, whitelisting, and authorization status"
+      ],
+      "endpoints": [
+        "GET /api/devices",
+        "POST /api/devices/register",
+        "POST /api/devices/:id/heartbeat",
+        "PUT /api/devices/:id/status"
+      ]
+    },
+    {
+      "id": "holidays-calendar",
+      "name": "Holiday Calendars & Non-Working Days",
+      "route": "/api/holidays",
+      "services": ["holiday.service.js"],
+      "status": "ACTIVE",
+      "features": [
+        "Organization-wide public and optional holiday schedules",
+        "Automatic integration with attendance and overtime calculation engines",
+        "Auto week-off rest day resolution"
+      ],
+      "endpoints": [
+        "GET /api/holidays",
+        "POST /api/holidays",
+        "PUT /api/holidays/:id",
+        "DELETE /api/holidays/:id"
+      ]
+    },
+    {
+      "id": "analytics-reporting",
+      "name": "Workforce Analytics & Exportable Reports",
+      "route": "/api/reports",
+      "services": ["report.service.js"],
+      "status": "ACTIVE",
+      "features": [
+        "Daily attendance executive breakdown (Present, Absent, Leave, WFH, Overtime)",
+        "Monthly employee attendance registers and aggregated work hours",
+        "Department-wise absenteeism and late arrival statistics",
+        "Export capabilities for HR compliance and audits"
+      ],
+      "endpoints": [
+        "GET /api/reports/daily",
+        "GET /api/reports/monthly",
+        "GET /api/reports/department",
+        "GET /api/reports/export"
+      ]
+    },
+    {
+      "id": "subscription-billing",
+      "name": "SaaS Subscription & Tier Limitation Engine",
+      "route": "/api/auth/plans",
+      "services": ["auth.service.js"],
+      "status": "ACTIVE",
+      "features": [
+        "4 Subscription Tiers: FREE_TRIAL (10 employees), STARTER (25 employees), PROFESSIONAL (100 employees), ENTERPRISE (1000 employees)",
+        "Billing cycles: MONTHLY and ANNUAL (with 20% discount)",
+        "14-Day automated Free Trial period tracking",
+        "Enforcement of max employee quotas on employee creation and onboarding activation",
+        "Feature gating flags: hasGeofence, hasPayroll, hasShiftPlanner, hasApiAccess"
+      ],
+      "endpoints": [
+        "GET /api/auth/plans"
+      ]
+    }
+  ],
+  "databaseEntities": [
+    "User",
+    "Organization",
+    "Subscription",
+    "Branch",
+    "Department",
+    "Shift",
+    "ShiftOverride",
+    "Employee",
+    "Attendance",
+    "AttendanceCorrection",
+    "OvertimeRecord",
+    "CompOffBalance",
+    "CompOffRedemption",
+    "LeaveRequest",
+    "LeaveBalance",
+    "Holiday",
+    "PayrollBatch",
+    "Payslip",
+    "ExpenseClaim",
+    "Candidate",
+    "CandidateDocument",
+    "Device",
+    "Notification",
+    "AuditLog"
+  ],
+  "securityAndCompliance": {
+    "passwordEncryption": "bcryptjs (10 rounds)",
+    "tokenHandling": "Access Token (Authorization: Bearer) + Refresh Token (Cookie)",
+    "rateLimiter": "express-rate-limit enabled for authentication vectors",
+    "cors": "Restricted origin access with credential support",
+    "dataIsolation": "Multi-tenant tenant isolation via organizationId on all queries"
+  }
+}

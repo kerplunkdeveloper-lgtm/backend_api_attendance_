@@ -164,7 +164,8 @@ class AttendanceController {
     try {
       const result = await attendanceService.getAttendanceSummary(
         req.user.organizationId,
-        req.query.date
+        req.query.date,
+        req.query.branchId
       );
       return res.status(200).json(result);
     } catch (error) {
@@ -193,10 +194,101 @@ class AttendanceController {
       });
       return res.status(200).json(result);
     } catch (error) {
-      return res.status(error.statusCode || 500).json({
-        success: false,
-        message: error.message,
+      return res.status(error.statusCode || 500).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * WFH Check-In (skips geofence, marks WORK_FROM_HOME)
+   */
+  async wfhCheckIn(req, res) {
+    try {
+      const { timestamp, wfhNote } = req.body;
+      const result = await attendanceService.wfhCheckIn({
+        userId: req.user.id,
+        employeeId: req.user.employee?.id,
+        organizationId: req.user.organizationId,
+        timestamp,
+        wfhNote,
       });
+      return res.status(201).json(result);
+    } catch (error) {
+      return res.status(error.statusCode || 500).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * Get structured break details for a specific attendance (or today's)
+   */
+  async getBreakDetails(req, res) {
+    try {
+      const result = await attendanceService.getBreakDetails({
+        userId: req.user.id,
+        employeeId: req.user.employee?.id,
+        organizationId: req.user.organizationId,
+        attendanceId: req.params.attendanceId || req.query.attendanceId,
+      });
+      return res.status(200).json(result);
+    } catch (error) {
+      return res.status(error.statusCode || 500).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * Admin direct mark attendance for any employee (bypasses GPS/correction flow)
+   */
+  async adminMarkAttendance(req, res) {
+    try {
+      const { employeeId, date, status, checkIn, checkOut, reason } = req.body;
+      if (!employeeId || !date || !status) {
+        return res.status(400).json({ success: false, message: "employeeId, date, and status are required" });
+      }
+      const result = await attendanceService.adminMarkAttendance({
+        adminUserId: req.user.id,
+        organizationId: req.user.organizationId,
+        employeeId,
+        date,
+        status,
+        checkIn,
+        checkOut,
+        reason,
+      });
+      return res.status(200).json(result);
+    } catch (error) {
+      return res.status(error.statusCode || 500).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * Trigger EOD absent marking manually (Admin only, for testing or on-demand)
+   */
+  async markAbsent(req, res) {
+    try {
+      const notificationService = require("../services/notification.service");
+      const result = await notificationService.markAbsentEmployees(req.user.organizationId);
+      return res.status(200).json(result);
+    } catch (error) {
+      return res.status(error.statusCode || 500).json({ success: false, message: error.message });
+    }
+  }
+  /**
+   * Sync offline-queued punches (batch) — called when device regains internet
+   * Body: { punches: [{ id, type, timestamp, latitude?, longitude?, accuracy?, wfhNote? }] }
+   */
+  async syncOfflinePunches(req, res) {
+    try {
+      const { punches } = req.body;
+      if (!Array.isArray(punches) || punches.length === 0) {
+        return res.status(400).json({ success: false, message: "punches array is required and must not be empty" });
+      }
+      const result = await attendanceService.syncOfflinePunches(
+        req.user.id,
+        req.user.organizationId,
+        punches
+      );
+      return res.status(200).json(result);
+    } catch (error) {
+      return res.status(error.statusCode || 500).json({ success: false, message: error.message });
     }
   }
 }

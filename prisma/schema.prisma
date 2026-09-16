@@ -43,6 +43,21 @@ enum RequestStatus {
   REJECTED
 }
 
+enum SubscriptionPlan {
+  FREE_TRIAL
+  STARTER
+  PROFESSIONAL
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  EXPIRED
+}
+
 model Organization {
   id          String   @id @default(uuid())
   name        String
@@ -50,6 +65,19 @@ model Organization {
   phone       String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  subscriptionPlan      SubscriptionPlan   @default(FREE_TRIAL)
+  subscriptionStatus    SubscriptionStatus @default(TRIALING)
+  trialEndsAt           DateTime?
+  subscriptionExpiresAt DateTime?
+  maxEmployees          Int                @default(10)
+  subscription          Subscription?
+
+  // ── Plan Unlock Code (sent via email after registration/payment) ──────────
+  unlockCode          String?   // Bcrypt-hashed unlock code
+  unlockCodeUsedAt    DateTime? // When it was redeemed by admin
+  planActivatedAt     DateTime? // When the plan became fully active
+  planLocked          Boolean   @default(true)  // true until unlock code entered
 
   branches         Branch[]
   departments      Department[]
@@ -69,6 +97,136 @@ model Organization {
   employeeDevices  EmployeeDevice[]
   onboardingCandidates OnboardingCandidate[]
   salaryRevisions  SalaryRevision[]
+  expenses         ExpenseClaim[]
+  attendancePolicy AttendancePolicy?
+  shiftOverrides   ShiftOverride[]
+  overtimeRequests OvertimeRequest[]
+  employeeInvites  EmployeeInvite[]
+}
+
+model Subscription {
+  id                    String             @id @default(uuid())
+  organizationId        String             @unique
+  organization          Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan                  SubscriptionPlan   @default(FREE_TRIAL)
+  status                SubscriptionStatus @default(TRIALING)
+  billingCycle          String             @default("MONTHLY")
+  price                 Decimal            @default(0.0) @db.Decimal(10, 2)
+  maxEmployees          Int                @default(10)
+  maxBranches           Int                @default(1)
+  hasGeofence           Boolean            @default(true)
+  hasPayroll            Boolean            @default(true)
+  hasShiftPlanner       Boolean            @default(true)
+  hasApiAccess          Boolean            @default(false)
+  startDate             DateTime           @default(now())
+  trialEndsAt           DateTime?
+  currentPeriodEnd      DateTime?
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+}
+
+
+// ─── Attendance Policy (configurable per org) ─────────────────────────────────
+model AttendancePolicy {
+  id                    String   @id @default(uuid())
+  organizationId        String   @unique
+  workingDaysPerMonth   Int      @default(26)     // Used in payroll calculation (Mon-Sat = 26 days)
+  halfDayThresholdMinutes Int    @default(240)    // 4h = HALF_DAY trigger
+  maxLatesBeforeDeduction Int    @default(3)      // First N lates are free
+  lateDeductionPercent  Decimal  @default(0.25) @db.Decimal(4, 2) // % of daily rate per extra late
+  allowWfh              Boolean  @default(true)
+  requireOtApproval     Boolean  @default(false)  // OT must be approved before payroll
+  geofenceStrict        Boolean  @default(true)   // Enforce geofence on check-in
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+}
+
+// ─── Per-Day Shift Override (temporary reassignment) ──────────────────────────
+model ShiftOverride {
+  id             String   @id @default(uuid())
+  organizationId String
+  employeeId     String
+  date           DateTime @db.Date
+  shiftId        String
+  reason         String?
+  createdBy      String?  // userId who set this override
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  employee     Employee     @relation(fields: [employeeId], references: [id])
+  shift        Shift        @relation(fields: [shiftId], references: [id])
+
+  @@unique([employeeId, date])
+  @@index([organizationId, date])
+  @@index([employeeId])
+}
+
+// ─── Compensatory Off Balance ─────────────────────────────────────────────────
+model CompOffBalance {
+  id             String   @id @default(uuid())
+  organizationId String
+  employeeId     String   @unique
+  creditedDays   Decimal  @default(0) @db.Decimal(5, 1)
+  usedDays       Decimal  @default(0) @db.Decimal(5, 1)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  employee       Employee @relation(fields: [employeeId], references: [id])
+  transactions   CompOffTransaction[]
+}
+
+model CompOffTransaction {
+  id               String   @id @default(uuid())
+  compOffBalanceId String
+  type             String   // CREDIT | DEBIT
+  days             Decimal  @db.Decimal(5, 1)
+  reason           String?
+  referenceDate    DateTime? @db.Date  // The holiday/weekend date worked
+  createdBy        String?
+  createdAt        DateTime @default(now())
+
+  compOffBalance CompOffBalance @relation(fields: [compOffBalanceId], references: [id], onDelete: Cascade)
+
+  @@index([compOffBalanceId])
+}
+
+// ─── Overtime Approval Request ────────────────────────────────────────────────
+model OvertimeRequest {
+  id             String        @id @default(uuid())
+  organizationId String
+  employeeId     String
+  attendanceId   String
+  requestedMinutes Int
+  approvedMinutes  Int?
+  reason         String?
+  status         RequestStatus @default(PENDING)
+  reviewedBy     String?
+  reviewNote     String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  employee     Employee     @relation(fields: [employeeId], references: [id])
+  attendance   Attendance   @relation(fields: [attendanceId], references: [id])
+
+  @@index([organizationId, status])
+  @@index([employeeId])
+}
+
+// ─── Stored Refresh Tokens (for secure logout / revocation) ──────────────────
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
 }
 
 model Branch {
@@ -110,12 +268,15 @@ model User {
   email          String   @unique
   passwordHash   String
   role           UserRole
+  mustChangePassword Boolean @default(false) // true for new invited employees
+  isActive           Boolean @default(true)  // false = account disabled
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization  Organization   @relation(fields: [organizationId], references: [id])
-  employee      Employee?
-  notifications Notification[]
+  organization   Organization    @relation(fields: [organizationId], references: [id])
+  employee       Employee?
+  notifications  Notification[]
+  refreshTokens  RefreshToken[]
 
   @@index([organizationId])
 }
@@ -148,6 +309,10 @@ model Employee {
   payslips         Payslip[]
   devices          EmployeeDevice[]
   salaryRevisions  SalaryRevision[]
+  expenses         ExpenseClaim[]
+  shiftOverrides   ShiftOverride[]
+  compOffBalance   CompOffBalance?
+  overtimeRequests OvertimeRequest[]
 
   @@unique([organizationId, employeeCode])
   @@index([organizationId])
@@ -160,13 +325,14 @@ model Shift {
   startTime      String
   endTime        String
   graceMinutes   Int      @default(10)
-  workingDays    String   @default("1,2,3,4,5") // 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat, 0=Sun
+  workingDays    String   @default("1,2,3,4,5,6") // 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat (Sunday 0 is off)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id])
-  employees    Employee[]
-  attendances  Attendance[]
+  organization   Organization   @relation(fields: [organizationId], references: [id])
+  employees      Employee[]
+  attendances    Attendance[]
+  shiftOverrides ShiftOverride[]
 
   @@index([organizationId])
 }
@@ -192,16 +358,18 @@ model Attendance {
   lateMinutes     Int              @default(0)
   earlyMinutes    Int              @default(0)
   overtimeMinutes Int              @default(0)
+  wfhNote         String?          // Note for WFH check-ins
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  organization Organization           @relation(fields: [organizationId], references: [id])
-  employee     Employee               @relation(fields: [employeeId], references: [id])
-  branch       Branch?                @relation(fields: [branchId], references: [id])
-  shift        Shift?                 @relation(fields: [shiftId], references: [id])
-  events       AttendanceEvent[]
-  corrections  AttendanceCorrection[]
+  organization     Organization           @relation(fields: [organizationId], references: [id])
+  employee         Employee               @relation(fields: [employeeId], references: [id])
+  branch           Branch?                @relation(fields: [branchId], references: [id])
+  shift            Shift?                 @relation(fields: [shiftId], references: [id])
+  events           AttendanceEvent[]
+  corrections      AttendanceCorrection[]
+  overtimeRequests OvertimeRequest[]
 
   @@unique([employeeId, date])
   @@index([organizationId, date])
@@ -214,9 +382,11 @@ model AttendanceEvent {
   type         AttendanceEventType
   timestamp    DateTime             @default(now())
 
-  latitude  Decimal? @db.Decimal(10, 7)
-  longitude Decimal? @db.Decimal(10, 7)
-  accuracy  Decimal? @db.Decimal(10, 2)
+  latitude      Decimal? @db.Decimal(10, 7)
+  longitude     Decimal? @db.Decimal(10, 7)
+  accuracy      Decimal? @db.Decimal(10, 2)
+  isBypassed    Boolean  @default(false)  // Geofence was skipped
+  bypassReason  String?                  // Reason geofence was bypassed (NO_GPS, WFH, ADMIN)
 
   createdAt DateTime @default(now())
 
@@ -377,6 +547,7 @@ model Payslip {
   statutoryDeductions   Decimal   @default(0) @db.Decimal(10, 2)
   deductionsTotal       Decimal   @db.Decimal(10, 2)
   netSalary             Decimal   @db.Decimal(10, 2)
+  reimbursements        Decimal   @default(0) @db.Decimal(10, 2)
   status                String    @default("DRAFT") // DRAFT, PENDING_APPROVAL, APPROVED, DISBURSED, REJECTED
   approvedBy            String?
   approvedAt            DateTime?
@@ -387,6 +558,7 @@ model Payslip {
 
   organization Organization @relation(fields: [organizationId], references: [id])
   employee     Employee     @relation(fields: [employeeId], references: [id])
+  expenses     ExpenseClaim[]
 
   @@unique([employeeId, month, year])
   @@index([organizationId, month, year])
@@ -591,4 +763,71 @@ model OnboardingDocument {
   candidate       OnboardingCandidate        @relation(fields: [candidateId], references: [id], onDelete: Cascade)
 
   @@index([candidateId])
+}
+
+enum ExpenseCategory {
+  TRAVEL
+  CLIENT_ENTERTAINMENT
+  FUEL
+  INTERNET
+  LEARNING
+  OTHER
+}
+
+enum ExpenseStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  PAID
+}
+
+model ExpenseClaim {
+  id              String          @id @default(uuid())
+  organizationId  String
+  employeeId      String
+  category        ExpenseCategory
+  amount          Decimal         @db.Decimal(10, 2)
+  date            DateTime        @db.Date
+  title           String
+  description     String?
+  receiptUrl      String?
+  receiptPublicId String?
+  status          ExpenseStatus   @default(PENDING)
+  reviewedBy      String?
+  reviewNote      String?
+  reviewedAt      DateTime?
+  payslipId       String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  organization    Organization    @relation(fields: [organizationId], references: [id])
+  employee        Employee        @relation(fields: [employeeId], references: [id])
+  payslip         Payslip?        @relation(fields: [payslipId], references: [id])
+
+  @@index([organizationId, status])
+  @@index([employeeId, status])
+  @@index([organizationId, date])
+}
+
+// ── Employee Invite — tracks email invitations sent by Admin with auto-generated credentials ──
+model EmployeeInvite {
+  id             String   @id @default(uuid())
+  organizationId String
+  email          String
+  firstName      String
+  lastName       String?
+  role           String   @default("EMPLOYEE")  // EMPLOYEE | MANAGER
+  tempPassword   String   // plaintext shown once in email, cleared after first login
+  employeeId     String?  // linked after account is created
+  userId         String?  // linked user account
+  status         String   @default("PENDING")  // PENDING | ACCEPTED | EXPIRED
+  invitedBy      String   // userId of admin who sent the invite
+  expiresAt      DateTime
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, status])
+  @@index([email])
 }

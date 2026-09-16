@@ -54,6 +54,23 @@ const createEmployee = async (organizationId, data) => {
     throw new Error(`Employee code '${finalEmployeeCode}' is already taken in this organization`);
   }
 
+  // Check organization subscription limit
+  const org = await prisma.organization.findUnique({
+    where: { id: organizationId },
+    include: { subscription: true },
+  });
+  if (org) {
+    const activeEmployeesCount = await prisma.employee.count({
+      where: { organizationId, status: "ACTIVE" },
+    });
+    const maxAllowed = org.subscription?.maxEmployees || org.maxEmployees || 10;
+    if (activeEmployeesCount >= maxAllowed) {
+      throw new Error(
+        `Employee limit reached for your current plan (${maxAllowed} max active employees). Please upgrade your subscription to add more team members.`
+      );
+    }
+  }
+
   // Validate branch
   if (branchId) {
     const branch = await prisma.branch.findFirst({
@@ -83,13 +100,15 @@ const createEmployee = async (organizationId, data) => {
   const salt = await bcrypt.genSalt(10);
   const passwordHash = await bcrypt.hash(defaultPassword, salt);
 
+  const userRole = (role === 'HR' || role === 'MANAGER') ? 'MANAGER' : role;
+
   // Atomic creation of User + Employee
   return await prisma.$transaction(async (tx) => {
     const user = await tx.user.create({
       data: {
         email: cleanEmail,
         passwordHash,
-        role,
+        role: userRole,
         organizationId,
       },
     });
@@ -214,9 +233,10 @@ const updateEmployee = async (organizationId, employeeId, data) => {
 
   return await prisma.$transaction(async (tx) => {
     if (role && employee.userId) {
+      const userRole = (role === 'HR' || role === 'MANAGER') ? 'MANAGER' : role;
       await tx.user.update({
         where: { id: employee.userId },
-        data: { role },
+        data: { role: userRole },
       });
     }
 
@@ -274,10 +294,142 @@ const deleteEmployee = async (organizationId, employeeId) => {
   });
 };
 
+/**
+ * 6. POST /api/employees/invite — Admin invites an employee by email.
+ * Auto-creates User+Employee account, sends welcome email with temp credentials.
+ */
+const inviteEmployee = async (organizationId, invitedByUserId, data) => {
+  const emailService = require("./email.service");
+  const {
+    firstName,
+    lastName,
+    email,
+    role = "EMPLOYEE",
+    branchId,
+    departmentId,
+    shiftId,
+  } = data;
+
+  if (!firstName || !firstName.trim()) throw new Error("First name is required.");
+  if (!email || !email.trim()) throw new Error("Employee email is required.");
+
+  const cleanEmail = email.trim().toLowerCase();
+
+  // Check email uniqueness
+  const existing = await prisma.user.findUnique({ where: { email: cleanEmail } });
+  if (existing) throw new Error(`A user with email '${cleanEmail}' already exists.`);
+
+  // Check plan lock — must be unlocked before inviting
+  const org = await prisma.organization.findUnique({ where: { id: organizationId } });
+  if (!org) throw new Error("Organization not found.");
+  if (org.planLocked) {
+    const err = new Error("Your plan is locked. Please activate your plan before inviting employees.");
+    err.statusCode = 403;
+    throw err;
+  }
+
+  // Check employee seat limit
+  const activeCount = await prisma.employee.count({ where: { organizationId, status: "ACTIVE" } });
+  const maxAllowed = org.maxEmployees || 10;
+  if (activeCount >= maxAllowed) {
+    throw new Error(`Employee seat limit reached (${maxAllowed} max). Upgrade your plan to add more.`);
+  }
+
+  // Generate temp password: TMP-XXXXXX + 4 random digits
+  const tempPassword = `TMP-${Math.random().toString(36).slice(2, 8).toUpperCase()}${Math.floor(1000 + Math.random() * 9000)}`;
+  const salt = await bcrypt.genSalt(10);
+  const passwordHash = await bcrypt.hash(tempPassword, salt);
+
+  // Determine employee code
+  const employeeCode = `EMP-${Date.now().toString().slice(-6)}`;
+  const userRole = (role === "HR" || role === "MANAGER") ? "MANAGER" : "EMPLOYEE";
+
+  // Atomic: create User + Employee
+  const { user, employee } = await prisma.$transaction(async (tx) => {
+    const user = await tx.user.create({
+      data: {
+        email: cleanEmail,
+        passwordHash,
+        role: userRole,
+        organizationId,
+        mustChangePassword: true, // force password change on first login
+        isActive: true,
+      },
+    });
+
+    const employee = await tx.employee.create({
+      data: {
+        organizationId,
+        userId: user.id,
+        employeeCode,
+        firstName: firstName.trim(),
+        lastName: lastName ? lastName.trim() : null,
+        status: "ACTIVE",
+        branchId: branchId || null,
+        departmentId: departmentId || null,
+        shiftId: shiftId || null,
+      },
+      include: {
+        user: { select: { id: true, email: true, role: true, mustChangePassword: true } },
+        branch: true,
+        department: true,
+        shift: true,
+      },
+    });
+
+    // Log invite record
+    await tx.employeeInvite.create({
+      data: {
+        organizationId,
+        email: cleanEmail,
+        firstName: firstName.trim(),
+        lastName: lastName ? lastName.trim() : null,
+        role: userRole,
+        tempPassword, // plaintext stored in invite log for audit
+        employeeId: employee.id,
+        userId: user.id,
+        status: "ACCEPTED",
+        invitedBy: invitedByUserId,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+      },
+    });
+
+    return { user, employee };
+  });
+
+  // Send welcome email with credentials (async — don't block response)
+  const loginUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/login`;
+  emailService.sendEmployeeWelcomeEmail(
+    cleanEmail,
+    firstName.trim(),
+    {
+      organizationName: org.name,
+      tempPassword,
+      loginUrl,
+      role: userRole,
+    }
+  ).catch((err) => console.warn("[Invite] Welcome email failed:", err.message));
+
+  // Log to console for simulation/dev mode
+  console.log("────────────────────────────────────────────────────────────");
+  console.log(`[Invite] Employee: ${firstName} ${lastName || ""} <${cleanEmail}>`);
+  console.log(`[Invite] Temp Password: ${tempPassword}`);
+  console.log("────────────────────────────────────────────────────────────");
+
+  return {
+    success: true,
+    message: `Invitation sent to ${cleanEmail}. They will receive login credentials by email.`,
+    employee,
+    tempPassword, // returned in response so admin can share it manually if email fails
+  };
+};
+
 module.exports = {
   createEmployee,
   getEmployees,
   getEmployeeById,
   updateEmployee,
   deleteEmployee,
+  inviteEmployee,
 };
+

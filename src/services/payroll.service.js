@@ -1,4 +1,7 @@
 const prisma = require("../config/database");
+const { getPolicy } = require("./attendance.service");
+const emailService = require("./email.service");
+const whatsappService = require("./whatsapp.service");
 
 class PayrollService {
   /**
@@ -88,7 +91,12 @@ class PayrollService {
     const endDate = new Date(Date.UTC(y, m, 0)); // last day of month
 
     const daysInMonth = endDate.getUTCDate();
-    const standardWorkingDays = 22; // default standard working days
+
+    // Fetch org policy for configurable working days
+    const policy = await getPolicy(organizationId);
+    const standardWorkingDays = policy.workingDaysPerMonth;
+    const maxLatesBeforeDeduction = policy.maxLatesBeforeDeduction;
+    const lateDeductionPercent = policy.lateDeductionPercent;
 
     // Fetch employee and salary structure
     const employee = await prisma.employee.findFirst({
@@ -155,8 +163,9 @@ class PayrollService {
     let unpaidLeaveDays = 0;
 
     attendances.forEach((att) => {
-      if (att.status === "PRESENT") presentDays += 1;
-      else if (att.status === "LATE") {
+      if (att.status === "PRESENT" || att.status === "WORK_FROM_HOME") {
+        presentDays += 1;
+      } else if (att.status === "LATE") {
         presentDays += 1;
         lateCount += 1;
       } else if (att.status === "HALF_DAY") {
@@ -178,12 +187,30 @@ class PayrollService {
     }
 
     const unpaidLeaveDeduction = Math.round(unpaidLeaveDays * dailyRate);
-    const lateDeduction = lateCount > 3 ? (lateCount - 3) * Math.round(dailyRate * 0.25) : 0;
+    const lateDeduction =
+      lateCount > maxLatesBeforeDeduction
+        ? (lateCount - maxLatesBeforeDeduction) * Math.round(dailyRate * lateDeductionPercent)
+        : 0;
     const statutoryDeductions = pf + esi + professionalTax;
     const deductionsTotal = unpaidLeaveDeduction + lateDeduction + statutoryDeductions;
 
+    // Fetch approved unbundled expense claims for this employee
+    const approvedExpenses = await prisma.expenseClaim.findMany({
+      where: {
+        organizationId,
+        employeeId,
+        status: "APPROVED",
+        payslipId: null,
+      },
+    });
+
+    const reimbursements = approvedExpenses.reduce(
+      (sum, exp) => sum + Number(exp.amount),
+      0
+    );
+
     const grossSalary = baseSalary + allowancesTotal + overtimePay;
-    const netSalary = Math.max(0, grossSalary - deductionsTotal);
+    const netSalary = Math.max(0, grossSalary - deductionsTotal) + reimbursements;
 
     return {
       employee: {
@@ -230,6 +257,14 @@ class PayrollService {
         statutoryDeductions,
         deductionsTotal,
       },
+      reimbursements,
+      approvedExpenses: approvedExpenses.map((e) => ({
+        id: e.id,
+        title: e.title,
+        amount: Number(e.amount),
+        category: e.category,
+        date: e.date,
+      })),
       netSalary,
     };
   }
@@ -271,6 +306,7 @@ class PayrollService {
         ptDeduction: payroll.deductions.ptDeduction || 0,
         statutoryDeductions: payroll.deductions.statutoryDeductions || 0,
         deductionsTotal: payroll.deductions.deductionsTotal,
+        reimbursements: payroll.reimbursements || 0,
         netSalary: payroll.netSalary,
         status: "PENDING_APPROVAL",
       };
@@ -292,6 +328,18 @@ class PayrollService {
           ...payslipPayload,
         },
       });
+
+      // Automatically bundle approved claims into this payslip and mark PAID
+      if (payroll.approvedExpenses && payroll.approvedExpenses.length > 0) {
+        const claimIds = payroll.approvedExpenses.map((exp) => exp.id);
+        await prisma.expenseClaim.updateMany({
+          where: { id: { in: claimIds } },
+          data: {
+            payslipId: payslip.id,
+            status: "PAID",
+          },
+        });
+      }
 
       generated.push(payslip);
     }
@@ -329,6 +377,16 @@ class PayrollService {
             branch: { select: { name: true } },
           },
         },
+        expenses: {
+          select: {
+            id: true,
+            title: true,
+            category: true,
+            amount: true,
+            date: true,
+            receiptUrl: true,
+          },
+        },
       },
       orderBy: [{ year: "desc" }, { month: "desc" }],
     });
@@ -346,6 +404,18 @@ class PayrollService {
 
     return await prisma.payslip.findMany({
       where: { employeeId: employee.id, organizationId },
+      include: {
+        expenses: {
+          select: {
+            id: true,
+            title: true,
+            category: true,
+            amount: true,
+            date: true,
+            receiptUrl: true,
+          },
+        },
+      },
       orderBy: [{ year: "desc" }, { month: "desc" }],
     });
   }
@@ -400,6 +470,51 @@ class PayrollService {
         remarks: remarks || "Disbursed via corporate banking payroll channel",
       },
     });
+
+    // Asynchronously dispatch Email & WhatsApp notifications to all employees in disbursed batch
+    if (updated.count > 0) {
+      prisma.payslip
+        .findMany({
+          where: { organizationId, month: m, year: y, status: "DISBURSED" },
+          include: {
+            employee: {
+              include: { user: { select: { email: true } } },
+            },
+          },
+        })
+        .then((slips) => {
+          for (const slip of slips) {
+            const empName = `${slip.employee.firstName} ${slip.employee.lastName || ""}`.trim();
+            const email = slip.employee.user?.email;
+            const phone = slip.employee.phone;
+
+            if (email) {
+              emailService
+                .sendPayslipDisbursedEmail(email, empName, {
+                  month: m,
+                  year: y,
+                  netSalary: Number(slip.netSalary),
+                  grossSalary: Number(slip.grossSalary),
+                  deductionsTotal: Number(slip.deductionsTotal),
+                  workingDays: slip.workingDays,
+                  presentDays: slip.presentDays,
+                })
+                .catch((e) => console.warn(`[PayrollNotification:Email] Error for ${email}:`, e.message));
+            }
+
+            if (phone) {
+              whatsappService
+                .sendPayslipDisbursedWhatsApp(phone, empName, {
+                  month: m,
+                  year: y,
+                  netSalary: Number(slip.netSalary),
+                })
+                .catch((e) => console.warn(`[PayrollNotification:WhatsApp] Error for ${phone}:`, e.message));
+            }
+          }
+        })
+        .catch((e) => console.warn("[PayrollNotification] Batch notification error:", e.message));
+    }
 
     return {
       month: m,

@@ -1,6 +1,9 @@
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const prisma = require("../config/database");
+const { uploadImage } = require("../config/cloudinary");
+const emailService = require("./email.service");
+const whatsappService = require("./whatsapp.service");
 
 class OnboardingService {
   /**
@@ -284,13 +287,29 @@ class OnboardingService {
       throw error;
     }
 
+    // Auto-upload to Cloudinary if base64 / data URI
+    let finalFileUrl = fileUrl.trim();
+    if (typeof finalFileUrl === "string" && finalFileUrl.startsWith("data:")) {
+      try {
+        const uploadRes = await uploadImage(finalFileUrl, {
+          folder: `workpulse/onboarding/${candidate.id}`,
+          resource_type: "auto",
+        });
+        if (uploadRes && uploadRes.secure_url) {
+          finalFileUrl = uploadRes.secure_url;
+        }
+      } catch (cloudErr) {
+        console.warn("Cloudinary upload fallback:", cloudErr.message);
+      }
+    }
+
     // Save document
     const document = await prisma.onboardingDocument.create({
       data: {
         candidateId: candidate.id,
         documentType: cleanType,
         fileName: fileName.trim(),
-        fileUrl: fileUrl.trim(),
+        fileUrl: finalFileUrl,
         fileSize: fileSize ? Number(fileSize) : null,
         mimeType: mimeType ? String(mimeType).trim() : null,
         status: "PENDING",
@@ -479,6 +498,25 @@ class OnboardingService {
       throw error;
     }
 
+    // Check organization subscription limit
+    const org = await prisma.organization.findUnique({
+      where: { id: organizationId },
+      include: { subscription: true },
+    });
+    if (org) {
+      const activeEmployeesCount = await prisma.employee.count({
+        where: { organizationId, status: "ACTIVE" },
+      });
+      const maxAllowed = org.subscription?.maxEmployees || org.maxEmployees || 10;
+      if (activeEmployeesCount >= maxAllowed) {
+        const error = new Error(
+          `Cannot activate candidate: employee limit reached for current subscription plan (${maxAllowed} active employees max). Please upgrade subscription.`
+        );
+        error.statusCode = 400;
+        throw error;
+      }
+    }
+
     const {
       adminNotes,
       initialPassword = "Welcome@WorkPulse2026",
@@ -590,6 +628,33 @@ class OnboardingService {
         temporaryPassword: initialPassword,
       };
     });
+
+    // Asynchronously dispatch Offer Letter notifications via Email and WhatsApp
+    const candEmail = candidate.email;
+    const candPhone = candidate.phone;
+    const candName = `${candidate.firstName} ${candidate.lastName || ""}`.trim();
+    const offerUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/onboarding/portal/${candidate.portalToken}`;
+
+    if (candEmail) {
+      emailService
+        .sendOfferLetterEmail(candEmail, candName, {
+          designation: candidate.designation,
+          department: candidate.department?.name,
+          expectedJoinDate: candidate.expectedJoinDate,
+          salary: candidate.proposedSalary,
+          offerUrl,
+        })
+        .catch((e) => console.warn("[OfferNotification:Email] Error:", e.message));
+    }
+
+    if (candPhone) {
+      whatsappService
+        .sendOfferLetterWhatsApp(candPhone, candName, {
+          designation: candidate.designation,
+          offerUrl,
+        })
+        .catch((e) => console.warn("[OfferNotification:WhatsApp] Error:", e.message));
+    }
 
     return result;
   }

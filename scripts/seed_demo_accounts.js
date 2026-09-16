@@ -82,7 +82,7 @@ async function seedDemoAccounts() {
         startTime: '09:00',
         endTime: '18:00',
         graceMinutes: 15,
-        workingDays: '1,2,3,4,5'
+        workingDays: '1,2,3,4,5,6'
       }
     });
   }
@@ -103,15 +103,26 @@ async function seedDemoAccounts() {
       ctc: 1200000
     },
     {
-      email: 'manager@workpulse.com',
+      email: 'hr@workpulse.com',
       role: 'MANAGER',
       firstName: 'Sarah',
       lastName: 'Connor',
       phone: '+91 98765 00002',
-      employeeCode: 'WP-MGR-002',
+      employeeCode: 'WP-HR-002',
       branchId: hqBranch.id,
       departmentId: depts['Human Resources']?.id,
       ctc: 900000
+    },
+    {
+      email: 'manager@workpulse.com',
+      role: 'MANAGER',
+      firstName: 'Michael',
+      lastName: 'Scott',
+      phone: '+91 98765 00005',
+      employeeCode: 'WP-MGR-002',
+      branchId: hqBranch.id,
+      departmentId: depts['Sales & Marketing']?.id || depts['Human Resources']?.id,
+      ctc: 850000
     },
     {
       email: 'employee@workpulse.com',
@@ -251,6 +262,7 @@ async function seedDemoAccounts() {
   console.log('--- Demo Accounts Seeding Complete! ---');
   console.log('Log in with:');
   console.log('  Admin:    admin@workpulse.com / Password@123');
+  console.log('  HR:       hr@workpulse.com / Password@123');
   console.log('  Manager:  manager@workpulse.com / Password@123');
   console.log('  Employee: employee@workpulse.com / Password@123');
   console.log('  Priya:    priya@workpulse.com / Password@123');
