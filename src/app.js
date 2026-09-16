@@ -143,6 +143,24 @@ app.get(["/health", "/api/health"], (req, res) => {
   });
 });
 
+app.get("/api/db-status", async (req, res) => {
+  try {
+    const prismaInstance = require("./config/database");
+    const userCount = await prismaInstance.user.count();
+    res.json({
+      success: true,
+      database: "connected",
+      totalUsers: userCount,
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      database: "error",
+      message: err.message,
+    });
+  }
+});
+
 // 404 Not Found Handler
 app.use((req, res) => {
   res.status(404).json({

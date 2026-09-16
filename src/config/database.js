@@ -19,6 +19,9 @@ if (
   connectionString = NEON_PRODUCTION_URL;
 }
 
+// Explicitly overwrite process.env.DATABASE_URL so Prisma's internal engines use Neon
+process.env.DATABASE_URL = connectionString;
+
 const adapter = new PrismaPg({ connectionString });
 const prisma = new PrismaClient({ adapter });
 
