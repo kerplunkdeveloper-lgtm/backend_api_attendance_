@@ -869,7 +869,16 @@ const getTodayStatus = async (userId, organizationId) => {
   });
 
   if (!employee) {
-    return { hasEmployeeProfile: false, clockedIn: false, attendance: null };
+    return {
+      success: true,
+      hasEmployeeProfile: false,
+      hasCheckedIn: false,
+      hasCheckedOut: false,
+      clockedIn: false,
+      isOnBreak: false,
+      isWorkFromHome: false,
+      attendance: null,
+    };
   }
 
   const today = getTodayDateOnly();
@@ -882,11 +891,24 @@ const getTodayStatus = async (userId, organizationId) => {
     },
   });
 
-  const clockedIn = Boolean(attendance?.checkIn && !attendance?.checkOut);
+  const hasCheckedIn = Boolean(attendance?.checkIn);
+  const hasCheckedOut = Boolean(attendance?.checkOut);
+  const clockedIn = hasCheckedIn && !hasCheckedOut;
   const isOnBreak = Boolean(clockedIn && attendance?.events?.[0]?.type === "BREAK_START");
+  const isWorkFromHome = Boolean(
+    attendance?.status === "WORK_FROM_HOME" ||
+    (attendance?.wfhNote && attendance.wfhNote.toLowerCase().includes("home"))
+  );
 
   return {
+    success: true,
     hasEmployeeProfile: true,
+    hasCheckedIn,
+    hasCheckedOut,
+    clockedIn,
+    isOnBreak,
+    isWorkFromHome,
+    totalBreakMinutes: attendance?.breakMinutes || 0,
     employee: {
       id: employee.id,
       name: `${employee.firstName} ${employee.lastName || ""}`.trim(),
@@ -894,8 +916,6 @@ const getTodayStatus = async (userId, organizationId) => {
       branch: employee.branch,
       shift: employee.shift,
     },
-    clockedIn,
-    isOnBreak,
     attendance,
   };
 };
