@@ -102,6 +102,7 @@ model Organization {
   shiftOverrides   ShiftOverride[]
   overtimeRequests OvertimeRequest[]
   employeeInvites  EmployeeInvite[]
+  employeeDocuments EmployeeDocument[]
 }
 
 model Subscription {
@@ -313,6 +314,7 @@ model Employee {
   shiftOverrides   ShiftOverride[]
   compOffBalance   CompOffBalance?
   overtimeRequests OvertimeRequest[]
+  documents        EmployeeDocument[]
 
   @@unique([organizationId, employeeCode])
   @@index([organizationId])
@@ -830,4 +832,46 @@ model EmployeeInvite {
 
   @@index([organizationId, status])
   @@index([email])
+}
+
+// ─── Employee Documents ───────────────────────────────────────────────────────
+enum EmployeeDocumentType {
+  AADHAAR
+  PAN
+  PASSPORT
+  DRIVING_LICENCE
+  EDUCATION_CERTIFICATE
+  EXPERIENCE_LETTER
+  OFFER_LETTER
+  EMPLOYMENT_CONTRACT
+  BANK_DOCUMENT
+  OTHER
+}
+
+model EmployeeDocument {
+  id                 String                     @id @default(uuid())
+  organizationId     String
+  employeeId         String
+  documentType       EmployeeDocumentType
+  title              String?
+  fileName           String
+  fileUrl            String
+  fileSize           Int?
+  mimeType           String?
+  status             DocumentVerificationStatus @default(PENDING)
+  rejectionReason    String?
+  verifiedBy         String?
+  verifiedAt         DateTime?
+  expiryDate         DateTime?                  @db.Date
+  expiryReminderSent Boolean                    @default(false)
+  createdAt          DateTime                   @default(now())
+  updatedAt          DateTime                   @updatedAt
+
+  organization       Organization               @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee           Employee                   @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([employeeId])
+  @@index([documentType])
+  @@index([expiryDate])
 }
