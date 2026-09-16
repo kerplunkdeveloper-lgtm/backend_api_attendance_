@@ -92,6 +92,31 @@ app.use("/api/compoff", compOffRoutes);
 app.use("/api/overtime", overtimeRoutes);
 app.use("/api/shift-overrides", shiftOverrideRoutes);
 
+// Root route aliases (handles clients calling without /api prefix)
+app.use("/auth", authRoutes);
+app.use("/departments", departmentRoutes);
+app.use("/branches", branchRoutes);
+app.use("/employees", employeeRoutes);
+app.use("/shifts", shiftRoutes);
+app.use("/attendance/corrections", correctionRoutes);
+app.use("/attendance/regularization", correctionRoutes);
+app.use("/attendance/regularizations", correctionRoutes);
+app.use("/attendance", attendanceRoutes);
+app.use("/leaves", leaveRoutes);
+app.use("/payroll", payrollRoutes);
+app.use("/reports", reportRoutes);
+app.use("/notifications", notificationRoutes);
+app.use("/devices", deviceRoutes);
+app.use("/audit-logs", auditRoutes);
+app.use("/holidays", holidayRoutes);
+app.use("/onboarding", onboardingRoutes);
+app.use("/upload", uploadRoutes);
+app.use("/expenses", expenseRoutes);
+app.use("/policy", policyRoutes);
+app.use("/compoff", compOffRoutes);
+app.use("/overtime", overtimeRoutes);
+app.use("/shift-overrides", shiftOverrideRoutes);
+
 app.get("/", (req, res) => {
   res.json({
     success: true,
