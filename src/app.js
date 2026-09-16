@@ -26,6 +26,7 @@ const policyRoutes = require("./routes/policy.routes");
 const compOffRoutes = require("./routes/compoff.routes");
 const overtimeRoutes = require("./routes/overtime.routes");
 const shiftOverrideRoutes = require("./routes/shiftoverride.routes");
+const offboardingRoutes = require("./routes/offboarding.routes");
 const { authRateLimiter, apiRateLimiter } = require("./middleware/rateLimiter.middleware");
 
 const app = express();
@@ -91,8 +92,10 @@ app.use("/api/policy", policyRoutes);
 app.use("/api/compoff", compOffRoutes);
 app.use("/api/overtime", overtimeRoutes);
 app.use("/api/shift-overrides", shiftOverrideRoutes);
+app.use("/api/offboarding", offboardingRoutes);
 
 // Root route aliases (handles clients calling without /api prefix)
+app.use("/offboarding", offboardingRoutes);
 app.use("/auth", authRoutes);
 app.use("/departments", departmentRoutes);
 app.use("/branches", branchRoutes);

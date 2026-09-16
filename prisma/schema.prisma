@@ -103,6 +103,9 @@ model Organization {
   overtimeRequests OvertimeRequest[]
   employeeInvites  EmployeeInvite[]
   employeeDocuments EmployeeDocument[]
+  employeeExits     EmployeeExit[]
+  employeeClearances EmployeeClearance[]
+  finalSettlements  FinalSettlement[]
 }
 
 model Subscription {
@@ -315,6 +318,8 @@ model Employee {
   compOffBalance   CompOffBalance?
   overtimeRequests OvertimeRequest[]
   documents        EmployeeDocument[]
+  exits            EmployeeExit[]
+  finalSettlements FinalSettlement[]
 
   @@unique([organizationId, employeeCode])
   @@index([organizationId])
@@ -874,4 +879,171 @@ model EmployeeDocument {
   @@index([employeeId])
   @@index([documentType])
   @@index([expiryDate])
+}
+
+// ─── Offboarding & Full & Final (F&F) Settlement ─────────────────────────────
+enum ExitType {
+  RESIGNATION
+  TERMINATION
+  RETIREMENT
+  MUTUAL_SEPARATION
+}
+
+enum ExitStatus {
+  RESIGNED
+  UNDER_HR_REVIEW
+  NOTICE_PERIOD
+  CLEARANCE_IN_PROGRESS
+  SETTLEMENT_CALCULATED
+  SETTLED
+  TERMINATED
+  REJECTED
+  WITHDRAWN
+}
+
+enum ClearanceDept {
+  IT_ASSETS
+  REPORTING_MANAGER
+  FINANCE_PAYROLL
+  HR_OPERATIONS
+  ADMIN_FACILITY
+}
+
+enum ClearanceItemStatus {
+  PENDING
+  CLEARED
+  RECOVERABLE_DUE
+  WAIVED
+}
+
+enum SettlementStatus {
+  DRAFT
+  APPROVED
+  DISBURSED
+}
+
+model EmployeeExit {
+  id                       String              @id @default(uuid())
+  organizationId           String
+  employeeId               String
+  exitType                 ExitType            @default(RESIGNATION)
+  status                   ExitStatus          @default(RESIGNED)
+  
+  resignationDate          DateTime            @default(now()) @db.Date
+  preferredLastWorkingDate DateTime?           @db.Date
+  approvedLastWorkingDate  DateTime?           @db.Date
+  
+  noticePeriodDays         Int                 @default(30)
+  isNoticeWaived           Boolean             @default(false)
+  waivedNoticeDays         Int                 @default(0)
+  
+  reason                   String
+  employeeComments         String?
+  hrNotes                  String?
+  hrReviewerId             String?
+  hrReviewedAt             DateTime?
+  
+  createdAt                DateTime            @default(now())
+  updatedAt                DateTime            @updatedAt
+
+  organization             Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee                 Employee            @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  clearances               EmployeeClearance[]
+  interview                ExitInterview?
+  finalSettlement          FinalSettlement?
+
+  @@index([organizationId, status])
+  @@index([employeeId])
+}
+
+model EmployeeClearance {
+  id              String              @id @default(uuid())
+  organizationId  String
+  exitId          String
+  department      ClearanceDept
+  itemName        String
+  itemDescription String?
+  status          ClearanceItemStatus @default(PENDING)
+  recoveryAmount  Decimal             @default(0) @db.Decimal(10, 2)
+  clearedBy       String?
+  clearedAt       DateTime?
+  remarks         String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  organization    Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  exit            EmployeeExit        @relation(fields: [exitId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([exitId])
+  @@index([department])
+}
+
+model ExitInterview {
+  id                    String       @id @default(uuid())
+  organizationId        String
+  exitId                String       @unique
+  reasonCategory        String?      // BETTER_OFFER, CAREER_GROWTH, HIGHER_EDUCATION, PERSONAL, RELOCATION, WORK_CULTURE, COMPENSATION
+  feedbackRatings       Json?        // { managementRating: 4, cultureRating: 3, payRating: 2, workLifeRating: 4 }
+  whatWeDidWell         String?
+  whatCanWeImprove      String?
+  wouldRecommendCompany Boolean      @default(true)
+  conductedBy           String?
+  conductedAt           DateTime     @default(now())
+  notes                 String?
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+
+  exit                  EmployeeExit @relation(fields: [exitId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+model FinalSettlement {
+  id                       String           @id @default(uuid())
+  organizationId           String
+  exitId                   String           @unique
+  employeeId               String
+  
+  // Earnings
+  workedDaysInFinalMonth   Decimal          @default(0) @db.Decimal(5, 1)
+  finalSalaryPayable       Decimal          @default(0) @db.Decimal(10, 2)
+  overtimePay              Decimal          @default(0) @db.Decimal(10, 2)
+  leaveEncashmentDays      Decimal          @default(0) @db.Decimal(5, 1)
+  leaveEncashmentAmount    Decimal          @default(0) @db.Decimal(10, 2)
+  pendingReimbursements    Decimal          @default(0) @db.Decimal(10, 2)
+  gratuityOrBonus          Decimal          @default(0) @db.Decimal(10, 2)
+  otherEarnings            Decimal          @default(0) @db.Decimal(10, 2)
+  
+  // Deductions & Recoveries
+  lopDays                  Decimal          @default(0) @db.Decimal(5, 1)
+  lopDeduction             Decimal          @default(0) @db.Decimal(10, 2)
+  noticeShortfallDays      Decimal          @default(0) @db.Decimal(5, 1)
+  noticeShortfallDeduction Decimal          @default(0) @db.Decimal(10, 2)
+  assetRecoveryAmount      Decimal          @default(0) @db.Decimal(10, 2)
+  loanOrAdvanceRecovery    Decimal          @default(0) @db.Decimal(10, 2)
+  statutoryDeductions      Decimal          @default(0) @db.Decimal(10, 2)
+  otherDeductions          Decimal          @default(0) @db.Decimal(10, 2)
+  
+  // Totals
+  grossEarnings            Decimal          @default(0) @db.Decimal(10, 2)
+  totalDeductions          Decimal          @default(0) @db.Decimal(10, 2)
+  netPayable               Decimal          @default(0) @db.Decimal(10, 2)
+  
+  status                   SettlementStatus @default(DRAFT)
+  approvedBy               String?
+  approvedAt               DateTime?
+  disbursedAt              DateTime?
+  paymentReference         String?
+  remarks                  String?
+  
+  createdAt                DateTime         @default(now())
+  updatedAt                DateTime         @updatedAt
+
+  organization             Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  exit                     EmployeeExit     @relation(fields: [exitId], references: [id], onDelete: Cascade)
+  employee                 Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@index([employeeId])
 }
