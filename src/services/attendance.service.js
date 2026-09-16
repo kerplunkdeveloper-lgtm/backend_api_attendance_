@@ -33,7 +33,7 @@ const getPolicy = async (organizationId) => {
     lateDeductionPercent: policy ? Number(policy.lateDeductionPercent) : 0.25,
     allowWfh: policy?.allowWfh ?? true,
     requireOtApproval: policy?.requireOtApproval ?? false,
-    geofenceStrict: policy?.geofenceStrict ?? true,
+    geofenceStrict: policy?.geofenceStrict ?? false, // Eligible from anywhere by default; admin can activate later
   };
 };
 
@@ -111,7 +111,7 @@ const isWorkingDay = (shift, date) => {
  *   - Detects WEEK_OFF and auto-creates week-off record
  *   - Logs geofence bypass audit on AttendanceEvent
  */
-const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude, accuracy, timestamp }) => {
+const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude, accuracy, timestamp, workMode = "OFFICE", note }) => {
   const employee = await resolveEmployee(userId, employeeId, organizationId);
   const checkInTime = timestamp ? new Date(timestamp) : new Date();
   const today = getTodayDateOnly(checkInTime);
@@ -182,7 +182,8 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
   }
 
   if (!geofenceResult || (!geofenceResult.isInside && !geofenceResult.bypassed)) {
-    if (policy.geofenceStrict) {
+    const isSpecialWorkMode = ["WORK_FROM_HOME", "CLIENT_VISIT", "TRAVEL"].includes(workMode);
+    if (policy.geofenceStrict && !isSpecialWorkMode) {
       const error = new Error(
         `Outside allowed branch boundary. Distance: ${geofenceResult?.distanceMeters || "N/A"}m, Max allowed: ${geofenceResult?.allowedRadiusMeters || 200}m`
       );
@@ -190,19 +191,19 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
       error.details = geofenceResult;
       throw error;
     }
-    // Non-strict: allow but mark as bypassed
+    // Non-strict or remote/field mode: allow and record as eligible
     isBypassed = true;
-    bypassReason = "GEOFENCE_DISABLED";
+    bypassReason = workMode || "GEOFENCE_FLEXIBLE";
   }
 
   // ── Late Calculation ────────────────────────────────────────────────────────
   let lateMinutes = 0;
-  let status = "PRESENT";
+  let status = workMode === "WORK_FROM_HOME" ? "WORK_FROM_HOME" : "PRESENT";
 
   // If working on rest day/leave/holiday, late does not penalize the employee
   if (!isOvertimeShift && shift) {
     lateMinutes = calculateLateMinutes(shift.startTime, shift.graceMinutes, checkInTime);
-    if (lateMinutes > 0) status = "LATE";
+    if (lateMinutes > 0 && status !== "WORK_FROM_HOME") status = "LATE";
   }
 
   // ── Duplicate Check ─────────────────────────────────────────────────────────
@@ -219,6 +220,8 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
     throw error;
   }
 
+  const formattedNote = note || (workMode !== "OFFICE" ? workMode.replace(/_/g, " ") : null);
+
   // ── Persist ─────────────────────────────────────────────────────────────────
   const attendance = await prisma.$transaction(async (tx) => {
     const record = await tx.attendance.upsert({
@@ -231,6 +234,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
         shiftId: shift?.id || null,
         status,
         lateMinutes,
+        wfhNote: formattedNote,
       },
       create: {
         organizationId,
@@ -243,6 +247,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
         checkInLongitude: longitude ? String(longitude) : null,
         status,
         lateMinutes,
+        wfhNote: formattedNote,
       },
     });
 
@@ -255,7 +260,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
         longitude: longitude ? String(longitude) : null,
         accuracy: accuracy ? String(accuracy) : null,
         isBypassed,
-        bypassReason,
+        bypassReason: bypassReason || workMode || "FLEXIBLE_LOCATION",
       },
     });
 
@@ -390,7 +395,7 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
 // Clock-Out
 // ─────────────────────────────────────────────────────────────────────────────
 
-const checkOut = async ({ userId, employeeId, organizationId, latitude, longitude, accuracy, timestamp }) => {
+const checkOut = async ({ userId, employeeId, organizationId, latitude, longitude, accuracy, timestamp, workMode, note }) => {
   const employee = await resolveEmployee(userId, employeeId, organizationId);
   const checkOutTime = timestamp ? new Date(timestamp) : new Date();
   const today = getTodayDateOnly(checkOutTime);
@@ -546,7 +551,8 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
         latitude: latitude ? String(latitude) : null,
         longitude: longitude ? String(longitude) : null,
         accuracy: accuracy ? String(accuracy) : null,
-        isBypassed: false,
+        isBypassed: true,
+        bypassReason: workMode || "GEOFENCE_FLEXIBLE",
       },
     });
 

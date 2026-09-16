@@ -6,7 +6,7 @@ class AttendanceController {
    */
   async checkIn(req, res) {
     try {
-      const { latitude, longitude, accuracy, timestamp, employeeId } = req.body;
+      const { latitude, longitude, accuracy, timestamp, employeeId, workMode, note } = req.body;
       const organizationId = req.user.organizationId;
       const userId = req.user.id;
 
@@ -18,6 +18,8 @@ class AttendanceController {
         longitude,
         accuracy,
         timestamp,
+        workMode,
+        note,
       });
 
       return res.status(201).json(result);
@@ -35,7 +37,7 @@ class AttendanceController {
    */
   async checkOut(req, res) {
     try {
-      const { latitude, longitude, accuracy, timestamp, employeeId } = req.body;
+      const { latitude, longitude, accuracy, timestamp, employeeId, workMode, note } = req.body;
       const organizationId = req.user.organizationId;
       const userId = req.user.id;
 
@@ -47,6 +49,8 @@ class AttendanceController {
         longitude,
         accuracy,
         timestamp,
+        workMode,
+        note,
       });
 
       return res.status(200).json(result);
