@@ -8,10 +8,15 @@ class OnboardingController {
     try {
       const organizationId = req.user.organizationId;
       const hrUserId = req.user.id;
-      const result = await onboardingService.createJoiner(organizationId, hrUserId, req.body);
+      const result = await onboardingService.createJoiner(
+        organizationId,
+        hrUserId,
+        req.body,
+      );
       res.status(201).json({
         success: true,
-        message: "New joiner created and invitation link generated successfully",
+        message:
+          "New joiner created and invitation link generated successfully",
         data: result,
       });
     } catch (err) {
@@ -41,7 +46,10 @@ class OnboardingController {
   async updateCandidateProfile(req, res, next) {
     try {
       const { token } = req.params;
-      const updated = await onboardingService.updateCandidateProfile(token, req.body);
+      const updated = await onboardingService.updateCandidateProfile(
+        token,
+        req.body,
+      );
       res.status(200).json({
         success: true,
         message: "Candidate profile submitted successfully",
@@ -58,7 +66,10 @@ class OnboardingController {
   async uploadCandidateDocument(req, res, next) {
     try {
       const { token } = req.params;
-      const document = await onboardingService.uploadCandidateDocument(token, req.body);
+      const document = await onboardingService.uploadCandidateDocument(
+        token,
+        req.body,
+      );
       res.status(201).json({
         success: true,
         message: "Document uploaded successfully",
@@ -75,7 +86,10 @@ class OnboardingController {
   async listCandidates(req, res, next) {
     try {
       const organizationId = req.user.organizationId;
-      const candidates = await onboardingService.listCandidates(organizationId, req.query);
+      const candidates = await onboardingService.listCandidates(
+        organizationId,
+        req.query,
+      );
       res.status(200).json({
         success: true,
         data: candidates,
@@ -92,7 +106,10 @@ class OnboardingController {
     try {
       const organizationId = req.user.organizationId;
       const { id } = req.params;
-      const candidate = await onboardingService.getCandidateDetails(organizationId, id);
+      const candidate = await onboardingService.getCandidateDetails(
+        organizationId,
+        id,
+      );
       res.status(200).json({
         success: true,
         data: candidate,
@@ -110,7 +127,12 @@ class OnboardingController {
       const organizationId = req.user.organizationId;
       const { id } = req.params;
       const hrUserId = req.user.id;
-      const verified = await onboardingService.hrVerifyCandidate(organizationId, id, hrUserId, req.body);
+      const verified = await onboardingService.hrVerifyCandidate(
+        organizationId,
+        id,
+        hrUserId,
+        req.body,
+      );
       res.status(200).json({
         success: true,
         message: "Candidate verification updated successfully",
@@ -129,10 +151,16 @@ class OnboardingController {
       const organizationId = req.user.organizationId;
       const { id } = req.params;
       const adminUserId = req.user.id;
-      const result = await onboardingService.adminApproveAndActivate(organizationId, id, adminUserId, req.body);
+      const result = await onboardingService.adminApproveAndActivate(
+        organizationId,
+        id,
+        adminUserId,
+        req.body,
+      );
       res.status(200).json({
         success: true,
-        message: "Employee successfully approved, account activated, and offer letter generated!",
+        message:
+          "Employee successfully approved, account activated, and offer letter generated!",
         data: result,
       });
     } catch (err) {
@@ -152,11 +180,12 @@ class OnboardingController {
         organizationId,
         id,
         adminUserId,
-        req.body
+        req.body,
       );
       res.status(200).json({
         success: true,
-        message: "Candidate approved by Admin and official Offer Letter generated!",
+        message:
+          "Candidate approved by Admin and official Offer Letter generated!",
         data: result,
       });
     } catch (err) {
@@ -176,7 +205,7 @@ class OnboardingController {
         organizationId,
         id,
         hrUserId,
-        req.body
+        req.body,
       );
       res.status(200).json({
         success: true,

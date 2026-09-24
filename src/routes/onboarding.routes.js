@@ -1,7 +1,10 @@
 const express = require("express");
 const router = express.Router();
 const onboardingController = require("../controllers/onboarding.controller");
-const { authenticate, authorizeRoles } = require("../middleware/auth.middleware");
+const {
+  authenticate,
+  authorizeRoles,
+} = require("../middleware/auth.middleware");
 
 // ==========================================
 // PUBLIC CANDIDATE PORTAL ROUTES
@@ -11,13 +14,22 @@ const { authenticate, authorizeRoles } = require("../middleware/auth.middleware"
 router.get("/portal/:token", onboardingController.getCandidateByToken);
 
 // Candidate submits / updates profile
-router.put("/portal/:token/profile", onboardingController.updateCandidateProfile);
+router.put(
+  "/portal/:token/profile",
+  onboardingController.updateCandidateProfile,
+);
 
 // Candidate uploads mandatory onboarding document
-router.post("/portal/:token/documents", onboardingController.uploadCandidateDocument);
+router.post(
+  "/portal/:token/documents",
+  onboardingController.uploadCandidateDocument,
+);
 
 // Candidate responds to offer letter (Accept / Reject)
-router.post("/portal/:token/respond-offer", onboardingController.respondToOffer);
+router.post(
+  "/portal/:token/respond-offer",
+  onboardingController.respondToOffer,
+);
 
 // ==========================================
 // AUTHENTICATED HR / ADMIN ROUTES
@@ -28,49 +40,49 @@ router.use(authenticate);
 router.get(
   "/",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
-  onboardingController.listCandidates
+  onboardingController.listCandidates,
 );
 
 // HR / Admin: Create new joiner invitation
 router.post(
   "/",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
-  onboardingController.createJoiner
+  onboardingController.createJoiner,
 );
 
 // HR / Admin: View single candidate complete dossier
 router.get(
   "/:id",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
-  onboardingController.getCandidateDetails
+  onboardingController.getCandidateDetails,
 );
 
 // HR: Verify candidate profile & review documents
 router.put(
   "/:id/hr-verify",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
-  onboardingController.hrVerifyCandidate
+  onboardingController.hrVerifyCandidate,
 );
 
 // Admin: Approve candidate & Generate Offer Letter
 router.post(
   "/:id/admin-approve-offer",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
-  onboardingController.adminApproveAndGenerateOffer
+  onboardingController.adminApproveAndGenerateOffer,
 );
 
 // HR: Review Offer Letter & Send to Employee
 router.post(
   "/:id/hr-send-offer",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
-  onboardingController.hrReviewAndSendOffer
+  onboardingController.hrReviewAndSendOffer,
 );
 
 // Admin: Direct approval & automatic account activation
 router.post(
   "/:id/admin-approve",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
-  onboardingController.adminApproveAndActivate
+  onboardingController.adminApproveAndActivate,
 );
 
 module.exports = router;

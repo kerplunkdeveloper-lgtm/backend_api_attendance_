@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const prisma = require('../src/config/database');
 
 async function seedDemoAccounts() {
-  console.log('--- Seeding Production Demo Accounts ---');
+  console.log('--- Seeding Local Demo Accounts ---');
 
   // Find or create primary organization: Acme Global Corp
   let org = await prisma.organization.findFirst({
@@ -11,6 +11,7 @@ async function seedDemoAccounts() {
       OR: [
         { name: 'Acme Global Corp' },
         { name: 'WorkPulse Technologies' },
+        { name: 'WorkPulse Global Technologies' },
         { id: '58789d2a-4d54-484b-97bc-5aba4d6d03e9' }
       ]
     },
@@ -151,7 +152,12 @@ async function seedDemoAccounts() {
   for (const u of demoUsers) {
     // Upsert User
     const user = await prisma.user.upsert({
-      where: { email: u.email },
+      where: {
+        organizationId_email: {
+          organizationId: org.id,
+          email: u.email,
+        },
+      },
       update: {
         passwordHash,
         role: u.role,

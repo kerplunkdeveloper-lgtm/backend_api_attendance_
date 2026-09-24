@@ -1,6 +1,9 @@
 const express = require("express");
 const holidayController = require("../controllers/holiday.controller");
-const { authenticate, authorizeRoles } = require("../middleware/auth.middleware");
+const {
+  authenticate,
+  authorizeRoles,
+} = require("../middleware/auth.middleware");
 
 const router = express.Router();
 
@@ -16,28 +19,28 @@ router.get("/upcoming", holidayController.upcoming);
 router.post(
   "/",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
-  holidayController.create
+  holidayController.create,
 );
 
 // 4. POST /api/holidays/bulk - Bulk upload holiday list
 router.post(
   "/bulk",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
-  holidayController.bulkCreate
+  holidayController.bulkCreate,
 );
 
 // 5. PUT /api/holidays/:id - Update existing holiday
 router.put(
   "/:id",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
-  holidayController.update
+  holidayController.update,
 );
 
 // 6. DELETE /api/holidays/:id - Remove holiday
 router.delete(
   "/:id",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
-  holidayController.delete
+  holidayController.delete,
 );
 
 module.exports = router;

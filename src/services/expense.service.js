@@ -10,6 +10,51 @@ const VALID_CATEGORIES = [
   "OTHER",
 ];
 
+const CATEGORY_MAP = {
+  TRAVEL: "TRAVEL",
+  CAB: "TRAVEL",
+  TAXI: "TRAVEL",
+  FLIGHT: "TRAVEL",
+  HOTEL: "TRAVEL",
+  ACCOMMODATION: "TRAVEL",
+  LODGING: "TRAVEL",
+  FOOD: "CLIENT_ENTERTAINMENT",
+  MEALS: "CLIENT_ENTERTAINMENT",
+  DINING: "CLIENT_ENTERTAINMENT",
+  ENTERTAINMENT: "CLIENT_ENTERTAINMENT",
+  CLIENT_ENTERTAINMENT: "CLIENT_ENTERTAINMENT",
+  FUEL: "FUEL",
+  GAS: "FUEL",
+  PETROL: "FUEL",
+  DIESEL: "FUEL",
+  MILEAGE: "FUEL",
+  INTERNET: "INTERNET",
+  WIFI: "INTERNET",
+  PHONE: "INTERNET",
+  MOBILE: "INTERNET",
+  UTILITIES: "INTERNET",
+  BILL: "INTERNET",
+  LEARNING: "LEARNING",
+  TRAINING: "LEARNING",
+  COURSE: "LEARNING",
+  BOOK: "LEARNING",
+  EDUCATION: "LEARNING",
+  SUPPLIES: "OTHER",
+  OFFICE: "OTHER",
+  EQUIPMENT: "OTHER",
+  HARDWARE: "OTHER",
+  SOFTWARE: "OTHER",
+  MISCELLANEOUS: "OTHER",
+  MISC: "OTHER",
+  OTHER: "OTHER",
+};
+
+const normalizeCategory = (cat) => {
+  if (!cat) return "OTHER";
+  const clean = String(cat).trim().toUpperCase();
+  return CATEGORY_MAP[clean] || (VALID_CATEGORIES.includes(clean) ? clean : "OTHER");
+};
+
 class ExpenseService {
   /**
    * 1. Submit a new Expense Reimbursement Claim
@@ -17,18 +62,13 @@ class ExpenseService {
   async createExpenseClaim(organizationId, employeeId, data) {
     const { category, amount, date, title, description, receiptUrl, receiptData } = data;
 
-    if (!category || !amount || !title) {
-      const error = new Error("Category, amount, and title are required fields.");
+    if (!category || amount === undefined || amount === null || String(amount).trim() === "") {
+      const error = new Error("Category and amount are required fields.");
       error.statusCode = 400;
       throw error;
     }
 
-    const cleanCategory = String(category).toUpperCase();
-    if (!VALID_CATEGORIES.includes(cleanCategory)) {
-      const error = new Error(`Invalid category. Allowed: ${VALID_CATEGORIES.join(", ")}`);
-      error.statusCode = 400;
-      throw error;
-    }
+    const cleanCategory = normalizeCategory(category);
 
     const numAmount = Number(amount);
     if (isNaN(numAmount) || numAmount <= 0) {
@@ -63,12 +103,14 @@ class ExpenseService {
           receiptPublicId = uploadRes.public_id;
         }
       } catch (cloudErr) {
-        console.warn("Cloudinary upload fallback for expense receipt:", cloudErr.message);
-        finalReceiptUrl = sourceData; // fallback
+        const error = new Error("Receipt upload failed. Please retry.");
+        error.statusCode = 503;
+        throw error;
       }
     }
 
     const claimDate = date ? new Date(date) : new Date();
+    const finalTitle = (title || description || `${cleanCategory.replace(/_/g, " ")} Claim`).slice(0, 150).trim();
 
     const claim = await prisma.expenseClaim.create({
       data: {
@@ -77,7 +119,7 @@ class ExpenseService {
         category: cleanCategory,
         amount: numAmount,
         date: claimDate,
-        title: title.trim(),
+        title: finalTitle,
         description: description ? description.trim() : null,
         receiptUrl: finalReceiptUrl,
         receiptPublicId,
@@ -227,6 +269,12 @@ class ExpenseService {
       throw error;
     }
 
+    if (claim.employee?.userId && claim.employee.userId === reviewerUserId && !["SUPER_ADMIN", "COMPANY_ADMIN"].includes(reviewData?.reviewerRole)) {
+      const error = new Error("You cannot review your own expense claim");
+      error.statusCode = 403;
+      throw error;
+    }
+
     const updatedClaim = await prisma.expenseClaim.update({
       where: { id: claimId },
       data: {
@@ -270,9 +318,13 @@ class ExpenseService {
   /**
    * 5. Delete a Pending Claim (Employee can cancel before review)
    */
-  async deleteExpenseClaim(organizationId, employeeId, claimId) {
+  async deleteExpenseClaim(organizationId, employeeId, claimId, isAdmin = false) {
+    const where = { id: claimId, organizationId };
+    if (!isAdmin && employeeId) {
+      where.employeeId = employeeId;
+    }
     const claim = await prisma.expenseClaim.findFirst({
-      where: { id: claimId, organizationId, employeeId },
+      where,
     });
 
     if (!claim) {

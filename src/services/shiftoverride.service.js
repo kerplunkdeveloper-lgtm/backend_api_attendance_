@@ -1,5 +1,5 @@
 const prisma = require("../config/database");
-const { getTodayDateOnly } = require("./attendance.service");
+const { getOrgDateOnly } = require("./attendance.service");
 
 class ShiftOverrideService {
   /**
@@ -28,7 +28,7 @@ class ShiftOverrideService {
       throw error;
     }
 
-    const targetDate = getTodayDateOnly(new Date(date));
+    const targetDate = await getOrgDateOnly(organizationId, new Date(date));
 
     const override = await prisma.shiftOverride.upsert({
       where: { employeeId_date: { employeeId, date: targetDate } },
@@ -54,7 +54,7 @@ class ShiftOverrideService {
    * Delete a shift override
    */
   async deleteOverride(organizationId, employeeId, date) {
-    const targetDate = getTodayDateOnly(new Date(date));
+    const targetDate = await getOrgDateOnly(organizationId, new Date(date));
 
     const deleted = await prisma.shiftOverride.deleteMany({
       where: { employeeId, date: targetDate, organizationId },
@@ -77,8 +77,8 @@ class ShiftOverrideService {
     const where = { organizationId, employeeId };
     if (from || to) {
       where.date = {};
-      if (from) where.date.gte = getTodayDateOnly(new Date(from));
-      if (to) where.date.lte = getTodayDateOnly(new Date(to));
+      if (from) where.date.gte = await getOrgDateOnly(organizationId, new Date(from));
+      if (to) where.date.lte = await getOrgDateOnly(organizationId, new Date(to));
     }
 
     return await prisma.shiftOverride.findMany({
@@ -99,8 +99,8 @@ class ShiftOverrideService {
     if (employeeId) where.employeeId = employeeId;
     if (from || to) {
       where.date = {};
-      if (from) where.date.gte = getTodayDateOnly(new Date(from));
-      if (to) where.date.lte = getTodayDateOnly(new Date(to));
+      if (from) where.date.gte = await getOrgDateOnly(organizationId, new Date(from));
+      if (to) where.date.lte = await getOrgDateOnly(organizationId, new Date(to));
     }
 
     return await prisma.shiftOverride.findMany({

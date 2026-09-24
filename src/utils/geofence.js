@@ -42,7 +42,7 @@ const calculateDistanceMeters = (lat1, lon1, lat2, lon2) => {
  * @returns {object} { isInside: boolean, distanceMeters: number, allowedRadiusMeters: number }
  */
 const verifyGeofence = (userCoords, branchCoords) => {
-  if (!userCoords?.latitude || !userCoords?.longitude) {
+  if (userCoords?.latitude == null || userCoords?.longitude == null) {
     throw new Error("GPS coordinates (latitude, longitude) are required for check-in");
   }
 

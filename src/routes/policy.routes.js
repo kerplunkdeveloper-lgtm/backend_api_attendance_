@@ -1,6 +1,9 @@
 const express = require("express");
 const policyController = require("../controllers/policy.controller");
-const { authenticate, authorizeRoles } = require("../middleware/auth.middleware");
+const {
+  authenticate,
+  authorizeRoles,
+} = require("../middleware/auth.middleware");
 
 const router = express.Router();
 router.use(authenticate);
@@ -12,7 +15,7 @@ router.get("/", policyController.getPolicy);
 router.put(
   "/",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
-  policyController.upsertPolicy
+  policyController.upsertPolicy,
 );
 
 module.exports = router;

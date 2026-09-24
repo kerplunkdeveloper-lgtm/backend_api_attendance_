@@ -17,6 +17,8 @@ enum EmployeeStatus {
   ACTIVE
   INACTIVE
   TERMINATED
+  PROBATION
+  NOTICE_PERIOD
 }
 
 enum AttendanceStatus {
@@ -63,8 +65,17 @@ model Organization {
   name        String
   email       String?
   phone       String?
+  // IANA zone (e.g. "Asia/Kolkata"). Attendance calendar dates, shift start/end
+  // comparisons and report boundaries are all resolved in this zone rather than
+  // the server's, so the same data reads correctly wherever the API is deployed.
+  timezone    String   @default("UTC")
+  currency    String   @default("INR")
+  address     String?
+  taxId       String?
+  logoUrl     String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+  deletedAt   DateTime?
 
   subscriptionPlan      SubscriptionPlan   @default(FREE_TRIAL)
   subscriptionStatus    SubscriptionStatus @default(TRIALING)
@@ -106,6 +117,21 @@ model Organization {
   employeeExits     EmployeeExit[]
   employeeClearances EmployeeClearance[]
   finalSettlements  FinalSettlement[]
+  assets            Asset[]
+  assetAssignments  AssetAssignment[]
+  assetMaintenance  AssetMaintenance[]
+  payslipTemplate   PayslipTemplate?
+  itDeclarations    ItDeclaration[]
+  form16Records     Form16Record[]
+  statutoryExports  StatutoryExport[]
+  billingOrders     BillingOrder[]
+  chatThreads       ChatThread[]
+  chatMessages      ChatMessage[]
+  biometricDevices  BiometricDevice[]
+  loanAdvances      LoanAdvance[]
+  appraisalCycles   AppraisalCycle[]
+  appraisalReviews  AppraisalReview[]
+  apiKeys           OrgApiKey[]
 }
 
 model Subscription {
@@ -141,6 +167,7 @@ model AttendancePolicy {
   allowWfh              Boolean  @default(true)
   requireOtApproval     Boolean  @default(false)  // OT must be approved before payroll
   geofenceStrict        Boolean  @default(true)   // Enforce geofence on check-in
+  requireTrustedDevice  Boolean  @default(false)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
@@ -179,6 +206,8 @@ model CompOffBalance {
 
   employee       Employee @relation(fields: [employeeId], references: [id])
   transactions   CompOffTransaction[]
+
+  @@index([organizationId])
 }
 
 model CompOffTransaction {
@@ -188,6 +217,8 @@ model CompOffTransaction {
   days             Decimal  @db.Decimal(5, 1)
   reason           String?
   referenceDate    DateTime? @db.Date  // The holiday/weekend date worked
+  // Credits lapse after this date; null means the credit never expires.
+  expiresAt        DateTime? @db.Date
   createdBy        String?
   createdAt        DateTime @default(now())
 
@@ -217,6 +248,7 @@ model OvertimeRequest {
 
   @@index([organizationId, status])
   @@index([employeeId])
+  @@index([attendanceId])
 }
 
 // ─── Stored Refresh Tokens (for secure logout / revocation) ──────────────────
@@ -269,11 +301,14 @@ model Department {
 model User {
   id             String   @id @default(uuid())
   organizationId String
-  email          String   @unique
+  email          String
   passwordHash   String
   role           UserRole
+  avatarUrl      String?
   mustChangePassword Boolean @default(false) // true for new invited employees
   isActive           Boolean @default(true)  // false = account disabled
+  lastLoginAt        DateTime?
+  googleSub          String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -281,8 +316,14 @@ model User {
   employee       Employee?
   notifications  Notification[]
   refreshTokens  RefreshToken[]
+  chatMemberships ChatMember[]
+  chatMessages    ChatMessage[]
 
+  // Scoped to the tenant: the same person may hold an account in more than one
+  // workspace (consultants, agencies, or simply evaluating a second org).
+  @@unique([organizationId, email])
   @@index([organizationId])
+  @@index([email])
 }
 
 model Employee {
@@ -293,10 +334,37 @@ model Employee {
   firstName      String
   lastName       String?
   phone          String?
+  avatarUrl      String?
   status         EmployeeStatus @default(ACTIVE)
   branchId       String?
   departmentId   String?
   shiftId        String?
+
+  // ── Core HR profile ───────────────────────────────────────────────────────
+  // Previously collected on OnboardingCandidate and then dropped on conversion,
+  // while payroll and reports already referenced designation/dateOfJoining.
+  designation       String?
+  dateOfJoining     DateTime?
+  dateOfBirth       DateTime?
+  employmentType    String?   // FULL_TIME, PART_TIME, CONTRACT, INTERN
+  reportingManagerId String?
+  workEmail         String?
+  emergencyContactName  String?
+  emergencyContactPhone String?
+  address           String?
+
+  // ── Payout identity (used on payslips and bank advice) ────────────────────
+  panNumber         String?
+  uanNumber         String?
+  esiNumber         String?
+  bankName          String?
+  bankAccountNumber String?
+  bankIfsc          String?
+
+  // ── Lifecycle ─────────────────────────────────────────────────────────────
+  lastWorkingDay DateTime?
+  deletedAt      DateTime?
+
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -305,6 +373,8 @@ model Employee {
   branch           Branch?                @relation(fields: [branchId], references: [id])
   department       Department?            @relation(fields: [departmentId], references: [id])
   shift            Shift?                 @relation(fields: [shiftId], references: [id])
+  reportingManager Employee?              @relation("EmployeeReports", fields: [reportingManagerId], references: [id])
+  directReports    Employee[]             @relation("EmployeeReports")
   attendances      Attendance[]
   corrections      AttendanceCorrection[]
   leaveRequests    LeaveRequest[]
@@ -320,9 +390,20 @@ model Employee {
   documents        EmployeeDocument[]
   exits            EmployeeExit[]
   finalSettlements FinalSettlement[]
+  assignedAssets   Asset[]
+  assetAssignments AssetAssignment[]
+  itDeclarations   ItDeclaration[]
+  form16Records    Form16Record[]
+  loanAdvances     LoanAdvance[]
+  appraisals       AppraisalReview[]
 
   @@unique([organizationId, employeeCode])
   @@index([organizationId])
+  @@index([organizationId, status])
+  @@index([branchId])
+  @@index([departmentId])
+  @@index([shiftId])
+  @@index([reportingManagerId])
 }
 
 model Shift {
@@ -423,6 +504,8 @@ model AttendanceCorrection {
 
   @@index([organizationId, status])
   @@index([employeeId])
+  @@index([attendanceId])
+  @@index([employeeId, date])
 }
 
 model LeaveType {
@@ -464,6 +547,10 @@ model LeaveRequest {
 
   @@index([organizationId, status])
   @@index([employeeId])
+  @@index([leaveTypeId])
+  // Backs the overlap check on apply and the unpaid-leave lookup in payroll.
+  @@index([employeeId, startDate, endDate])
+  @@index([organizationId, status, startDate])
 }
 
 model LeaveBalance {
@@ -483,6 +570,7 @@ model LeaveBalance {
 
   @@unique([employeeId, leaveTypeId, year])
   @@index([organizationId])
+  @@index([employeeId, year])
 }
 
 model Holiday {
@@ -500,6 +588,8 @@ model Holiday {
   organization Organization @relation(fields: [organizationId], references: [id])
   branch       Branch?      @relation(fields: [branchId], references: [id])
 
+  // Prevents the same holiday being created twice for a branch on one date.
+  @@unique([organizationId, date, branchId, name])
   @@index([organizationId])
   @@index([organizationId, date])
   @@index([branchId])
@@ -552,6 +642,7 @@ model Payslip {
   esiDeduction          Decimal   @default(0) @db.Decimal(10, 2)
   ptDeduction           Decimal   @default(0) @db.Decimal(10, 2)
   statutoryDeductions   Decimal   @default(0) @db.Decimal(10, 2)
+  tdsDeduction          Decimal   @default(0) @db.Decimal(10, 2)
   deductionsTotal       Decimal   @db.Decimal(10, 2)
   netSalary             Decimal   @db.Decimal(10, 2)
   reimbursements        Decimal   @default(0) @db.Decimal(10, 2)
@@ -570,6 +661,55 @@ model Payslip {
   @@unique([employeeId, month, year])
   @@index([organizationId, month, year])
   @@index([status])
+  // `status` alone spans every tenant; payroll batches always filter by org too.
+  @@index([organizationId, status])
+  @@index([employeeId])
+}
+
+model PayslipTemplate {
+  id                    String       @id @default(uuid())
+  organizationId        String       @unique
+  name                  String       @default("Corporate Slate")
+  templateKey           String       @default("MODERN_CORPORATE") // MODERN_CORPORATE, MINIMALIST, EXECUTIVE, CLASSIC_COMPACT, CUSTOM_HTML
+  
+  // Branding & Visual Styling
+  logoUrl               String?
+  companyName           String?
+  addressLine1          String?
+  addressLine2          String?
+  taxIdentifierLabel    String?      @default("CIN / GSTIN")
+  taxIdentifierValue    String?
+  contactEmail          String?
+  contactPhone          String?
+  primaryColor          String       @default("#4f46e5")
+  accentColor           String       @default("#0f172a")
+  fontFamily            String       @default("Inter")
+  headerLayout          String       @default("SPLIT") // SPLIT, CENTERED, BANNER
+  
+  // Section Display Toggles
+  showBankDetails       Boolean      @default(true)
+  showPanUan            Boolean      @default(true)
+  showLeaveBalances     Boolean      @default(true)
+  showAttendanceSummary Boolean      @default(true)
+  showOvertimeDetails   Boolean      @default(true)
+  showNetSalaryInWords  Boolean      @default(true)
+  showBarcodeOrQr       Boolean      @default(true)
+  
+  // Authorized Signatory & Notes
+  signatoryName         String?
+  signatoryTitle        String?
+  signatureImageUrl     String?
+  declarationText       String?      @default("This is a computer-generated payslip and does not require a physical seal or signature.")
+  footerNotes           String?
+  
+  // Custom HTML/CSS (for upload / raw code mode)
+  customHtml            String?      @db.Text
+  customCss             String?      @db.Text
+
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+
+  organization          Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 }
 
 model SalaryRevision {
@@ -615,6 +755,7 @@ model Notification {
 
   @@index([userId, isRead])
   @@index([organizationId])
+  @@index([userId, createdAt])
 }
 
 model AuditLog {
@@ -632,6 +773,8 @@ model AuditLog {
 
   @@index([organizationId, entity])
   @@index([organizationId, createdAt])
+  @@index([userId])
+  @@index([entityId])
 }
 
 model EmployeeDevice {
@@ -814,6 +957,7 @@ model ExpenseClaim {
   @@index([organizationId, status])
   @@index([employeeId, status])
   @@index([organizationId, date])
+  @@index([payslipId])
 }
 
 // ── Employee Invite — tracks email invitations sent by Admin with auto-generated credentials ──
@@ -824,7 +968,7 @@ model EmployeeInvite {
   firstName      String
   lastName       String?
   role           String   @default("EMPLOYEE")  // EMPLOYEE | MANAGER
-  tempPassword   String   // plaintext shown once in email, cleared after first login
+  tempPassword   String   // bcrypt hash only — plaintext is returned once in the invite API response
   employeeId     String?  // linked after account is created
   userId         String?  // linked user account
   status         String   @default("PENDING")  // PENDING | ACCEPTED | EXPIRED
@@ -1046,4 +1190,342 @@ model FinalSettlement {
 
   @@index([organizationId, status])
   @@index([employeeId])
+}
+
+// ─── ASSET MANAGEMENT ────────────────────────────────────────────────────────
+enum AssetCategory {
+  LAPTOP
+  DESKTOP
+  MONITOR
+  MOBILE_PHONE
+  TABLET
+  HEADPHONES_PERIPHERALS
+  SECURITY_TOKEN_KEY
+  OFFICE_FURNITURE
+  VEHICLE
+  OTHER
+}
+
+enum AssetStatus {
+  AVAILABLE
+  ASSIGNED
+  UNDER_MAINTENANCE
+  DAMAGED
+  RETIRED
+  LOST
+}
+
+enum AssetCondition {
+  NEW
+  EXCELLENT
+  GOOD
+  FAIR
+  DAMAGED
+}
+
+enum AssetAssignmentType {
+  ASSIGNMENT
+  RETURN
+  TRANSFER
+}
+
+model Asset {
+  id                String           @id @default(uuid())
+  organizationId    String
+  assetCode         String           // e.g. LAP-00124
+  name              String           // e.g. MacBook Pro M2
+  category          AssetCategory    @default(LAPTOP)
+  brand             String?          // e.g. Apple
+  modelNumber       String?          // e.g. A2442
+  serialNumber      String?          // e.g. C02G1234MD6R
+  purchaseDate      DateTime?        @db.Date
+  purchaseCost      Decimal?         @db.Decimal(10, 2)
+  warrantyExpiry    DateTime?        @db.Date
+  status            AssetStatus      @default(AVAILABLE)
+  condition         AssetCondition   @default(NEW)
+  specifications    Json?            // RAM, Storage, Processor, etc.
+  assignedToId      String?          // FK to Employee
+  assignedDate      DateTime?
+  assignedCondition AssetCondition?
+  notes             String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  organization      Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assignedTo        Employee?         @relation(fields: [assignedToId], references: [id], onDelete: SetNull)
+  assignments       AssetAssignment[]
+  maintenances      AssetMaintenance[]
+
+  @@unique([organizationId, assetCode])
+  @@index([organizationId, category])
+  @@index([organizationId, status])
+  @@index([assignedToId])
+}
+
+model AssetAssignment {
+  id                 String              @id @default(uuid())
+  organizationId     String
+  assetId            String
+  type               AssetAssignmentType @default(ASSIGNMENT)
+  employeeId         String?             // Current or target assignee
+  fromEmployeeId     String?             // For transfer
+  assignedDate       DateTime            @default(now())
+  returnedDate       DateTime?
+  conditionOnAssign  AssetCondition      @default(GOOD)
+  conditionOnReturn  AssetCondition?
+  assignedBy         String?
+  returnedTo         String?
+  recoveryCharge     Decimal?            @db.Decimal(10, 2)
+  remarks            String?
+  createdAt          DateTime            @default(now())
+
+  organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  asset              Asset               @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  employee           Employee?           @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([assetId])
+  @@index([employeeId])
+}
+
+model AssetMaintenance {
+  id               String       @id @default(uuid())
+  organizationId   String
+  assetId          String
+  issueDescription String
+  vendorName       String?
+  cost             Decimal?     @db.Decimal(10, 2)
+  startDate        DateTime     @default(now())
+  completedDate    DateTime?
+  status           String       @default("IN_PROGRESS") // IN_PROGRESS | COMPLETED | CANCELLED
+  notes            String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  asset            Asset        @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([assetId])
+}
+
+model ItDeclaration {
+  id                      String   @id @default(uuid())
+  organizationId          String
+  employeeId              String
+  financialYear           String
+  regime                  String   @default("NEW")
+  rentPaidAnnual          Decimal  @default(0) @db.Decimal(12, 2)
+  isMetro                 Boolean  @default(true)
+  section80C              Decimal  @default(0) @db.Decimal(12, 2)
+  section80D              Decimal  @default(0) @db.Decimal(12, 2)
+  homeLoanInterest        Decimal  @default(0) @db.Decimal(12, 2)
+  npsEmployee             Decimal  @default(0) @db.Decimal(12, 2)
+  otherExemptions         Decimal  @default(0) @db.Decimal(12, 2)
+  previousEmployerIncome  Decimal  @default(0) @db.Decimal(12, 2)
+  previousEmployerTds     Decimal  @default(0) @db.Decimal(12, 2)
+  status                  String   @default("DRAFT")
+  submittedAt             DateTime?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, financialYear])
+  @@index([organizationId, financialYear])
+}
+
+model Form16Record {
+  id                String   @id @default(uuid())
+  organizationId    String
+  employeeId        String
+  financialYear     String
+  regime            String
+  grossSalary       Decimal  @db.Decimal(12, 2)
+  exemptions        Decimal  @db.Decimal(12, 2)
+  standardDeduction Decimal  @db.Decimal(12, 2)
+  taxableIncome     Decimal  @db.Decimal(12, 2)
+  taxOnIncome       Decimal  @db.Decimal(12, 2)
+  rebate87A         Decimal  @default(0) @db.Decimal(12, 2)
+  cess              Decimal  @db.Decimal(12, 2)
+  totalTax          Decimal  @db.Decimal(12, 2)
+  tdsDeducted       Decimal  @db.Decimal(12, 2)
+  taxPayable        Decimal  @db.Decimal(12, 2)
+  html              String   @db.Text
+  generatedAt       DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, financialYear])
+  @@index([organizationId, financialYear])
+}
+
+model StatutoryExport {
+  id             String   @id @default(uuid())
+  organizationId String
+  type           String
+  month          Int
+  year           Int
+  fileName       String
+  content        String   @db.Text
+  mimeType       String
+  rowCount       Int
+  createdAt      DateTime @default(now())
+  createdByUserId String?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, type, year, month])
+}
+
+model BillingOrder {
+  id                 String    @id @default(uuid())
+  organizationId     String
+  plan               String
+  billingCycle       String
+  amountInr          Decimal   @db.Decimal(12, 2)
+  razorpayOrderId    String?   @unique
+  razorpayPaymentId  String?
+  status             String    @default("CREATED")
+  createdAt          DateTime  @default(now())
+  paidAt             DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+}
+
+model ChatThread {
+  id             String   @id @default(uuid())
+  organizationId String
+  title          String?
+  isDirect       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  members      ChatMember[]
+  messages     ChatMessage[]
+
+  @@index([organizationId, updatedAt])
+}
+
+model ChatMember {
+  id         String    @id @default(uuid())
+  threadId   String
+  userId     String
+  lastReadAt DateTime?
+
+  thread ChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  user   User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([threadId, userId])
+}
+
+model ChatMessage {
+  id             String   @id @default(uuid())
+  organizationId String
+  threadId       String
+  senderUserId   String
+  body           String   @db.Text
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  thread       ChatThread   @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  sender       User         @relation(fields: [senderUserId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, createdAt])
+  @@index([organizationId])
+}
+
+model BiometricDevice {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  location       String?
+  apiKeyHash     String   @unique
+  apiKeyPrefix   String
+  isActive       Boolean  @default(true)
+  lastSeenAt     DateTime?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+model LoanAdvance {
+  id               String    @id @default(uuid())
+  organizationId   String
+  employeeId       String
+  type             String    @default("ADVANCE")
+  amount           Decimal   @db.Decimal(12, 2)
+  monthlyRecovery  Decimal   @default(0) @db.Decimal(12, 2)
+  outstanding      Decimal   @db.Decimal(12, 2)
+  reason           String?
+  status           String    @default("PENDING")
+  reviewedByUserId String?
+  reviewNote       String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@index([employeeId])
+}
+
+model AppraisalCycle {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  startDate      DateTime @db.Date
+  endDate        DateTime @db.Date
+  status         String   @default("OPEN")
+  createdAt      DateTime @default(now())
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  reviews      AppraisalReview[]
+
+  @@index([organizationId, status])
+}
+
+model AppraisalReview {
+  id             String   @id @default(uuid())
+  organizationId String
+  cycleId        String
+  employeeId     String
+  reviewerUserId String?
+  selfScore      Int?
+  managerScore   Int?
+  selfComments   String?  @db.Text
+  managerComments String? @db.Text
+  status         String   @default("DRAFT")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  cycle        AppraisalCycle @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  employee     Employee       @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([cycleId, employeeId])
+  @@index([organizationId])
+}
+
+model OrgApiKey {
+  id             String    @id @default(uuid())
+  organizationId String
+  name           String
+  keyHash        String    @unique
+  keyPrefix      String
+  isActive       Boolean   @default(true)
+  lastUsedAt     DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
 }

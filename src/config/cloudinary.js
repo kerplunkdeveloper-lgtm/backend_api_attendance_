@@ -1,12 +1,33 @@
 const cloudinary = require("cloudinary").v2;
 
-// Configure Cloudinary with environment variables or provided defaults
-cloudinary.config({
-  cloud_name: (process.env.CLOUDINARY_CLOUD_NAME || "dubheb1lh").trim(),
-  api_key: (process.env.CLOUDINARY_API_KEY || "343451632245467").trim(),
-  api_secret: (process.env.CLOUDINARY_API_SECRET || "Pz6diWSqMcp6vonhMsX22svYvL0").trim(),
-  secure: true,
-});
+const cloudName = (process.env.CLOUDINARY_CLOUD_NAME || "").trim();
+const apiKey = (process.env.CLOUDINARY_API_KEY || "").trim();
+const apiSecret = (process.env.CLOUDINARY_API_SECRET || "").trim();
+
+const isConfigured = Boolean(cloudName && apiKey && apiSecret);
+
+if (isConfigured) {
+  cloudinary.config({
+    cloud_name: cloudName,
+    api_key: apiKey,
+    api_secret: apiSecret,
+    secure: true,
+  });
+} else {
+  console.warn(
+    "[cloudinary] CLOUDINARY_* env vars are not set. File uploads will be rejected.",
+  );
+}
+
+const assertConfigured = () => {
+  if (!isConfigured) {
+    const error = new Error(
+      "File storage is not configured on this server. Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET.",
+    );
+    error.statusCode = 503;
+    throw error;
+  }
+};
 
 /**
  * Upload an image or document to Cloudinary
@@ -15,6 +36,7 @@ cloudinary.config({
  * @returns {Promise<object>} Upload result from Cloudinary
  */
 const uploadImage = async (fileSource, options = {}) => {
+  assertConfigured();
   const defaultOptions = {
     folder: "workpulse/uploads",
     resource_type: "auto",
@@ -34,6 +56,12 @@ const uploadImage = async (fileSource, options = {}) => {
  */
 const uploadBuffer = (buffer, options = {}) => {
   return new Promise((resolve, reject) => {
+    try {
+      assertConfigured();
+    } catch (err) {
+      return reject(err);
+    }
+
     const defaultOptions = {
       folder: "workpulse/uploads",
       resource_type: "auto",
@@ -44,7 +72,7 @@ const uploadBuffer = (buffer, options = {}) => {
       (error, result) => {
         if (error) return reject(error);
         resolve(result);
-      }
+      },
     );
 
     stream.end(buffer);
@@ -62,6 +90,7 @@ const deleteImage = async (publicId, options = {}) => {
 
 module.exports = {
   cloudinary,
+  isConfigured,
   uploadImage,
   uploadBuffer,
   deleteImage,

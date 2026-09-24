@@ -1,6 +1,10 @@
 const express = require("express");
 const overtimeController = require("../controllers/overtime.controller");
-const { authenticate, authorizeRoles } = require("../middleware/auth.middleware");
+const {
+  authenticate,
+  authorizeRoles,
+} = require("../middleware/auth.middleware");
+const { validate, schemas } = require("../middleware/validate.middleware");
 
 const router = express.Router();
 router.use(authenticate);
@@ -15,14 +19,29 @@ router.get("/my", overtimeController.getMyRequests);
 router.get(
   "/",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
-  overtimeController.getAllRequests
+  overtimeController.getAllRequests,
+);
+router.get(
+  "/pending",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  (req, res) => {
+    req.query.status = "PENDING";
+    return overtimeController.getAllRequests(req, res);
+  },
 );
 
 // Manager/Admin approves or rejects
 router.patch(
   "/:id/review",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
-  overtimeController.reviewRequest
+  validate(schemas.reviewRequest),
+  overtimeController.reviewRequest,
+);
+router.post(
+  "/:id/review",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  validate(schemas.reviewRequest),
+  overtimeController.reviewRequest,
 );
 
 module.exports = router;

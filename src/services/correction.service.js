@@ -1,6 +1,26 @@
 const prisma = require("../config/database");
 const { evaluateAttendanceAgainstShift, calculateLateMinutes } = require("../utils/shiftCalculator");
-const { getTodayDateOnly } = require("./attendance.service");
+const { getOrgDateOnly, resolveShift } = require("./attendance.service");
+
+const assertPayrollMonthUnlocked = async (organizationId, date) => {
+  const target = new Date(date);
+  const month = target.getUTCMonth() + 1;
+  const year = target.getUTCFullYear();
+  const locked = await prisma.payslip.findFirst({
+    where: {
+      organizationId,
+      month,
+      year,
+      status: { in: ["APPROVED", "DISBURSED"] },
+    },
+    select: { id: true },
+  });
+  if (locked) {
+    const error = new Error("Attendance cannot be corrected for a month with a locked payslip.");
+    error.statusCode = 409;
+    throw error;
+  }
+};
 
 class CorrectionService {
   /**
@@ -25,7 +45,8 @@ class CorrectionService {
       throw error;
     }
 
-    const targetDate = getTodayDateOnly(new Date(date));
+    const targetDate = await getOrgDateOnly(organizationId, new Date(date));
+    await assertPayrollMonthUnlocked(organizationId, targetDate);
 
     // Check if a pending request already exists for this date
     const existingPending = await prisma.attendanceCorrection.findFirst({
@@ -155,17 +176,21 @@ class CorrectionService {
       throw error;
     }
 
+    if (correction.employee?.userId && correction.employee.userId === reviewerUserId) {
+      const error = new Error("You cannot review your own attendance correction");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    if (status === "APPROVED") {
+      await assertPayrollMonthUnlocked(organizationId, correction.date);
+    }
+
     return await prisma.$transaction(async (tx) => {
       // If approved, update target Attendance record
       if (status === "APPROVED") {
         const employee = correction.employee;
-        let shift = employee.shift;
-        if (!shift) {
-          shift = await tx.shift.findFirst({
-            where: { organizationId },
-            orderBy: { createdAt: "asc" },
-          });
-        }
+        const shift = await resolveShift(employee, organizationId, correction.date);
 
         const checkIn = correction.requestedCheckIn;
         const checkOut = correction.requestedCheckOut;

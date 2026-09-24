@@ -1,0 +1,8 @@
+.env*
+!.env.example
+tests/
+scripts/
+WorkPulse_API.postman_collection.json
+payslip_for_pdf.json
+skills-lock.json
+*.log

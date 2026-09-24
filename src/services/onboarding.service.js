@@ -4,6 +4,8 @@ const prisma = require("../config/database");
 const { uploadImage } = require("../config/cloudinary");
 const emailService = require("./email.service");
 const whatsappService = require("./whatsapp.service");
+const { generateTempPassword, resolveAssignableRole } = require("../utils/password");
+const { resolveAvatarUrl } = require("../utils/avatar");
 
 class OnboardingService {
   /**
@@ -19,9 +21,13 @@ class OnboardingService {
       departmentId,
       branchId,
       shiftId,
-      expectedJoinDate,
-      proposedSalary,
+      expectedJoinDate: expectedJoinDateRaw,
+      joiningDate,
+      proposedSalary: proposedSalaryRaw,
+      offeredSalary,
     } = data;
+    const expectedJoinDate = expectedJoinDateRaw || joiningDate;
+    const proposedSalary = proposedSalaryRaw ?? offeredSalary;
 
     if (!firstName || !firstName.trim()) {
       const error = new Error("Candidate first name is required");
@@ -51,10 +57,10 @@ class OnboardingService {
 
     // Check if an active user already exists with this email
     const existingUser = await prisma.user.findUnique({
-      where: { email: cleanEmail },
+      where: { organizationId_email: { organizationId, email: cleanEmail } },
     });
     if (existingUser) {
-      const error = new Error(`A user account with email '${cleanEmail}' already exists`);
+      const error = new Error(`A user account with email '${cleanEmail}' already exists in this organization`);
       error.statusCode = 400;
       throw error;
     }
@@ -297,9 +303,15 @@ class OnboardingService {
         });
         if (uploadRes && uploadRes.secure_url) {
           finalFileUrl = uploadRes.secure_url;
+        } else {
+          const error = new Error("Document upload failed. Please retry.");
+          error.statusCode = 503;
+          throw error;
         }
       } catch (cloudErr) {
-        console.warn("Cloudinary upload fallback:", cloudErr.message);
+        const error = new Error("Document upload failed. Please retry.");
+        error.statusCode = 503;
+        throw error;
       }
     }
 
@@ -421,8 +433,8 @@ class OnboardingService {
     for (const docReview of documentVerifications) {
       const { documentId, status, rejectionReason } = docReview;
       if (documentId && ["VERIFIED", "REJECTED"].includes(status)) {
-        await prisma.onboardingDocument.update({
-          where: { id: documentId },
+        await prisma.onboardingDocument.updateMany({
+          where: { id: documentId, candidateId: candidate.id },
           data: {
             status,
             rejectionReason: status === "REJECTED" ? rejectionReason || "Document rejected by HR" : null,
@@ -488,12 +500,16 @@ class OnboardingService {
       throw error;
     }
 
-    // Double check email uniqueness
     const existingUser = await prisma.user.findUnique({
-      where: { email: candidate.email },
+      where: {
+        organizationId_email: {
+          organizationId,
+          email: candidate.email,
+        },
+      },
     });
     if (existingUser) {
-      const error = new Error(`User account with email '${candidate.email}' already exists in system`);
+      const error = new Error(`User account with email '${candidate.email}' already exists in this organization`);
       error.statusCode = 400;
       throw error;
     }
@@ -519,12 +535,16 @@ class OnboardingService {
 
     const {
       adminNotes,
-      initialPassword = "Welcome@WorkPulse2026",
+      initialPassword,
       employeeCode,
       role = "EMPLOYEE",
     } = approvalData;
 
-    const passwordHash = await bcrypt.hash(initialPassword, 10);
+    const tempPassword = initialPassword && String(initialPassword).trim()
+      ? String(initialPassword).trim()
+      : generateTempPassword();
+    const passwordHash = await bcrypt.hash(tempPassword, 10);
+    const assignedRole = resolveAssignableRole(role, "COMPANY_ADMIN");
     const finalEmployeeCode =
       employeeCode?.trim() || `EMP-${Date.now().toString().slice(-6)}`;
 
@@ -569,8 +589,16 @@ class OnboardingService {
           organizationId,
           email: candidate.email,
           passwordHash,
-          role,
+          role: assignedRole,
+          mustChangePassword: true,
+          isActive: true,
         },
+      });
+
+      const candidateAvatar = resolveAvatarUrl({
+        firstName: candidate.firstName,
+        lastName: candidate.lastName,
+        employeeCode: finalEmployeeCode,
       });
 
       // 2. Create Employee
@@ -582,10 +610,25 @@ class OnboardingService {
           firstName: candidate.firstName,
           lastName: candidate.lastName,
           phone: candidate.phone,
+          avatarUrl: candidateAvatar,
           status: "ACTIVE",
           branchId: candidate.branchId,
           departmentId: candidate.departmentId,
           shiftId: candidate.shiftId,
+          // Promote the fields the candidate already provided so they are not
+          // silently dropped after conversion.
+          designation: candidate.designation || null,
+          dateOfJoining: candidate.expectedJoinDate || candidate.dateOfJoining || null,
+          dateOfBirth: candidate.dateOfBirth || null,
+          workEmail: candidate.email || null,
+          panNumber: candidate.panNumber || null,
+          uanNumber: candidate.uanNumber || null,
+          bankName: candidate.bankName || null,
+          bankAccountNumber: candidate.accountNumber || candidate.bankAccountNumber || null,
+          bankIfsc: candidate.ifscCode || candidate.bankIfsc || null,
+          emergencyContactName: candidate.emergencyContactName || null,
+          emergencyContactPhone: candidate.emergencyContactPhone || null,
+          address: candidate.currentAddress || candidate.permanentAddress || candidate.address || null,
         },
       });
 
@@ -625,7 +668,7 @@ class OnboardingService {
         employee: newEmployee,
         candidate: activatedCandidate,
         offerLetter: offerLetterData,
-        temporaryPassword: initialPassword,
+        temporaryPassword: tempPassword,
       };
     });
 
@@ -634,6 +677,17 @@ class OnboardingService {
     const candPhone = candidate.phone;
     const candName = `${candidate.firstName} ${candidate.lastName || ""}`.trim();
     const offerUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/onboarding/portal/${candidate.portalToken}`;
+
+    if (candEmail && result.temporaryPassword) {
+      emailService
+        .sendEmployeeWelcomeEmail(candEmail, candName, {
+          organizationName: candidate.organization?.name || "WorkPulse",
+          tempPassword: result.temporaryPassword,
+          loginUrl: `${process.env.FRONTEND_URL || "http://localhost:3000"}/login`,
+          role: "EMPLOYEE",
+        })
+        .catch((e) => console.warn("[OnboardingActivate] Welcome email failed:", e.message));
+    }
 
     if (candEmail) {
       emailService
@@ -894,7 +948,8 @@ class OnboardingService {
     let newEmployee = null;
 
     if (!employeeId) {
-      const passwordHash = await bcrypt.hash("Welcome@WorkPulse2026", 10);
+      const tempPassword = generateTempPassword();
+      const passwordHash = await bcrypt.hash(tempPassword, 10);
       const finalEmployeeCode = `EMP-${Date.now().toString().slice(-6)}`;
       const salaryVal = candidate.proposedSalary ? Number(candidate.proposedSalary) : 50000;
       const basic = Math.round(salaryVal * 0.5);
@@ -902,7 +957,14 @@ class OnboardingService {
       const specialAllowance = Math.round(salaryVal * 0.2);
 
       const created = await prisma.$transaction(async (tx) => {
-        let u = await tx.user.findUnique({ where: { email: candidate.email } });
+        let u = await tx.user.findUnique({
+          where: {
+            organizationId_email: {
+              organizationId: candidate.organizationId,
+              email: candidate.email,
+            },
+          },
+        });
         if (!u) {
           u = await tx.user.create({
             data: {
@@ -910,9 +972,17 @@ class OnboardingService {
               email: candidate.email,
               passwordHash,
               role: "EMPLOYEE",
+              mustChangePassword: true,
+              isActive: true,
             },
           });
         }
+
+        const candidateAvatar = resolveAvatarUrl({
+          firstName: candidate.firstName,
+          lastName: candidate.lastName,
+          employeeCode: finalEmployeeCode,
+        });
 
         const emp = await tx.employee.create({
           data: {
@@ -922,10 +992,23 @@ class OnboardingService {
             firstName: candidate.firstName,
             lastName: candidate.lastName,
             phone: candidate.phone,
+            avatarUrl: candidateAvatar,
             status: "ACTIVE",
             branchId: candidate.branchId,
             departmentId: candidate.departmentId,
             shiftId: candidate.shiftId,
+            designation: candidate.designation || null,
+            dateOfJoining: candidate.expectedJoinDate || candidate.dateOfJoining || null,
+            dateOfBirth: candidate.dateOfBirth || null,
+            workEmail: candidate.email || null,
+            panNumber: candidate.panNumber || null,
+            uanNumber: candidate.uanNumber || null,
+            bankName: candidate.bankName || null,
+            bankAccountNumber: candidate.accountNumber || candidate.bankAccountNumber || null,
+            bankIfsc: candidate.ifscCode || candidate.bankIfsc || null,
+            emergencyContactName: candidate.emergencyContactName || null,
+            emergencyContactPhone: candidate.emergencyContactPhone || null,
+            address: candidate.currentAddress || candidate.permanentAddress || candidate.address || null,
           },
         });
 
@@ -944,6 +1027,15 @@ class OnboardingService {
 
       employeeId = created.employee.id;
       newEmployee = created.employee;
+
+      emailService
+        .sendEmployeeWelcomeEmail(candidate.email, `${candidate.firstName} ${candidate.lastName || ""}`.trim(), {
+          organizationName: candidate.organization?.name || "WorkPulse",
+          tempPassword,
+          loginUrl: `${process.env.FRONTEND_URL || "http://localhost:3000"}/login`,
+          role: "EMPLOYEE",
+        })
+        .catch((e) => console.warn("[OnboardingAccept] Welcome email failed:", e.message));
     }
 
     const accepted = await prisma.onboardingCandidate.update({

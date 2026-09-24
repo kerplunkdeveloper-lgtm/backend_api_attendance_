@@ -54,6 +54,7 @@ class AuditService {
       total,
       totalPages: Math.ceil(total / take) || 1,
       logs,
+      data: logs,
     };
   }
 }

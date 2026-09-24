@@ -13,9 +13,9 @@ router.get(
   async (req, res) => {
     try {
       const result = await reportService.getDailyReport(req.user.organizationId, req.query.date);
-      res.json(result);
+      return res.json(result);
     } catch (err) {
-      res.status(500).json({ success: false, message: err.message });
+      return res.status(500).json({ success: false, message: err.message });
     }
   }
 );
@@ -31,9 +31,9 @@ router.get(
         req.query.month,
         req.query.year
       );
-      res.json(result);
+      return res.json(result);
     } catch (err) {
-      res.status(500).json({ success: false, message: err.message });
+      return res.status(500).json({ success: false, message: err.message });
     }
   }
 );

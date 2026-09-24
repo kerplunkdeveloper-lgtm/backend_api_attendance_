@@ -1,9 +1,11 @@
 const nodemailer = require("nodemailer");
+const birdService = require("./bird.service");
 
 class EmailService {
   constructor() {
     this.isConfigured = false;
     this.transporter = null;
+    this.birdService = birdService;
     this.initTransporter();
   }
 
@@ -92,7 +94,7 @@ class EmailService {
   }
 
   /**
-   * Generic sender with mock/simulation fallback
+   * Generic sender with Bird API primary and SMTP / mock simulation fallback
    */
   async sendEmail({ to, subject, html, text }) {
     if (!to) {
@@ -100,6 +102,21 @@ class EmailService {
       return { success: false, message: "Recipient required" };
     }
 
+    // 1. Try Bird Email API if ready
+    if (this.birdService && this.birdService.isReady()) {
+      try {
+        const birdResult = await this.birdService.sendEmail({ to, subject, html, text });
+        if (birdResult.success) {
+          console.log(`[EmailService:BIRD_LIVE] Sent email to ${to} via Bird API (ID: ${birdResult.id})`);
+          return { success: true, live: true, provider: "BIRD", ...birdResult };
+        }
+        console.warn(`[EmailService:BIRD_FAIL] Bird dispatch failed for ${to}: ${birdResult.error}. Falling back...`);
+      } catch (err) {
+        console.warn(`[EmailService:BIRD_ERROR] Bird exception: ${err.message}. Falling back...`);
+      }
+    }
+
+    // 2. Try SMTP if configured
     const from = process.env.EMAIL_FROM || "WorkPulse Notifications <notifications@workpulse.com>";
 
     if (this.isConfigured && this.transporter) {
@@ -111,25 +128,35 @@ class EmailService {
           text: text || "WorkPulse notification",
           html,
         });
-        console.log(`[EmailService:LIVE] Sent email to ${to} (MessageId: ${info.messageId})`);
-        return { success: true, live: true, messageId: info.messageId };
+        console.log(`[EmailService:SMTP_LIVE] Sent email to ${to} (MessageId: ${info.messageId})`);
+        return { success: true, live: true, provider: "SMTP", messageId: info.messageId };
       } catch (err) {
-        console.error(`[EmailService:LIVE_FAIL] Failed to send email to ${to}:`, err.message);
+        console.error(`[EmailService:SMTP_LIVE_FAIL] Failed to send email to ${to}:`, err.message);
         return { success: false, error: err.message };
       }
     }
 
-    // Simulation / Dev Fallback
+    if (process.env.NODE_ENV === "production") {
+      console.error("[EmailService] No live email provider is configured.");
+      return {
+        success: false,
+        error: "Email delivery is not configured",
+        provider: "UNAVAILABLE",
+      };
+    }
+
+    // 3. Development-only simulation fallback
     console.log("────────────────────────────────────────────────────────────");
     console.log(`[EmailService:SIMULATION] Email to: ${to}`);
     console.log(`[EmailService:SIMULATION] Subject:  ${subject}`);
-    console.log(`[EmailService:SIMULATION] Status:   Simulated (Configure SMTP_USER & SMTP_PASS in .env for live dispatch)`);
+    console.log(`[EmailService:SIMULATION] Status:   Simulated (Configure SMTP or Bird API for live dispatch)`);
     console.log("────────────────────────────────────────────────────────────");
 
     return {
       success: true,
       simulated: true,
-      message: "Email logged in simulation mode (SMTP not yet configured)",
+      provider: "SIMULATION",
+      message: "Email logged in simulation mode",
       to,
       subject,
     };
@@ -392,23 +419,81 @@ class EmailService {
   }
 
   /**
-   * Verify SMTP connection status
+   * 7. Password Reset Email — sent when user requests password reset
+   */
+  async sendPasswordResetEmail(to, userName, { resetUrl, expiresIn = "60 minutes" }) {
+    const contentHtml = `
+      <p class="text">Hello <strong>${userName || "WorkPulse User"}</strong>,</p>
+      <p class="text">
+        We received a request to reset the password for your WorkPulse enterprise account. If you made this request, click the button below to choose a new password:
+      </p>
+      <div style="text-align: center; margin: 28px 0;">
+        <a href="${resetUrl}" class="btn" style="background: #4f46e5; color: #ffffff !important; font-weight: 700; padding: 14px 32px; border-radius: 12px; text-decoration: none; display: inline-block;">Reset Password &rarr;</a>
+      </div>
+      <div class="info-card">
+        <div class="info-row"><span class="info-label">Account:</span><span class="info-value" style="font-family: monospace;">${to}</span></div>
+        <div class="info-row"><span class="info-label">Expires In:</span><span class="info-value" style="color: #f59e0b;">${expiresIn}</span></div>
+        <div class="info-row"><span class="info-label">Security:</span><span class="info-value" style="color: #10b981;">Single-Use Protected</span></div>
+      </div>
+      <p class="text" style="font-size: 13px; color: #64748b;">
+        If the button doesn't work, copy and paste this link into your browser:<br>
+        <a href="${resetUrl}" style="color: #4f46e5; word-break: break-all; font-size: 12px;">${resetUrl}</a>
+      </p>
+      <p class="text" style="font-size: 12px; color: #94a3b8; margin-top: 20px; border-top: 1px dashed #cbd5e1; padding-top: 16px;">
+        ⚠️ If you did not request a password reset, you can safely ignore this email. Your current password remains secure and active.
+      </p>
+    `;
+
+    const html = this.buildHtmlTemplate({
+      title: "Reset Your WorkPulse Password",
+      badge: "Password Reset",
+      badgeColor: "#4f46e5",
+      contentHtml,
+      ctaText: "Reset Password",
+      ctaUrl: resetUrl,
+    });
+
+    return await this.sendEmail({
+      to,
+      subject: `[WorkPulse] Password Reset Request`,
+      html,
+    });
+  }
+
+  /**
+   * Verify communication connection status (Bird + SMTP)
    */
   async verifyConnection() {
-    if (!this.transporter || !this.isConfigured) {
-      return {
-        configured: false,
-        message: "SMTP is running in Simulation Mode (Set SMTP_USER and SMTP_PASS in .env to enable live dispatch).",
-      };
+    const birdStatus = {
+      configured: this.birdService ? this.birdService.isReady() : false,
+      provider: "Bird Email API (@messagebird/sdk)",
+      fromEmail: process.env.BIRD_FROM_EMAIL || "onboarding@messagebird.dev",
+    };
+
+    let smtpStatus = {
+      configured: this.isConfigured,
+      provider: "Nodemailer (SMTP)",
+    };
+
+    if (this.transporter && this.isConfigured) {
+      try {
+        await this.transporter.verify();
+        smtpStatus.verified = true;
+        smtpStatus.message = "SMTP server connected and verified successfully.";
+      } catch (err) {
+        smtpStatus.verified = false;
+        smtpStatus.error = err.message;
+      }
+    } else {
+      smtpStatus.message = "SMTP not configured (Simulation mode fallback)";
     }
-    try {
-      await this.transporter.verify();
-      return { configured: true, message: "SMTP server connected and verified successfully." };
-    } catch (err) {
-      return { configured: false, error: err.message };
-    }
+
+    return {
+      activeProvider: birdStatus.configured ? "BIRD" : (smtpStatus.configured ? "SMTP" : "SIMULATION"),
+      bird: birdStatus,
+      smtp: smtpStatus,
+    };
   }
 }
 
 module.exports = new EmailService();
-

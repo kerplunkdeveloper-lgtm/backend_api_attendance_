@@ -1,29 +1,20 @@
 const express = require("express");
-const multer = require("multer");
 const uploadController = require("../controllers/upload.controller");
+const { authenticate } = require("../middleware/auth.middleware");
+const { documentUploader, handleUploadErrors } = require("../middleware/upload.middleware");
 
 const router = express.Router();
 
-// Memory storage for direct streaming to Cloudinary
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit
-  },
-});
+const upload = documentUploader(10);
 
-// Upload image (accepts multipart field 'image' or 'file', or JSON body)
-router.post(
-  "/image",
-  upload.single("image"),
-  uploadController.uploadImage
-);
+// Every upload is attributed to a signed-in user; anonymous uploads would let
+// anyone burn the Cloudinary quota and host arbitrary content on our account.
+router.use(authenticate);
 
-// General file upload alias
-router.post(
-  "/",
-  upload.single("file"),
-  uploadController.uploadImage
-);
+router.post("/image", upload.single("image"), uploadController.uploadImage);
+
+router.post("/", upload.single("file"), uploadController.uploadImage);
+
+router.use(handleUploadErrors);
 
 module.exports = router;

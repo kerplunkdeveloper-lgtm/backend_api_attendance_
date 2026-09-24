@@ -2,6 +2,24 @@ const prisma = require("../config/database");
 const emailService = require("./email.service");
 const whatsappService = require("./whatsapp.service");
 
+const clockMinutes = (value) => {
+  const match = String(value || "").trim().match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  return hours <= 23 && minutes <= 59 ? hours * 60 + minutes : null;
+};
+
+const isWorkingDay = (shift, now) => String(shift?.workingDays || "1,2,3,4,5,6")
+  .split(",").map((day) => Number(day.trim())).includes(now.getDay());
+
+const isInReminderWindow = (now, target) => {
+  if (target === null) return false;
+  const current = now.getHours() * 60 + now.getMinutes();
+  const delta = (target - current + 1440) % 1440;
+  return delta >= 0 && delta <= 10;
+};
+
 class NotificationService {
   /**
    * Create an in-app notification for a user
@@ -72,7 +90,7 @@ class NotificationService {
    * 1. Morning Shift Check-In Reminder (8:50 AM - 10 minutes before 9:00 AM)
    * Sends to all active employees who have not clocked in today.
    */
-  async sendMorningCheckInReminders(organizationId = null) {
+  async sendMorningCheckInReminders(organizationId = null, respectSchedule = false) {
     const startOfToday = this.getStartOfToday();
     const whereEmployee = {
       status: "ACTIVE",
@@ -92,7 +110,7 @@ class NotificationService {
         phone: true,
         organizationId: true,
         user: { select: { email: true } },
-        shift: { select: { name: true, startTime: true } },
+        shift: { select: { name: true, startTime: true, workingDays: true } },
       },
     });
 
@@ -101,6 +119,8 @@ class NotificationService {
 
     for (const emp of activeEmployees) {
       if (!emp.userId) continue;
+      const reminderNow = new Date();
+      if (respectSchedule && (!isWorkingDay(emp.shift, reminderNow) || !isInReminderWindow(reminderNow, clockMinutes(emp.shift?.startTime || "09:00")))) continue;
 
       // Check if user already clocked in today
       const todayAttendance = await prisma.attendance.findFirst({
@@ -174,7 +194,7 @@ class NotificationService {
    * 2. Evening Shift Completion & Check-Out Reminder (After 6:00 PM)
    * Sends to all active employees who clocked in today but have not yet clocked out.
    */
-  async sendEveningCheckOutReminders(organizationId = null) {
+  async sendEveningCheckOutReminders(organizationId = null, respectSchedule = false) {
     const startOfToday = this.getStartOfToday();
     const whereEmployee = {
       status: "ACTIVE",
@@ -192,6 +212,7 @@ class NotificationService {
         firstName: true,
         lastName: true,
         organizationId: true,
+        shift: { select: { name: true, endTime: true, workingDays: true } },
       },
     });
 
@@ -200,6 +221,8 @@ class NotificationService {
 
     for (const emp of activeEmployees) {
       if (!emp.userId) continue;
+      const reminderNow = new Date();
+      if (respectSchedule && (!isWorkingDay(emp.shift, reminderNow) || !isInReminderWindow(reminderNow, clockMinutes(emp.shift?.endTime || "18:00")))) continue;
 
       // Find today's attendance record
       const todayAttendance = await prisma.attendance.findFirst({
@@ -252,18 +275,11 @@ class NotificationService {
   async evaluateScheduledReminders() {
     try {
       const now = new Date();
-      const hours = now.getHours();
-      const minutes = now.getMinutes();
-
       // Morning Window: 08:50 – 17:59 → Check-In reminders
-      if ((hours === 8 && minutes >= 50) || (hours >= 9 && hours < 18)) {
-        await this.sendMorningCheckInReminders();
-      }
+      await this.sendMorningCheckInReminders(null, true);
 
       // Evening Window: 18:00–22:59 → Check-Out reminders
-      if (hours >= 18 && hours < 23) {
-        await this.sendEveningCheckOutReminders();
-      }
+      await this.sendEveningCheckOutReminders(null, true);
 
       // Nightly Window: 23:00+ → EOD Absent auto-marking
       if (hours >= 23) {
@@ -346,7 +362,9 @@ class NotificationService {
                   workingMinutes: 0,
                 },
               });
-            } catch (_) {}
+            } catch (weekOffErr) {
+              console.warn("[markAbsent] Failed to upsert WEEK_OFF record:", weekOffErr.message);
+            }
             continue; // Week-off — skip marking absent
           }
         }

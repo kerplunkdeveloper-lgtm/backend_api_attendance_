@@ -1,5 +1,6 @@
 const prisma = require("../config/database");
 const { verifyAccessToken } = require("../utils/jwt");
+const { organizationWithSubscription } = require("../utils/prismaSelects");
 
 const authenticate = async (req, res, next) => {
   try {
@@ -24,7 +25,7 @@ const authenticate = async (req, res, next) => {
     const user = await prisma.user.findUnique({
       where: { id: decoded.userId },
       include: {
-        organization: true,
+        organization: organizationWithSubscription,
         employee: {
           include: {
             branch: true,
@@ -39,6 +40,29 @@ const authenticate = async (req, res, next) => {
       return res.status(401).json({
         success: false,
         message: "User not found or token no longer valid",
+      });
+    }
+
+    // Terminated/suspended users keep a technically valid JWT until it expires,
+    // so access has to be re-checked against the database on every request.
+    if (user.isActive === false) {
+      return res.status(403).json({
+        success: false,
+        message: "This account has been deactivated.",
+      });
+    }
+
+    if (user.organization?.deletedAt) {
+      return res.status(403).json({
+        success: false,
+        message: "This organization is no longer active.",
+      });
+    }
+
+    if (user.employee?.deletedAt) {
+      return res.status(403).json({
+        success: false,
+        message: "This employee profile has been removed.",
       });
     }
 

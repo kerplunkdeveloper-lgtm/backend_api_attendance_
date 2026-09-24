@@ -5,6 +5,12 @@ const {
   evaluateAttendanceAgainstShift,
   formatMinutes,
 } = require("../utils/shiftCalculator");
+const {
+  DEFAULT_TIMEZONE,
+  getLocalDateOnly,
+  getLocalDayOfWeek,
+  isOvernightShift,
+} = require("../utils/datetime");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -12,6 +18,10 @@ const {
 
 /**
  * Normalizes a date to UTC midnight for unique daily attendance indexing.
+ *
+ * Kept for callers that already hold a date-only value. Anything deriving a
+ * calendar date from a punch *instant* must use getOrgDateOnly instead, so the
+ * bucket matches the tenant's local day rather than the server's UTC day.
  */
 const getTodayDateOnly = (date = new Date()) => {
   const d = new Date(date);
@@ -19,12 +29,81 @@ const getTodayDateOnly = (date = new Date()) => {
   return d;
 };
 
+const timezoneCache = new Map();
+
+/** Resolves (and briefly caches) a tenant's IANA timezone. */
+const getOrgTimezone = async (organizationId) => {
+  if (timezoneCache.has(organizationId)) return timezoneCache.get(organizationId);
+
+  let timezone = DEFAULT_TIMEZONE;
+  try {
+    const org = await prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { timezone: true },
+    });
+    timezone = org?.timezone || DEFAULT_TIMEZONE;
+  } catch {
+    // Column may not exist yet on an un-migrated database — fall back to UTC.
+    timezone = DEFAULT_TIMEZONE;
+  }
+
+  timezoneCache.set(organizationId, timezone);
+  setTimeout(() => timezoneCache.delete(organizationId), 5 * 60 * 1000).unref?.();
+  return timezone;
+};
+
+/** The attendance date bucket for an instant, in the tenant's local calendar. */
+const getOrgDateOnly = async (organizationId, date = new Date()) => {
+  const timezone = await getOrgTimezone(organizationId);
+  return getLocalDateOnly(date, timezone);
+};
+
+/**
+ * Finds the attendance record an in-progress action (break, checkout) belongs to.
+ *
+ * Normally that is today's row, but on an overnight shift the open punch sits on
+ * the previous calendar day, so a 02:00 break would otherwise find nothing.
+ */
+const findOpenAttendance = async (employeeId, organizationId, at = new Date(), include = {}) => {
+  const timezone = await getOrgTimezone(organizationId);
+  const today = getLocalDateOnly(at, timezone);
+
+  const todayRecord = await prisma.attendance.findUnique({
+    where: { employeeId_date: { employeeId, date: today } },
+    include,
+  });
+
+  if (todayRecord?.checkIn) return todayRecord;
+
+  const carriedOver = await prisma.attendance.findFirst({
+    where: {
+      employeeId,
+      organizationId,
+      checkIn: { not: null },
+      checkOut: null,
+      date: { lt: today, gte: new Date(today.getTime() - 2 * 24 * 60 * 60 * 1000) },
+    },
+    include: { ...include, shift: true },
+    orderBy: { date: "desc" },
+  });
+
+  if (carriedOver && isOvernightShift(carriedOver.shift)) {
+    const elapsedHours = (at.getTime() - new Date(carriedOver.checkIn).getTime()) / 3_600_000;
+    if (elapsedHours > 0 && elapsedHours <= 20) return carriedOver;
+  }
+
+  return todayRecord;
+};
+
 /**
  * Fetches org attendance policy, falling back to safe defaults if none configured.
  */
+const { policySelect } = require("../utils/prismaSelects");
+
 const getPolicy = async (organizationId) => {
   const policy = await prisma.attendancePolicy.findUnique({
     where: { organizationId },
+    select: policySelect,
   });
   return {
     workingDaysPerMonth: policy?.workingDaysPerMonth ?? 26,
@@ -33,16 +112,26 @@ const getPolicy = async (organizationId) => {
     lateDeductionPercent: policy ? Number(policy.lateDeductionPercent) : 0.25,
     allowWfh: policy?.allowWfh ?? true,
     requireOtApproval: policy?.requireOtApproval ?? false,
-    geofenceStrict: policy?.geofenceStrict ?? false, // Eligible from anywhere by default; admin can activate later
+    // Matches the schema default: geofence is enforced unless an admin relaxes it.
+    geofenceStrict: policy?.geofenceStrict ?? true,
+    requireTrustedDevice: policy?.requireTrustedDevice ?? false,
   };
 };
 
+const ADMIN_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"];
+
 /**
- * Finds employee record linked to user or by explicit employee ID within organization.
+ * Finds the employee a request acts on.
+ *
+ * An explicit employeeId is only honoured for privileged roles. Previously any
+ * authenticated user could pass a colleague's id and punch in as them, because
+ * the lookup only checked that the employee was in the same organization.
  */
-const resolveEmployee = async (userId, employeeId, organizationId) => {
+const resolveEmployee = async (userId, employeeId, organizationId, actorRole = null) => {
+  const canActForOthers = actorRole === null || ADMIN_ROLES.includes(actorRole);
+
   let employee;
-  if (employeeId) {
+  if (employeeId && canActForOthers) {
     employee = await prisma.employee.findFirst({
       where: { id: employeeId, organizationId },
       include: { branch: true, shift: true, user: true },
@@ -52,6 +141,14 @@ const resolveEmployee = async (userId, employeeId, organizationId) => {
       where: { userId, organizationId },
       include: { branch: true, shift: true, user: true },
     });
+
+    // An employee who supplied someone else's id gets a clear refusal rather
+    // than silently acting on their own record.
+    if (employee && employeeId && employeeId !== employee.id && !canActForOthers) {
+      const error = new Error("You are not allowed to record attendance for another employee");
+      error.statusCode = 403;
+      throw error;
+    }
   }
 
   if (!employee) {
@@ -68,7 +165,7 @@ const resolveEmployee = async (userId, employeeId, organizationId) => {
  * Checks ShiftOverride first, then employee.shift, then org default.
  */
 const resolveShift = async (employee, organizationId, date) => {
-  const dateOnly = getTodayDateOnly(date);
+  const dateOnly = await getOrgDateOnly(organizationId, date);
 
   // 1. Check per-day shift override
   const override = await prisma.shiftOverride.findUnique({
@@ -93,9 +190,9 @@ const resolveShift = async (employee, organizationId, date) => {
  * JS: 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
  * Schema: 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat, 0=Sun (same convention)
  */
-const isWorkingDay = (shift, date) => {
+const isWorkingDay = (shift, date, timezone = DEFAULT_TIMEZONE) => {
   if (!shift?.workingDays) return true; // No shift = assume always working
-  const schemaDay = date.getDay(); // JS day (0=Sun, 1=Mon...)
+  const schemaDay = getLocalDayOfWeek(date, timezone);
   const workingSet = new Set(shift.workingDays.split(",").map((d) => parseInt(d.trim())));
   return workingSet.has(schemaDay);
 };
@@ -111,15 +208,40 @@ const isWorkingDay = (shift, date) => {
  *   - Detects WEEK_OFF and auto-creates week-off record
  *   - Logs geofence bypass audit on AttendanceEvent
  */
-const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude, accuracy, timestamp, workMode = "OFFICE", note }) => {
-  const employee = await resolveEmployee(userId, employeeId, organizationId);
+const assertTrustedDevice = async (employee, organizationId, policy, deviceId) => {
+  if (!policy?.requireTrustedDevice) return;
+  if (!deviceId) {
+    const error = new Error("This organization requires a trusted device. Register this phone first.");
+    error.statusCode = 403;
+    throw error;
+  }
+  const device = await prisma.employeeDevice.findFirst({
+    where: { employeeId: employee.id, organizationId, deviceId: String(deviceId), isTrusted: true },
+  });
+  if (!device) {
+    const error = new Error("This device is not trusted. Ask an admin to approve it.");
+    error.statusCode = 403;
+    throw error;
+  }
+  await prisma.employeeDevice.update({ where: { id: device.id }, data: { lastUsedAt: new Date() } });
+};
+
+const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude, accuracy, timestamp, workMode = "OFFICE", note, actorRole = null, deviceId = null }) => {
+  const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
   const checkInTime = timestamp ? new Date(timestamp) : new Date();
-  const today = getTodayDateOnly(checkInTime);
+  const timezone = await getOrgTimezone(organizationId);
+  const today = getLocalDateOnly(checkInTime, timezone);
   const policy = await getPolicy(organizationId);
+  if (workMode === "WORK_FROM_HOME" && !policy.allowWfh) {
+    const error = new Error("Work From Home check-in is not enabled for this organization.");
+    error.statusCode = 403;
+    throw error;
+  }
+  await assertTrustedDevice(employee, organizationId, policy, deviceId);
 
   // ── Week-Off / Holiday / Leave Detection ──────────────────────────────────
   const shift = await resolveShift(employee, organizationId, checkInTime);
-  const isOffDay = shift ? !isWorkingDay(shift, checkInTime) : false;
+  const isOffDay = shift ? !isWorkingDay(shift, checkInTime, timezone) : false;
 
   const [holiday, approvedLeave] = await Promise.all([
     prisma.holiday.findFirst({
@@ -150,35 +272,57 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
   let isBypassed = false;
   let bypassReason = null;
 
-  if (matchedBranch) {
-    geofenceResult = verifyGeofence(
-      { latitude, longitude },
-      { latitude: matchedBranch.latitude, longitude: matchedBranch.longitude, radiusMeters: matchedBranch.radiusMeters }
-    );
-    if (geofenceResult.bypassed) {
-      isBypassed = true;
-      bypassReason = "NO_BRANCH_GPS";
+  if (matchedBranch?.latitude && matchedBranch?.longitude) {
+    try {
+      geofenceResult = verifyGeofence(
+        { latitude, longitude },
+        { latitude: matchedBranch.latitude, longitude: matchedBranch.longitude, radiusMeters: matchedBranch.radiusMeters }
+      );
+      if (geofenceResult.bypassed) {
+        isBypassed = true;
+        bypassReason = "NO_BRANCH_GPS";
+      }
+    } catch (err) {
+      geofenceResult = { isInside: false, distanceMeters: null, allowedRadiusMeters: matchedBranch.radiusMeters || 200, error: err.message };
     }
   }
 
   // Multi-branch roaming fallback
+  const allBranches = await prisma.branch.findMany({ where: { organizationId } });
+  const branchesWithCoords = allBranches.filter((b) => b.latitude && b.longitude);
+
   if (!geofenceResult || (!geofenceResult.isInside && !geofenceResult.bypassed)) {
-    const allBranches = await prisma.branch.findMany({ where: { organizationId } });
-    for (const b of allBranches) {
-      const check = verifyGeofence(
-        { latitude, longitude },
-        { latitude: b.latitude, longitude: b.longitude, radiusMeters: b.radiusMeters }
-      );
-      if (check.isInside || check.bypassed) {
-        matchedBranch = b;
-        geofenceResult = check;
-        if (check.bypassed) {
-          isBypassed = true;
-          bypassReason = "NO_BRANCH_GPS";
+    for (const b of branchesWithCoords) {
+      try {
+        const check = verifyGeofence(
+          { latitude, longitude },
+          { latitude: b.latitude, longitude: b.longitude, radiusMeters: b.radiusMeters }
+        );
+        if (check.isInside || check.bypassed) {
+          matchedBranch = b;
+          geofenceResult = check;
+          if (check.bypassed) {
+            isBypassed = true;
+            bypassReason = "NO_BRANCH_GPS";
+          }
+          break;
         }
-        break;
+      } catch {
+        // try next branch
       }
     }
+  }
+
+  // If neither the employee branch nor any organization branch has GPS coordinates configured:
+  if (!matchedBranch?.latitude && branchesWithCoords.length === 0) {
+    isBypassed = true;
+    bypassReason = "NO_BRANCH_GPS_CONFIGURED";
+    geofenceResult = {
+      isInside: true,
+      distanceMeters: 0,
+      allowedRadiusMeters: 200,
+      bypassed: true,
+    };
   }
 
   if (!geofenceResult || (!geofenceResult.isInside && !geofenceResult.bypassed)) {
@@ -289,11 +433,13 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
 // WFH Check-In (No geofence, sets WORK_FROM_HOME status)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNote }) => {
-  const employee = await resolveEmployee(userId, employeeId, organizationId);
+const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNote, actorRole = null, deviceId = null }) => {
+  const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
   const checkInTime = timestamp ? new Date(timestamp) : new Date();
-  const today = getTodayDateOnly(checkInTime);
+  const timezone = await getOrgTimezone(organizationId);
+  const today = getLocalDateOnly(checkInTime, timezone);
   const policy = await getPolicy(organizationId);
+  await assertTrustedDevice(employee, organizationId, policy, deviceId);
 
   if (!policy.allowWfh) {
     const error = new Error("Work From Home check-in is not enabled for this organization.");
@@ -302,7 +448,7 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
   }
 
   const shift = await resolveShift(employee, organizationId, checkInTime);
-  const isOffDay = shift ? !isWorkingDay(shift, checkInTime) : false;
+  const isOffDay = shift ? !isWorkingDay(shift, checkInTime, timezone) : false;
 
   const [holiday, approvedLeave] = await Promise.all([
     prisma.holiday.findFirst({
@@ -395,18 +541,52 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
 // Clock-Out
 // ─────────────────────────────────────────────────────────────────────────────
 
-const checkOut = async ({ userId, employeeId, organizationId, latitude, longitude, accuracy, timestamp, workMode, note }) => {
-  const employee = await resolveEmployee(userId, employeeId, organizationId);
+const checkOut = async ({ userId, employeeId, organizationId, latitude, longitude, accuracy, timestamp, workMode, note, actorRole = null, deviceId = null }) => {
+  const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
+  const policy = await getPolicy(organizationId);
+  await assertTrustedDevice(employee, organizationId, policy, deviceId);
   const checkOutTime = timestamp ? new Date(timestamp) : new Date();
-  const today = getTodayDateOnly(checkOutTime);
+  const timezone = await getOrgTimezone(organizationId);
+  const today = getLocalDateOnly(checkOutTime, timezone);
 
-  const attendance = await prisma.attendance.findUnique({
+  let attendance = await prisma.attendance.findUnique({
     where: { employeeId_date: { employeeId: employee.id, date: today } },
     include: {
       shift: true,
       events: { orderBy: { timestamp: "desc" } },
     },
   });
+
+  // A night shift that starts before midnight belongs to the previous calendar
+  // day. Without this, the 06:00 checkout of a 22:00 shift looks for today's
+  // record, finds nothing, and the employee can never clock out.
+  if (!attendance || !attendance.checkIn) {
+    const openShift = await prisma.attendance.findFirst({
+      where: {
+        employeeId: employee.id,
+        organizationId,
+        checkIn: { not: null },
+        checkOut: null,
+        date: { lt: today, gte: new Date(today.getTime() - 2 * 24 * 60 * 60 * 1000) },
+      },
+      include: {
+        shift: true,
+        events: { orderBy: { timestamp: "desc" } },
+      },
+      orderBy: { date: "desc" },
+    });
+
+    // Only adopt it when the open punch genuinely belongs to an overnight shift
+    // and is still within a plausible window, so a forgotten checkout from days
+    // ago is not silently closed against today's punch.
+    if (openShift) {
+      const elapsedHours =
+        (checkOutTime.getTime() - new Date(openShift.checkIn).getTime()) / 3_600_000;
+      if (isOvernightShift(openShift.shift) && elapsedHours > 0 && elapsedHours <= 20) {
+        attendance = openShift;
+      }
+    }
+  }
 
   if (!attendance || !attendance.checkIn) {
     const error = new Error("No check-in record found for today. You must check in before checking out.");
@@ -422,15 +602,19 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
     throw error;
   }
 
+  // Metrics are evaluated against the shift's own day, not the checkout instant,
+  // which for an overnight shift is already the following calendar date.
+  const attendanceDate = attendance.date;
+
   // Resolve shift with override support
-  let shift = attendance.shift || (await resolveShift(employee, organizationId, checkOutTime));
-  const isOffDay = shift ? !isWorkingDay(shift, checkOutTime) : false;
+  let shift = attendance.shift || (await resolveShift(employee, organizationId, attendanceDate));
+  const isOffDay = shift ? !isWorkingDay(shift, attendanceDate, timezone) : false;
 
   const [holiday, approvedLeave] = await Promise.all([
     prisma.holiday.findFirst({
       where: {
         organizationId,
-        date: today,
+        date: attendanceDate,
         isOptional: false,
         OR: [{ branchId: null }, ...(employee.branchId ? [{ branchId: employee.branchId }] : [])],
       },
@@ -439,8 +623,8 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
       where: {
         employeeId: employee.id,
         status: "APPROVED",
-        startDate: { lte: today },
-        endDate: { gte: today },
+        startDate: { lte: attendanceDate },
+        endDate: { gte: attendanceDate },
       },
     }),
   ]);
@@ -489,7 +673,21 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
       isNonWorkingDay: true,
     };
   } else if (shift) {
-    metrics = evaluateAttendanceAgainstShift(shift, attendance.checkIn, checkOutTime, totalBreakMinutes);
+    const policy = await getPolicy(organizationId);
+    metrics = evaluateAttendanceAgainstShift(shift, attendance.checkIn, checkOutTime, totalBreakMinutes, {
+      timeZone: timezone,
+      halfDayThresholdMinutes: policy.halfDayThresholdMinutes,
+    });
+
+    // When the org requires OT sign-off, minutes are parked on a request rather
+    // than credited straight to the payslip.
+    if (policy.requireOtApproval && metrics.overtimeMinutes > 0) {
+      metrics.pendingOvertimeMinutes = metrics.overtimeMinutes;
+      metrics.overtimeMinutes = 0;
+      metrics.overtimeHours = "0.0";
+      metrics.overtimeFormatted = formatMinutes(0);
+      metrics.overtimeRequiresApproval = true;
+    }
   } else {
     metrics = {
       scheduledMinutes: 480,
@@ -543,6 +741,73 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
       },
     });
 
+    // Working a rest day, holiday or approved-leave day earns comp-off. This was
+    // advertised by the product but never actually credited.
+    if (isNonWorkingDay && calculatedWorkingMinutes >= 240) {
+      const earnedDays = calculatedWorkingMinutes >= 480 ? 1 : 0.5;
+      const balance = await tx.compOffBalance.upsert({
+        where: { employeeId: employee.id },
+        update: { creditedDays: { increment: earnedDays } },
+        create: {
+          organizationId,
+          employeeId: employee.id,
+          creditedDays: earnedDays,
+          usedDays: 0,
+        },
+      });
+
+      const alreadyCredited = await tx.compOffTransaction.findFirst({
+        where: {
+          compOffBalanceId: balance.id,
+          type: "CREDIT",
+          referenceDate: attendanceDate,
+        },
+      });
+
+      if (!alreadyCredited) {
+        // Credits lapse after 90 days unless used.
+        const expiresAt = new Date(attendanceDate);
+        expiresAt.setUTCDate(expiresAt.getUTCDate() + 90);
+
+        await tx.compOffTransaction.create({
+          data: {
+            compOffBalanceId: balance.id,
+            type: "CREDIT",
+            days: earnedDays,
+            reason: "Worked on a rest day / holiday",
+            referenceDate: attendanceDate,
+            expiresAt,
+          },
+        });
+      } else {
+        // Undo the increment above; this day was already credited.
+        await tx.compOffBalance.update({
+          where: { employeeId: employee.id },
+          data: { creditedDays: { decrement: earnedDays } },
+        });
+      }
+    }
+
+    // Overtime that needs sign-off is raised as a request so a reviewer can act
+    // on it, instead of being silently discarded.
+    if (metrics.pendingOvertimeMinutes > 0) {
+      const existingRequest = await tx.overtimeRequest.findFirst({
+        where: { attendanceId: attendance.id, status: "PENDING" },
+      });
+      if (!existingRequest) {
+        await tx.overtimeRequest.create({
+          data: {
+            organizationId,
+            employeeId: employee.id,
+            attendanceId: attendance.id,
+            requestedMinutes: metrics.pendingOvertimeMinutes,
+            reason: "Auto-raised from checkout — organization requires overtime approval",
+            status: "PENDING",
+          },
+        });
+      }
+    }
+
     await tx.attendanceEvent.create({
       data: {
         attendanceId: attendance.id,
@@ -591,13 +856,17 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
 // Break Start / End
 // ─────────────────────────────────────────────────────────────────────────────
 
-const startBreak = async ({ userId, employeeId, organizationId, latitude, longitude }) => {
-  const employee = await resolveEmployee(userId, employeeId, organizationId);
-  const today = getTodayDateOnly();
+const startBreak = async ({ userId, employeeId, organizationId, latitude, longitude, timestamp, actorRole = null }) => {
+  const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
+  const eventTime = timestamp ? new Date(timestamp) : new Date();
+  if (Number.isNaN(eventTime.getTime())) {
+    const error = new Error("Invalid break timestamp");
+    error.statusCode = 400;
+    throw error;
+  }
 
-  const attendance = await prisma.attendance.findUnique({
-    where: { employeeId_date: { employeeId: employee.id, date: today } },
-    include: { events: { orderBy: { timestamp: "desc" } } },
+  const attendance = await findOpenAttendance(employee.id, organizationId, eventTime, {
+    events: { orderBy: { timestamp: "desc" } },
   });
 
   if (!attendance?.checkIn) {
@@ -618,7 +887,7 @@ const startBreak = async ({ userId, employeeId, organizationId, latitude, longit
     throw error;
   }
 
-  const breakStartTime = new Date();
+  const breakStartTime = eventTime;
   const event = await prisma.attendanceEvent.create({
     data: {
       attendanceId: attendance.id,
@@ -638,13 +907,17 @@ const startBreak = async ({ userId, employeeId, organizationId, latitude, longit
   };
 };
 
-const endBreak = async ({ userId, employeeId, organizationId, latitude, longitude }) => {
-  const employee = await resolveEmployee(userId, employeeId, organizationId);
-  const today = getTodayDateOnly();
+const endBreak = async ({ userId, employeeId, organizationId, latitude, longitude, timestamp, actorRole = null }) => {
+  const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
+  const eventTime = timestamp ? new Date(timestamp) : new Date();
+  if (Number.isNaN(eventTime.getTime())) {
+    const error = new Error("Invalid break timestamp");
+    error.statusCode = 400;
+    throw error;
+  }
 
-  const attendance = await prisma.attendance.findUnique({
-    where: { employeeId_date: { employeeId: employee.id, date: today } },
-    include: { events: { orderBy: { timestamp: "desc" } } },
+  const attendance = await findOpenAttendance(employee.id, organizationId, eventTime, {
+    events: { orderBy: { timestamp: "desc" } },
   });
 
   if (!attendance?.checkIn) {
@@ -662,7 +935,7 @@ const endBreak = async ({ userId, employeeId, organizationId, latitude, longitud
     throw error;
   }
 
-  const breakEndTime = new Date();
+  const breakEndTime = eventTime;
   const durationMinutes = Math.max(
     1,
     Math.floor((breakEndTime.getTime() - new Date(lastBreakStart.timestamp).getTime()) / 60000)
@@ -711,10 +984,8 @@ const getBreakDetails = async ({ userId, employeeId, organizationId, attendanceI
     });
   } else {
     const employee = await resolveEmployee(userId, employeeId, organizationId);
-    const today = getTodayDateOnly();
-    attendance = await prisma.attendance.findUnique({
-      where: { employeeId_date: { employeeId: employee.id, date: today } },
-      include: { events: { orderBy: { timestamp: "asc" } } },
+    attendance = await findOpenAttendance(employee.id, organizationId, new Date(), {
+      events: { orderBy: { timestamp: "asc" } },
     });
   }
 
@@ -795,8 +1066,10 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
     throw error;
   }
 
-  const targetDate = getTodayDateOnly(new Date(date));
+  const targetDate = await getOrgDateOnly(organizationId, new Date(date));
   const shift = await resolveShift(employee, organizationId, new Date(date));
+  const timezone = await getOrgTimezone(organizationId);
+  const policy = await getPolicy(organizationId);
 
   let workingMinutes = 0;
   let lateMinutes = 0;
@@ -804,50 +1077,61 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
   let overtimeMinutes = 0;
 
   if (checkIn && checkOut && shift) {
-    const metrics = evaluateAttendanceAgainstShift(shift, new Date(checkIn), new Date(checkOut));
+    const metrics = evaluateAttendanceAgainstShift(
+      shift,
+      new Date(checkIn),
+      new Date(checkOut),
+      0,
+      { timeZone: timezone, halfDayThresholdMinutes: policy.halfDayThresholdMinutes }
+    );
     workingMinutes = metrics.workingMinutes;
     lateMinutes = metrics.lateMinutes;
     earlyMinutes = metrics.earlyMinutes;
     overtimeMinutes = metrics.overtimeMinutes;
   }
 
-  const attendance = await prisma.attendance.upsert({
-    where: { employeeId_date: { employeeId, date: targetDate } },
-    update: {
-      status,
-      checkIn: checkIn ? new Date(checkIn) : undefined,
-      checkOut: checkOut ? new Date(checkOut) : undefined,
-      workingMinutes,
-      lateMinutes,
-      earlyMinutes,
-      overtimeMinutes,
-    },
-    create: {
-      organizationId,
-      employeeId,
-      branchId: employee.branchId || null,
-      shiftId: shift?.id || null,
-      date: targetDate,
-      checkIn: checkIn ? new Date(checkIn) : null,
-      checkOut: checkOut ? new Date(checkOut) : null,
-      status,
-      workingMinutes,
-      lateMinutes,
-      earlyMinutes,
-      overtimeMinutes,
-    },
-  });
+  // The attendance row and its audit trail must land together, otherwise a
+  // manual override can be applied with no record of who made it.
+  const attendance = await prisma.$transaction(async (tx) => {
+    const record = await tx.attendance.upsert({
+      where: { employeeId_date: { employeeId, date: targetDate } },
+      update: {
+        status,
+        checkIn: checkIn ? new Date(checkIn) : undefined,
+        checkOut: checkOut ? new Date(checkOut) : undefined,
+        workingMinutes,
+        lateMinutes,
+        earlyMinutes,
+        overtimeMinutes,
+      },
+      create: {
+        organizationId,
+        employeeId,
+        branchId: employee.branchId || null,
+        shiftId: shift?.id || null,
+        date: targetDate,
+        checkIn: checkIn ? new Date(checkIn) : null,
+        checkOut: checkOut ? new Date(checkOut) : null,
+        status,
+        workingMinutes,
+        lateMinutes,
+        earlyMinutes,
+        overtimeMinutes,
+      },
+    });
 
-  // Audit log
-  await prisma.auditLog.create({
-    data: {
-      organizationId,
-      userId: adminUserId,
-      action: "UPDATE",
-      entity: "ATTENDANCE",
-      entityId: attendance.id,
-      details: `Admin manually marked attendance as ${status} for employee ${employeeId} on ${date}. Reason: ${reason || "N/A"}`,
-    },
+    await tx.auditLog.create({
+      data: {
+        organizationId,
+        userId: adminUserId,
+        action: "UPDATE",
+        entity: "ATTENDANCE",
+        entityId: record.id,
+        details: `Admin manually marked attendance as ${status} for employee ${employeeId} on ${date}. Reason: ${reason || "N/A"}`,
+      },
+    });
+
+    return record;
   });
 
   return {
@@ -881,14 +1165,10 @@ const getTodayStatus = async (userId, organizationId) => {
     };
   }
 
-  const today = getTodayDateOnly();
-  const attendance = await prisma.attendance.findUnique({
-    where: { employeeId_date: { employeeId: employee.id, date: today } },
-    include: {
-      shift: true,
-      branch: true,
-      events: { orderBy: { timestamp: "desc" } },
-    },
+  const attendance = await findOpenAttendance(employee.id, organizationId, new Date(), {
+    shift: true,
+    branch: true,
+    events: { orderBy: { timestamp: "desc" } },
   });
 
   const hasCheckedIn = Boolean(attendance?.checkIn);
@@ -961,7 +1241,17 @@ const getAllAttendance = async (organizationId, query = {}) => {
     prisma.attendance.findMany({
       where,
       include: {
-        employee: { select: { id: true, firstName: true, lastName: true, employeeCode: true, user: { select: { email: true } } } },
+        employee: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            employeeCode: true,
+            designation: true,
+            department: { select: { id: true, name: true } },
+            user: { select: { email: true, role: true } },
+          },
+        },
         branch: { select: { id: true, name: true } },
         shift: { select: { id: true, name: true, startTime: true, endTime: true } },
         events: true,
@@ -1118,30 +1408,30 @@ const syncOfflinePunches = async (userId, organizationId, punches) => {
   let failed = 0;
 
   for (const punch of sorted) {
-    const { id: localId, type, timestamp, latitude, longitude, accuracy, wfhNote } = punch;
+    const { id: localId, type, timestamp, latitude, longitude, accuracy, wfhNote, workMode, note, deviceId } = punch;
 
     try {
       let result;
 
       switch (type) {
         case "CHECK_IN":
-          result = await checkIn({ userId, organizationId, latitude, longitude, accuracy, timestamp });
+          result = await checkIn({ userId, organizationId, latitude, longitude, accuracy, timestamp, workMode, note, deviceId });
           break;
 
         case "WFH_CHECK_IN":
-          result = await wfhCheckIn({ userId, organizationId, timestamp, wfhNote });
+          result = await wfhCheckIn({ userId, organizationId, timestamp, wfhNote, deviceId });
           break;
 
         case "CHECK_OUT":
-          result = await checkOut({ userId, organizationId, latitude, longitude, accuracy, timestamp });
+          result = await checkOut({ userId, organizationId, latitude, longitude, accuracy, timestamp, workMode, note, deviceId });
           break;
 
         case "BREAK_START":
-          result = await startBreak({ userId, organizationId, latitude, longitude });
+          result = await startBreak({ userId, organizationId, latitude, longitude, timestamp });
           break;
 
         case "BREAK_END":
-          result = await endBreak({ userId, organizationId, latitude, longitude });
+          result = await endBreak({ userId, organizationId, latitude, longitude, timestamp });
           break;
 
         default:
@@ -1195,6 +1485,10 @@ module.exports = {
   getAttendanceHistory,
   getAttendanceSummary,
   getTodayDateOnly,
+  getOrgTimezone,
+  getOrgDateOnly,
+  resolveShift,
+  findOpenAttendance,
   getPolicy,
   syncOfflinePunches,
 };

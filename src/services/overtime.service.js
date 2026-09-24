@@ -1,20 +1,53 @@
 const prisma = require("../config/database");
+const { getOrgDateOnly } = require("./attendance.service");
 
 class OvertimeService {
   /**
+   * Minutes of overtime an employee may legitimately claim for a punch record.
+   *
+   * When the org requires OT approval, checkout parks the minutes on a pending
+   * request and writes 0 to the attendance row, so fall back to the pending
+   * request's figure rather than reading the (zeroed) attendance column.
+   */
+  async _computeEligibleOvertime(attendance) {
+    if (attendance.overtimeMinutes > 0) return attendance.overtimeMinutes;
+
+    const autoRaised = await prisma.overtimeRequest.findFirst({
+      where: { attendanceId: attendance.id },
+      orderBy: { createdAt: "desc" },
+      select: { requestedMinutes: true },
+    });
+    return autoRaised?.requestedMinutes ?? 0;
+  }
+
+  /**
    * Employee requests overtime approval for a specific attendance date
    */
-  async requestOvertime(organizationId, userId, { attendanceId, requestedMinutes, reason }) {
-    if (!attendanceId || !requestedMinutes) {
-      const error = new Error("attendanceId and requestedMinutes are required");
-      error.statusCode = 400;
-      throw error;
-    }
+  async requestOvertime(organizationId, userId, payload = {}) {
+    let { attendanceId, requestedMinutes, reason, date, hours } = payload;
 
     const employee = await prisma.employee.findFirst({ where: { userId, organizationId } });
     if (!employee) {
       const error = new Error("Employee profile not found");
       error.statusCode = 404;
+      throw error;
+    }
+
+    if (!requestedMinutes && hours != null) {
+      requestedMinutes = Math.round(Number(hours) * 60);
+    }
+
+    if (!attendanceId && date) {
+      const dateOnly = await getOrgDateOnly(organizationId, new Date(date));
+      const byDate = await prisma.attendance.findFirst({
+        where: { employeeId: employee.id, organizationId, date: dateOnly },
+      });
+      attendanceId = byDate?.id;
+    }
+
+    if (!attendanceId || !requestedMinutes) {
+      const error = new Error("attendanceId (or date) and requestedMinutes (or hours) are required");
+      error.statusCode = 400;
       throw error;
     }
 
@@ -42,12 +75,37 @@ class OvertimeService {
       throw error;
     }
 
+    // Overtime can only be claimed for time actually worked beyond the shift.
+    // The worked figure comes from the punch record, so it cannot be inflated.
+    const workedOvertime = await this._computeEligibleOvertime(attendance);
+    const requested = parseInt(requestedMinutes, 10);
+
+    if (!Number.isFinite(requested) || requested <= 0) {
+      const error = new Error("requestedMinutes must be a positive number");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    if (workedOvertime <= 0) {
+      const error = new Error("No overtime was recorded for this date");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    if (requested > workedOvertime) {
+      const error = new Error(
+        `You can claim at most ${workedOvertime} minute(s) of overtime for this date.`
+      );
+      error.statusCode = 400;
+      throw error;
+    }
+
     const request = await prisma.overtimeRequest.create({
       data: {
         organizationId,
         employeeId: employee.id,
         attendanceId,
-        requestedMinutes: parseInt(requestedMinutes),
+        requestedMinutes: requested,
         reason: reason || null,
         status: "PENDING",
       },
@@ -72,7 +130,7 @@ class OvertimeService {
 
     const request = await prisma.overtimeRequest.findFirst({
       where: { id: requestId, organizationId },
-      include: { attendance: true },
+      include: { attendance: true, employee: { select: { userId: true } } },
     });
 
     if (!request) {
@@ -85,23 +143,39 @@ class OvertimeService {
       error.statusCode = 400;
       throw error;
     }
+    if (request.employee?.userId && request.employee.userId === reviewerUserId) {
+      const error = new Error("You cannot review your own overtime request");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    const finalOtMinutes =
+      approvedMinutes !== undefined && approvedMinutes !== null
+        ? parseInt(approvedMinutes, 10)
+        : request.requestedMinutes;
+
+    if (status === "APPROVED" && (!Number.isFinite(finalOtMinutes) || finalOtMinutes < 0)) {
+      const error = new Error("approvedMinutes must be zero or a positive number");
+      error.statusCode = 400;
+      throw error;
+    }
 
     return await prisma.$transaction(async (tx) => {
-      // If approved, update overtime minutes on the attendance record
       if (status === "APPROVED") {
-        const finalOtMinutes = approvedMinutes !== undefined
-          ? parseInt(approvedMinutes)
-          : request.requestedMinutes;
-
         await tx.attendance.update({
           where: { id: request.attendanceId },
           data: { overtimeMinutes: finalOtMinutes },
         });
       } else {
-        // Rejected: zero out overtime on the attendance record
+        // Rejection withdraws only the minutes under review. Blanket-zeroing the
+        // column also erased overtime that was never part of this request.
+        const remaining = Math.max(
+          0,
+          (request.attendance?.overtimeMinutes || 0) - request.requestedMinutes
+        );
         await tx.attendance.update({
           where: { id: request.attendanceId },
-          data: { overtimeMinutes: 0 },
+          data: { overtimeMinutes: remaining },
         });
       }
 
@@ -109,7 +183,7 @@ class OvertimeService {
         where: { id: requestId },
         data: {
           status,
-          approvedMinutes: status === "APPROVED" ? (approvedMinutes !== undefined ? parseInt(approvedMinutes) : request.requestedMinutes) : null,
+          approvedMinutes: status === "APPROVED" ? finalOtMinutes : null,
           reviewedBy: reviewerUserId,
           reviewNote: reviewNote || null,
         },

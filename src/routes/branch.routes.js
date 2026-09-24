@@ -1,6 +1,9 @@
 const express = require("express");
 const branchController = require("../controllers/branch.controller");
-const { authenticate, authorizeRoles } = require("../middleware/auth.middleware");
+const {
+  authenticate,
+  authorizeRoles,
+} = require("../middleware/auth.middleware");
 
 const router = express.Router();
 
@@ -15,22 +18,22 @@ router.get("/:id", branchController.getById);
 // 3. POST /api/branches - Create branch
 router.post(
   "/",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
-  branchController.create
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  branchController.create,
 );
 
 // 4. PUT /api/branches/:id - Update branch
 router.put(
   "/:id",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
-  branchController.update
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  branchController.update,
 );
 
 // 5. DELETE /api/branches/:id - Delete branch
 router.delete(
   "/:id",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
-  branchController.remove
+  branchController.remove,
 );
 
 module.exports = router;

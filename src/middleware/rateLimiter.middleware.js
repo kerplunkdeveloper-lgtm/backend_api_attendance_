@@ -1,10 +1,4 @@
-/**
- * In-memory rate limiter middleware (no Redis required).
- * For high-scale deployments, swap the store for a Redis-backed solution.
- */
-
-const rateStore = new Map(); // key → { count, resetAt }
-
+const rateStore = new Map();
 /**
  * Creates an Express rate-limiter middleware.
  * @param {object} options
@@ -13,14 +7,21 @@ const rateStore = new Map(); // key → { count, resetAt }
  * @param {string} options.keyBy        - "ip" (default) | "user" (uses req.user.id if authenticated)
  * @param {string} options.message      - Custom error message
  */
-const createRateLimiter = ({ windowMs = 15 * 60 * 1000, max = 100, keyBy = "ip", message }) => {
+const createRateLimiter = ({
+  windowMs = 15 * 60 * 1000,
+  max = 100,
+  keyBy = "ip",
+  message,
+}) => {
   return (req, res, next) => {
     let key;
     if (keyBy === "user" && req.user?.id) {
       key = `user:${req.user.id}`;
     } else {
-      // Use X-Forwarded-For for proxied environments (Vercel, Hostinger)
-      key = `ip:${req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.socket.remoteAddress}`;
+      // req.ip only trusts forwarding headers when Express is explicitly
+      // configured with trusted proxies. Directly reading X-Forwarded-For lets
+      // clients evade the limiter by inventing a new address per request.
+      key = `ip:${req.ip || req.socket?.remoteAddress || "unknown"}`;
     }
 
     const now = Date.now();
@@ -41,7 +42,9 @@ const createRateLimiter = ({ windowMs = 15 * 60 * 1000, max = 100, keyBy = "ip",
       res.setHeader("X-RateLimit-Remaining", 0);
       return res.status(429).json({
         success: false,
-        message: message || `Too many requests. Please try again in ${retryAfter} seconds.`,
+        message:
+          message ||
+          `Too many requests. Please try again in ${retryAfter} seconds.`,
         retryAfterSeconds: retryAfter,
       });
     }
@@ -88,11 +91,20 @@ const strictRateLimiter = createRateLimiter({
 });
 
 // Periodically clean up stale entries every 10 minutes to prevent memory leak
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of rateStore.entries()) {
-    if (now > entry.resetAt) rateStore.delete(key);
-  }
-}, 10 * 60 * 1000);
+const cleanupTimer = setInterval(
+  () => {
+    const now = Date.now();
+    for (const [key, entry] of rateStore.entries()) {
+      if (now > entry.resetAt) rateStore.delete(key);
+    }
+  },
+  10 * 60 * 1000,
+);
+cleanupTimer.unref?.();
 
-module.exports = { createRateLimiter, authRateLimiter, apiRateLimiter, strictRateLimiter };
+module.exports = {
+  createRateLimiter,
+  authRateLimiter,
+  apiRateLimiter,
+  strictRateLimiter,
+};

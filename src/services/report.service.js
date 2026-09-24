@@ -1,12 +1,12 @@
 const prisma = require("../config/database");
-const { getTodayDateOnly } = require("./attendance.service");
+const { getOrgDateOnly } = require("./attendance.service");
 
 class ReportService {
   /**
    * Daily Attendance Report
    */
   async getDailyReport(organizationId, targetDate = new Date()) {
-    const dateOnly = getTodayDateOnly(new Date(targetDate));
+    const dateOnly = await getOrgDateOnly(organizationId, new Date(targetDate));
 
     const [allEmployees, attendances, approvedLeaves, org] = await Promise.all([
       prisma.employee.findMany({
@@ -46,8 +46,8 @@ class ReportService {
         },
         select: {
           employeeId: true,
-          type: true,
           reason: true,
+          leaveType: { select: { name: true, code: true } },
         },
       }),
       prisma.organization.findUnique({
@@ -109,7 +109,9 @@ class ReportService {
           workingMinutes: 0,
           lateMinutes: 0,
           status: "ON_LEAVE",
-          wfhNote: leave.type ? `Approved Leave (${leave.type})` : "Approved Leave",
+          wfhNote: leave.leaveType?.name
+            ? `Approved Leave (${leave.leaveType.name})`
+            : "Approved Leave",
         };
       }
 

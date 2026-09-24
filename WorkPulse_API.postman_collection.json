@@ -1,0 +1,945 @@
+{
+  "info": {
+    "_postman_id": "workpulse-api-v2-collection",
+    "name": "WorkPulse Enterprise API Collection v2.0",
+    "description": "Comprehensive Postman collection for WorkPulse Enterprise Workforce Management Backend API. Includes Authentication, Smart Geofenced Attendance, 6-Day Overtime, Comp-Offs, Leave Pipeline, Payroll Processing, Digital Onboarding, Communication Gateway (Email & WhatsApp), Expense Reimbursements, and Analytics Reports.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://backendapiattendance-production.up.railway.app/api",
+      "type": "string"
+    },
+    {
+      "key": "authToken",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{authToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "1. Authentication & Security",
+      "item": [
+        {
+          "name": "Register Organization & Admin",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@company.com\",\n  \"password\": \"Password@123\",\n  \"firstName\": \"Alex\",\n  \"lastName\": \"Vance\",\n  \"organizationName\": \"Acme Technologies Ltd\",\n  \"planId\": \"PROFESSIONAL\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "register"]
+            }
+          }
+        },
+        {
+          "name": "Login User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "var token = jsonData.token || (jsonData.data && jsonData.data.token) || jsonData.accessToken;",
+                  "if (token) {",
+                  "    pm.collectionVariables.set('authToken', token);",
+                  "    console.log('Auth token automatically set to:', token);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@company.com\",\n  \"password\": \"Password@123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login"]
+            }
+          }
+        },
+        {
+          "name": "Get Session Profile (/auth/me)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "me"]
+            }
+          }
+        },
+        {
+          "name": "Get Subscription Plans",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/auth/plans",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "plans"]
+            }
+          }
+        },
+        {
+          "name": "Refresh Token",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/auth/refresh-token",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "refresh-token"]
+            }
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/auth/logout",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "logout"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Smart Attendance & Geofence",
+      "item": [
+        {
+          "name": "Check-In (Office / Shoot / WFH)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"latitude\": 11.9344,\n  \"longitude\": 79.8358,\n  \"accuracy\": 10,\n  \"workMode\": \"SHOOT\",\n  \"note\": \"Filming at Studio 2\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/attendance/check-in",
+              "host": ["{{baseUrl}}"],
+              "path": ["attendance", "check-in"]
+            }
+          }
+        },
+        {
+          "name": "Check-Out",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"latitude\": 11.9344,\n  \"longitude\": 79.8358,\n  \"accuracy\": 10,\n  \"note\": \"Completed daily shift\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/attendance/check-out",
+              "host": ["{{baseUrl}}"],
+              "path": ["attendance", "check-out"]
+            }
+          }
+        },
+        {
+          "name": "Start Break",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"latitude\": 11.9344,\n  \"longitude\": 79.8358\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/attendance/break-start",
+              "host": ["{{baseUrl}}"],
+              "path": ["attendance", "break-start"]
+            }
+          }
+        },
+        {
+          "name": "End Break",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"latitude\": 11.9344,\n  \"longitude\": 79.8358\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/attendance/break-end",
+              "host": ["{{baseUrl}}"],
+              "path": ["attendance", "break-end"]
+            }
+          }
+        },
+        {
+          "name": "Get Today Status",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/attendance/today",
+              "host": ["{{baseUrl}}"],
+              "path": ["attendance", "today"]
+            }
+          }
+        },
+        {
+          "name": "Get My Attendance History",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/attendance/history",
+              "host": ["{{baseUrl}}"],
+              "path": ["attendance", "history"]
+            }
+          }
+        },
+        {
+          "name": "Get Organization Attendance Summary",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/attendance/summary",
+              "host": ["{{baseUrl}}"],
+              "path": ["attendance", "summary"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Overtime & Shift Overrides",
+      "item": [
+        {
+          "name": "Get Pending Overtime Requests",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/overtime/pending",
+              "host": ["{{baseUrl}}"],
+              "path": ["overtime", "pending"]
+            }
+          }
+        },
+        {
+          "name": "Get My Overtime History",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/overtime/my",
+              "host": ["{{baseUrl}}"],
+              "path": ["overtime", "my"]
+            }
+          }
+        },
+        {
+          "name": "Review Overtime Request",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"APPROVED\",\n  \"reviewerNote\": \"Approved full overtime hours\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/overtime/:id/review",
+              "host": ["{{baseUrl}}"],
+              "path": ["overtime", ":id", "review"],
+              "variable": [{ "key": "id", "value": "RECORD_ID" }]
+            }
+          }
+        },
+        {
+          "name": "Get My Shift Overrides",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/shift-overrides/my",
+              "host": ["{{baseUrl}}"],
+              "path": ["shift-overrides", "my"]
+            }
+          }
+        },
+        {
+          "name": "Create Shift Override",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"employeeId\": \"EMP_ID\",\n  \"shiftId\": \"SHIFT_ID\",\n  \"startDate\": \"2026-09-20\",\n  \"endDate\": \"2026-09-25\",\n  \"reason\": \"Covering evening shift\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/shift-overrides",
+              "host": ["{{baseUrl}}"],
+              "path": ["shift-overrides"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Compensatory Off (Comp-Off)",
+      "item": [
+        {
+          "name": "Get My Comp-Off Balance",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/compoff/balance",
+              "host": ["{{baseUrl}}"],
+              "path": ["compoff", "balance"]
+            }
+          }
+        },
+        {
+          "name": "Redeem Comp-Off Leave",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"2026-09-22\",\n  \"reason\": \"Compensatory off for Sunday shoot\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/compoff/redeem",
+              "host": ["{{baseUrl}}"],
+              "path": ["compoff", "redeem"]
+            }
+          }
+        },
+        {
+          "name": "Get Comp-Off History",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/compoff/history",
+              "host": ["{{baseUrl}}"],
+              "path": ["compoff", "history"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Leave Management",
+      "item": [
+        {
+          "name": "Apply for Leave",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"CASUAL\",\n  \"startDate\": \"2026-09-24\",\n  \"endDate\": \"2026-09-25\",\n  \"reason\": \"Family function in home town\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/leaves/apply",
+              "host": ["{{baseUrl}}"],
+              "path": ["leaves", "apply"]
+            }
+          }
+        },
+        {
+          "name": "Get My Leaves",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/leaves/my",
+              "host": ["{{baseUrl}}"],
+              "path": ["leaves", "my"]
+            }
+          }
+        },
+        {
+          "name": "Get Pending Leaves (Manager/Admin)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/leaves/pending",
+              "host": ["{{baseUrl}}"],
+              "path": ["leaves", "pending"]
+            }
+          }
+        },
+        {
+          "name": "Review Leave (Approve/Reject)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"APPROVED\",\n  \"reviewNote\": \"Approved. Enjoy your time off!\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/leaves/:id/review",
+              "host": ["{{baseUrl}}"],
+              "path": ["leaves", ":id", "review"],
+              "variable": [{ "key": "id", "value": "LEAVE_ID" }]
+            }
+          }
+        },
+        {
+          "name": "Get Leave Quota Balances",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/leaves/balances",
+              "host": ["{{baseUrl}}"],
+              "path": ["leaves", "balances"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Attendance Regularization (Miss-Punch)",
+      "item": [
+        {
+          "name": "Request Regularization",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"attendanceId\": \"ATTENDANCE_ID\",\n  \"requestedCheckIn\": \"2026-09-16T09:05:00.000Z\",\n  \"requestedCheckOut\": \"2026-09-16T18:15:00.000Z\",\n  \"reason\": \"Biometric device connectivity timeout\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/corrections/request",
+              "host": ["{{baseUrl}}"],
+              "path": ["corrections", "request"]
+            }
+          }
+        },
+        {
+          "name": "Get My Regularization Requests",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/corrections/my",
+              "host": ["{{baseUrl}}"],
+              "path": ["corrections", "my"]
+            }
+          }
+        },
+        {
+          "name": "Get Pending Regularizations (Admin)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/corrections/pending",
+              "host": ["{{baseUrl}}"],
+              "path": ["corrections", "pending"]
+            }
+          }
+        },
+        {
+          "name": "Review Regularization",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"APPROVED\",\n  \"reviewerNote\": \"Timesheet verified and updated\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/corrections/:id/review",
+              "host": ["{{baseUrl}}"],
+              "path": ["corrections", ":id", "review"],
+              "variable": [{ "key": "id", "value": "CORRECTION_ID" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. Payroll & Salary Payslips",
+      "item": [
+        {
+          "name": "Generate Monthly Payroll Batch",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"month\": 9,\n  \"year\": 2026\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/payroll/generate-batch",
+              "host": ["{{baseUrl}}"],
+              "path": ["payroll", "generate-batch"]
+            }
+          }
+        },
+        {
+          "name": "Disburse Batch (Dispatches Email & WhatsApp)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"month\": 9,\n  \"year\": 2026\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/payroll/disburse-batch",
+              "host": ["{{baseUrl}}"],
+              "path": ["payroll", "disburse-batch"]
+            }
+          }
+        },
+        {
+          "name": "Get Payroll Batch History",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/payroll/history",
+              "host": ["{{baseUrl}}"],
+              "path": ["payroll", "history"]
+            }
+          }
+        },
+        {
+          "name": "Get My Payslips",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/payroll/my-payslips",
+              "host": ["{{baseUrl}}"],
+              "path": ["payroll", "my-payslips"]
+            }
+          }
+        },
+        {
+          "name": "Get Detailed Payslip by ID",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/payroll/payslip/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["payroll", "payslip", ":id"],
+              "variable": [{ "key": "id", "value": "PAYSLIP_ID" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "8. Digital Onboarding Pipeline",
+      "item": [
+        {
+          "name": "Get All Candidates",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/onboarding/candidates",
+              "host": ["{{baseUrl}}"],
+              "path": ["onboarding", "candidates"]
+            }
+          }
+        },
+        {
+          "name": "Create Candidate",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Rohan\",\n  \"lastName\": \"Sharma\",\n  \"email\": \"rohan.sharma@example.com\",\n  \"phone\": \"+919876543210\",\n  \"position\": \"Senior Full Stack Engineer\",\n  \"departmentId\": \"DEPT_ID\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/onboarding/candidates",
+              "host": ["{{baseUrl}}"],
+              "path": ["onboarding", "candidates"]
+            }
+          }
+        },
+        {
+          "name": "Generate Offer Letter",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ctc\": 1200000,\n  \"joiningDate\": \"2026-10-01\",\n  \"designation\": \"Lead Developer\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/onboarding/candidates/:id/offer",
+              "host": ["{{baseUrl}}"],
+              "path": ["onboarding", "candidates", ":id", "offer"],
+              "variable": [{ "key": "id", "value": "CANDIDATE_ID" }]
+            }
+          }
+        },
+        {
+          "name": "Activate Candidate to Employee",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/onboarding/candidates/:id/activate",
+              "host": ["{{baseUrl}}"],
+              "path": ["onboarding", "candidates", ":id", "activate"],
+              "variable": [{ "key": "id", "value": "CANDIDATE_ID" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "9. Communication & Alert Gateway",
+      "item": [
+        {
+          "name": "Get Communication Status",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/notifications/communication-status",
+              "host": ["{{baseUrl}}"],
+              "path": ["notifications", "communication-status"]
+            }
+          }
+        },
+        {
+          "name": "Send Test Diagnostic Email",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to\": \"test-user@domain.com\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/notifications/test-email",
+              "host": ["{{baseUrl}}"],
+              "path": ["notifications", "test-email"]
+            }
+          }
+        },
+        {
+          "name": "Send Test Diagnostic WhatsApp Alert",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to\": \"+919876543210\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/notifications/test-whatsapp",
+              "host": ["{{baseUrl}}"],
+              "path": ["notifications", "test-whatsapp"]
+            }
+          }
+        },
+        {
+          "name": "Trigger Punch Reminders Evaluation Now",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"ALL\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/notifications/trigger-reminders",
+              "host": ["{{baseUrl}}"],
+              "path": ["notifications", "trigger-reminders"]
+            }
+          }
+        },
+        {
+          "name": "Get User Notifications",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/notifications",
+              "host": ["{{baseUrl}}"],
+              "path": ["notifications"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "10. Expense Reimbursements",
+      "item": [
+        {
+          "name": "Submit Expense Claim",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"category\": \"TRAVEL\",\n  \"amount\": 3450,\n  \"date\": \"2026-09-15\",\n  \"description\": \"Cab transport to client studio on ECR\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/expenses",
+              "host": ["{{baseUrl}}"],
+              "path": ["expenses"]
+            }
+          }
+        },
+        {
+          "name": "Get My Expenses",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/expenses/my",
+              "host": ["{{baseUrl}}"],
+              "path": ["expenses", "my"]
+            }
+          }
+        },
+        {
+          "name": "Get All Organization Expenses (Admin)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/expenses/all",
+              "host": ["{{baseUrl}}"],
+              "path": ["expenses", "all"]
+            }
+          }
+        },
+        {
+          "name": "Review Expense Claim",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"APPROVED\",\n  \"reviewerNote\": \"Verified travel receipt\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/expenses/:id/review",
+              "host": ["{{baseUrl}}"],
+              "path": ["expenses", ":id", "review"],
+              "variable": [{ "key": "id", "value": "EXPENSE_ID" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "11. Organization Branches & Departments",
+      "item": [
+        {
+          "name": "Get All Branches",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/branches",
+              "host": ["{{baseUrl}}"],
+              "path": ["branches"]
+            }
+          }
+        },
+        {
+          "name": "Create Branch with GPS Geofence",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Main Corporate HQ\",\n  \"code\": \"HQ-01\",\n  \"address\": \"100 Beach Road, White Town\",\n  \"latitude\": 11.9344,\n  \"longitude\": 79.8358,\n  \"radiusMeters\": 300\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/branches",
+              "host": ["{{baseUrl}}"],
+              "path": ["branches"]
+            }
+          }
+        },
+        {
+          "name": "Get Departments",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/departments",
+              "host": ["{{baseUrl}}"],
+              "path": ["departments"]
+            }
+          }
+        },
+        {
+          "name": "Create Department",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Engineering & Development\",\n  \"code\": \"ENG-01\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/departments",
+              "host": ["{{baseUrl}}"],
+              "path": ["departments"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "12. Shift Rostering & Scheduling",
+      "item": [
+        {
+          "name": "Get Organization Shifts",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/shifts",
+              "host": ["{{baseUrl}}"],
+              "path": ["shifts"]
+            }
+          }
+        },
+        {
+          "name": "Create Shift with 6-Day Schedule",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Standard General Shift\",\n  \"startTime\": \"09:00\",\n  \"endTime\": \"18:00\",\n  \"graceMinutes\": 15,\n  \"workingDays\": \"1,2,3,4,5,6\",\n  \"halfDayThresholdMinutes\": 240\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/shifts",
+              "host": ["{{baseUrl}}"],
+              "path": ["shifts"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "13. Biometrics & Trusted Devices",
+      "item": [
+        {
+          "name": "Get Hardware Devices",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/devices",
+              "host": ["{{baseUrl}}"],
+              "path": ["devices"]
+            }
+          }
+        },
+        {
+          "name": "Register Device",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Reception Biometric Scanner\",\n  \"deviceType\": \"BIOMETRIC\",\n  \"serialNumber\": \"ZKTECO-8899\",\n  \"ipAddress\": \"192.168.1.120\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/devices/register",
+              "host": ["{{baseUrl}}"],
+              "path": ["devices", "register"]
+            }
+          }
+        },
+        {
+          "name": "Device Heartbeat Ping",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/devices/:id/heartbeat",
+              "host": ["{{baseUrl}}"],
+              "path": ["devices", ":id", "heartbeat"],
+              "variable": [{ "key": "id", "value": "DEVICE_ID" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "14. Holiday Calendars",
+      "item": [
+        {
+          "name": "Get Organization Holidays",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/holidays",
+              "host": ["{{baseUrl}}"],
+              "path": ["holidays"]
+            }
+          }
+        },
+        {
+          "name": "Add Holiday",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Gandhi Jayanti\",\n  \"date\": \"2026-10-02\",\n  \"isOptional\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/holidays",
+              "host": ["{{baseUrl}}"],
+              "path": ["holidays"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "15. Workforce Analytics & Reports",
+      "item": [
+        {
+          "name": "Get Daily Attendance Report (Present, Late, Absent, WFH, Leave)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/reports/daily?date=2026-09-16",
+              "host": ["{{baseUrl}}"],
+              "path": ["reports", "daily"],
+              "query": [{ "key": "date", "value": "2026-09-16" }]
+            }
+          }
+        },
+        {
+          "name": "Get Monthly Overall Muster Roll Report",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/reports/monthly?month=9&year=2026",
+              "host": ["{{baseUrl}}"],
+              "path": ["reports", "monthly"],
+              "query": [
+                { "key": "month", "value": "9" },
+                { "key": "year", "value": "2026" }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

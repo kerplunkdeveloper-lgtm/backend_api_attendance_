@@ -3,7 +3,10 @@ const { evaluateAttendanceAgainstShift } = require("../utils/shiftCalculator");
 
 const create = async (req, res) => {
   try {
-    const shift = await shiftService.createShift(req.user.organizationId, req.body);
+    const shift = await shiftService.createShift(
+      req.user.organizationId,
+      req.body,
+    );
 
     return res.status(201).json({
       success: true,
@@ -56,7 +59,11 @@ const getById = async (req, res) => {
 const update = async (req, res) => {
   try {
     const { id } = req.params;
-    const updated = await shiftService.updateShift(req.user.organizationId, id, req.body);
+    const updated = await shiftService.updateShift(
+      req.user.organizationId,
+      id,
+      req.body,
+    );
 
     return res.json({
       success: true,
@@ -95,7 +102,7 @@ const assign = async (req, res) => {
     const result = await shiftService.assignEmployeesToShift(
       req.user.organizationId,
       id,
-      employeeIds
+      employeeIds,
     );
 
     return res.json({
@@ -116,21 +123,21 @@ const simulate = async (req, res) => {
   try {
     const { startTime, endTime, graceMinutes, checkIn, checkOut } = req.body;
 
-    const dummyShift = {
+    const simulatedShift = {
       startTime: startTime || "09:00",
       endTime: endTime || "18:00",
       graceMinutes: typeof graceMinutes === "number" ? graceMinutes : 10,
     };
 
     const metrics = evaluateAttendanceAgainstShift(
-      dummyShift,
+      simulatedShift,
       checkIn ? new Date(checkIn) : new Date(),
-      checkOut ? new Date(checkOut) : null
+      checkOut ? new Date(checkOut) : null,
     );
 
     return res.json({
       success: true,
-      shift: dummyShift,
+      shift: simulatedShift,
       metrics,
     });
   } catch (error) {

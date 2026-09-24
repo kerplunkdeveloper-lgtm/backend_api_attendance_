@@ -41,7 +41,7 @@ class DeviceService {
         deviceId,
         deviceModel: deviceModel || "Unknown Device",
         osVersion: osVersion || "Unknown OS",
-        isTrusted: true,
+        isTrusted: false,
       },
     });
 
@@ -83,19 +83,38 @@ class DeviceService {
    * Trust or revoke employee device
    */
   async updateDeviceTrust(deviceId, organizationId, isTrusted) {
-    return await prisma.employeeDevice.update({
-      where: { id: deviceId },
-      data: { isTrusted: Boolean(isTrusted) },
+    // Scoped by org — matching on the device id alone let a caller who knew a
+    // UUID flip trust on another tenant's device.
+    const trusted = isTrusted === true || isTrusted === 1 || (typeof isTrusted === "string" && ["true", "1"].includes(isTrusted.trim().toLowerCase()));
+    const result = await prisma.employeeDevice.updateMany({
+      where: { id: deviceId, organizationId },
+      data: { isTrusted: trusted },
     });
+
+    if (result.count === 0) {
+      const error = new Error("Device not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    return await prisma.employeeDevice.findUnique({ where: { id: deviceId } });
   }
 
   /**
    * Delete device registration
    */
   async deleteDevice(deviceId, organizationId) {
-    return await prisma.employeeDevice.delete({
-      where: { id: deviceId },
+    const result = await prisma.employeeDevice.deleteMany({
+      where: { id: deviceId, organizationId },
     });
+
+    if (result.count === 0) {
+      const error = new Error("Device not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    return { id: deviceId, deleted: true };
   }
 }
 

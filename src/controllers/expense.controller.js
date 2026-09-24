@@ -1,5 +1,6 @@
 const expenseService = require("../services/expense.service");
 const { uploadBuffer } = require("../config/cloudinary");
+const { assertSniffedType } = require("../middleware/upload.middleware");
 const prisma = require("../config/database");
 
 class ExpenseController {
@@ -9,16 +10,45 @@ class ExpenseController {
   async createClaim(req, res, next) {
     try {
       const organizationId = req.user.organizationId;
-      let employeeId = req.body.employeeId;
+      const isAdmin = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"].includes(
+        req.user.role,
+      );
 
-      // If employeeId not explicitly passed, look up from logged-in user
+      // Filing on someone else's behalf is an approver action. An employee who
+      // supplies a colleague's id is refused rather than silently redirected.
+      let employeeId = isAdmin ? req.body.employeeId : null;
+
       if (!employeeId) {
-        const emp = await prisma.employee.findFirst({
+        let emp = await prisma.employee.findFirst({
           where: { userId: req.user.id, organizationId },
         });
-        if (emp) {
-          employeeId = emp.id;
+
+        if (
+          emp &&
+          req.body.employeeId &&
+          req.body.employeeId !== emp.id &&
+          !isAdmin
+        ) {
+          return res.status(403).json({
+            success: false,
+            message: "You cannot submit an expense claim for another employee.",
+          });
         }
+
+        if (!emp && isAdmin) {
+          // If admin doesn't have an employee record yet, auto-provision one
+          emp = await prisma.employee.create({
+            data: {
+              organizationId,
+              userId: req.user.id,
+              employeeCode: `ADM-${Date.now().toString().slice(-4)}`,
+              firstName: req.user.email?.split("@")[0] || "Admin",
+              status: "ACTIVE",
+            },
+          });
+        }
+
+        if (emp) employeeId = emp.id;
       }
 
       if (!employeeId) {
@@ -33,23 +63,33 @@ class ExpenseController {
       let receiptPublicId = null;
 
       if (req.file) {
+        assertSniffedType(req.file);
         try {
           const uploadRes = await uploadBuffer(req.file.buffer, {
-            folder: `workpulse/expenses/${organizationId}`,
+            folder: `workpulse/${organizationId}/receipts`,
             resource_type: "auto",
           });
           receiptUrl = uploadRes.secure_url;
           receiptPublicId = uploadRes.public_id;
         } catch (uploadErr) {
-          console.warn("Cloudinary multer upload error:", uploadErr.message);
+          // Surfaced rather than swallowed: a claim saved without the receipt
+          // the user attached looks successful but fails review later.
+          return res.status(502).json({
+            success: false,
+            message: `Receipt upload failed: ${uploadErr.message}. The claim was not submitted.`,
+          });
         }
       }
 
-      const claim = await expenseService.createExpenseClaim(organizationId, employeeId, {
-        ...req.body,
-        receiptUrl,
-        receiptPublicId,
-      });
+      const claim = await expenseService.createExpenseClaim(
+        organizationId,
+        employeeId,
+        {
+          ...req.body,
+          receiptUrl,
+          receiptPublicId,
+        },
+      );
 
       return res.status(201).json({
         success: true,
@@ -67,7 +107,17 @@ class ExpenseController {
   async listOrganizationClaims(req, res, next) {
     try {
       const organizationId = req.user.organizationId;
-      const claims = await expenseService.getOrganizationExpenses(organizationId, req.query);
+      const isAdmin = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"].includes(req.user.role);
+
+      // If called by regular employee, safely return their own claims
+      if (!isAdmin) {
+        return this.listMyClaims(req, res, next);
+      }
+
+      const claims = await expenseService.getOrganizationExpenses(
+        organizationId,
+        req.query,
+      );
 
       return res.status(200).json({
         success: true,
@@ -95,7 +145,11 @@ class ExpenseController {
         });
       }
 
-      const claims = await expenseService.getEmployeeExpenses(organizationId, employee.id, req.query);
+      const claims = await expenseService.getEmployeeExpenses(
+        organizationId,
+        employee.id,
+        req.query,
+      );
 
       return res.status(200).json({
         success: true,
@@ -119,7 +173,10 @@ class ExpenseController {
         organizationId,
         claimId,
         reviewerUserId,
-        req.body
+        {
+          ...req.body,
+          reviewerRole: req.user.role,
+        },
       );
 
       return res.status(200).json({
@@ -139,16 +196,28 @@ class ExpenseController {
     try {
       const organizationId = req.user.organizationId;
       const claimId = req.params.id;
+      const isAdmin = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"].includes(req.user.role);
 
-      const employee = await prisma.employee.findFirst({
-        where: { userId: req.user.id, organizationId },
-      });
+      let employeeId = null;
+      if (!isAdmin) {
+        const employee = await prisma.employee.findFirst({
+          where: { userId: req.user.id, organizationId },
+        });
 
-      if (!employee) {
-        return res.status(404).json({ success: false, message: "Employee record not found." });
+        if (!employee) {
+          return res
+            .status(404)
+            .json({ success: false, message: "Employee record not found." });
+        }
+        employeeId = employee.id;
       }
 
-      const result = await expenseService.deleteExpenseClaim(organizationId, employee.id, claimId);
+      const result = await expenseService.deleteExpenseClaim(
+        organizationId,
+        employeeId,
+        claimId,
+        isAdmin,
+      );
       return res.status(200).json(result);
     } catch (error) {
       next(error);
@@ -161,7 +230,10 @@ class ExpenseController {
   async getSummary(req, res, next) {
     try {
       const organizationId = req.user.organizationId;
-      const summary = await expenseService.getExpenseSummary(organizationId, req.query);
+      const summary = await expenseService.getExpenseSummary(
+        organizationId,
+        req.query,
+      );
 
       return res.status(200).json({
         success: true,

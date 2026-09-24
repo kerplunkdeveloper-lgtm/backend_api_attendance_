@@ -1,4 +1,5 @@
 const attendanceService = require("../services/attendance.service");
+const { ok, paginated, fail } = require("../utils/response");
 
 class AttendanceController {
   /**
@@ -6,7 +7,16 @@ class AttendanceController {
    */
   async checkIn(req, res) {
     try {
-      const { latitude, longitude, accuracy, timestamp, employeeId, workMode, note } = req.body;
+      const {
+        latitude,
+        longitude,
+        accuracy,
+        timestamp,
+        employeeId,
+        workMode,
+        note,
+        deviceId,
+      } = req.body;
       const organizationId = req.user.organizationId;
       const userId = req.user.id;
 
@@ -20,6 +30,8 @@ class AttendanceController {
         timestamp,
         workMode,
         note,
+        actorRole: req.user.role,
+        deviceId: deviceId || req.headers["x-device-id"],
       });
 
       return res.status(201).json(result);
@@ -37,7 +49,16 @@ class AttendanceController {
    */
   async checkOut(req, res) {
     try {
-      const { latitude, longitude, accuracy, timestamp, employeeId, workMode, note } = req.body;
+      const {
+        latitude,
+        longitude,
+        accuracy,
+        timestamp,
+        employeeId,
+        workMode,
+        note,
+        deviceId,
+      } = req.body;
       const organizationId = req.user.organizationId;
       const userId = req.user.id;
 
@@ -51,6 +72,8 @@ class AttendanceController {
         timestamp,
         workMode,
         note,
+        actorRole: req.user.role,
+        deviceId: deviceId || req.headers["x-device-id"],
       });
 
       return res.status(200).json(result);
@@ -67,13 +90,14 @@ class AttendanceController {
    */
   async startBreak(req, res) {
     try {
-      const { latitude, longitude } = req.body;
+      const { latitude, longitude, timestamp } = req.body;
       const result = await attendanceService.startBreak({
         userId: req.user.id,
         employeeId: req.user.employee?.id,
         organizationId: req.user.organizationId,
         latitude,
         longitude,
+        timestamp,
       });
       return res.status(200).json(result);
     } catch (error) {
@@ -89,13 +113,14 @@ class AttendanceController {
    */
   async endBreak(req, res) {
     try {
-      const { latitude, longitude } = req.body;
+      const { latitude, longitude, timestamp } = req.body;
       const result = await attendanceService.endBreak({
         userId: req.user.id,
         employeeId: req.user.employee?.id,
         organizationId: req.user.organizationId,
         latitude,
         longitude,
+        timestamp,
       });
       return res.status(200).json(result);
     } catch (error) {
@@ -113,7 +138,7 @@ class AttendanceController {
     try {
       const result = await attendanceService.getTodayStatus(
         req.user.id,
-        req.user.organizationId
+        req.user.organizationId,
       );
       return res.status(200).json(result);
     } catch (error) {
@@ -132,14 +157,11 @@ class AttendanceController {
       const result = await attendanceService.getMyAttendance(
         req.user.id,
         req.user.organizationId,
-        req.query
+        req.query,
       );
-      return res.status(200).json(result);
+      return paginated(res, result);
     } catch (error) {
-      return res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return fail(res, error);
     }
   }
 
@@ -150,14 +172,11 @@ class AttendanceController {
     try {
       const result = await attendanceService.getAllAttendance(
         req.user.organizationId,
-        req.query
+        req.query,
       );
-      return res.status(200).json(result);
+      return paginated(res, result);
     } catch (error) {
-      return res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return fail(res, error);
     }
   }
 
@@ -169,14 +188,13 @@ class AttendanceController {
       const result = await attendanceService.getAttendanceSummary(
         req.user.organizationId,
         req.query.date,
-        req.query.branchId
+        req.query.branchId,
       );
-      return res.status(200).json(result);
+      // Spread first so the summary's own fields stay at the top level for
+      // existing readers, then expose the canonical `success`/`data` envelope.
+      return res.status(200).json({ ...result, success: true, data: result });
     } catch (error) {
-      return res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return fail(res, error);
     }
   }
 
@@ -196,9 +214,9 @@ class AttendanceController {
         page: req.query.page,
         limit: req.query.limit,
       });
-      return res.status(200).json(result);
+      return paginated(res, result);
     } catch (error) {
-      return res.status(error.statusCode || 500).json({ success: false, message: error.message });
+      return fail(res, error);
     }
   }
 
@@ -207,17 +225,22 @@ class AttendanceController {
    */
   async wfhCheckIn(req, res) {
     try {
-      const { timestamp, wfhNote } = req.body;
+      // Mobile sends `note`; web sends `wfhNote`.
+      const { timestamp, wfhNote, note, deviceId } = req.body;
       const result = await attendanceService.wfhCheckIn({
         userId: req.user.id,
         employeeId: req.user.employee?.id,
         organizationId: req.user.organizationId,
         timestamp,
-        wfhNote,
+        wfhNote: wfhNote || note,
+        actorRole: req.user.role,
+        deviceId: deviceId || req.headers["x-device-id"],
       });
       return res.status(201).json(result);
     } catch (error) {
-      return res.status(error.statusCode || 500).json({ success: false, message: error.message });
+      return res
+        .status(error.statusCode || 500)
+        .json({ success: false, message: error.message });
     }
   }
 
@@ -234,7 +257,9 @@ class AttendanceController {
       });
       return res.status(200).json(result);
     } catch (error) {
-      return res.status(error.statusCode || 500).json({ success: false, message: error.message });
+      return res
+        .status(error.statusCode || 500)
+        .json({ success: false, message: error.message });
     }
   }
 
@@ -245,7 +270,12 @@ class AttendanceController {
     try {
       const { employeeId, date, status, checkIn, checkOut, reason } = req.body;
       if (!employeeId || !date || !status) {
-        return res.status(400).json({ success: false, message: "employeeId, date, and status are required" });
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message: "employeeId, date, and status are required",
+          });
       }
       const result = await attendanceService.adminMarkAttendance({
         adminUserId: req.user.id,
@@ -259,7 +289,9 @@ class AttendanceController {
       });
       return res.status(200).json(result);
     } catch (error) {
-      return res.status(error.statusCode || 500).json({ success: false, message: error.message });
+      return res
+        .status(error.statusCode || 500)
+        .json({ success: false, message: error.message });
     }
   }
 
@@ -269,10 +301,14 @@ class AttendanceController {
   async markAbsent(req, res) {
     try {
       const notificationService = require("../services/notification.service");
-      const result = await notificationService.markAbsentEmployees(req.user.organizationId);
+      const result = await notificationService.markAbsentEmployees(
+        req.user.organizationId,
+      );
       return res.status(200).json(result);
     } catch (error) {
-      return res.status(error.statusCode || 500).json({ success: false, message: error.message });
+      return res
+        .status(error.statusCode || 500)
+        .json({ success: false, message: error.message });
     }
   }
   /**
@@ -283,16 +319,44 @@ class AttendanceController {
     try {
       const { punches } = req.body;
       if (!Array.isArray(punches) || punches.length === 0) {
-        return res.status(400).json({ success: false, message: "punches array is required and must not be empty" });
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message: "punches array is required and must not be empty",
+          });
+      }
+      if (punches.length > 100) {
+        return res.status(400).json({ success: false, message: "A maximum of 100 offline punches can be synced at once" });
+      }
+      const allowedTypes = new Set(["CHECK_IN", "CHECK_OUT", "BREAK_START", "BREAK_END", "WFH_CHECK_IN"]);
+      const now = Date.now();
+      const oldestAllowed = now - 31 * 24 * 60 * 60 * 1000;
+      for (const punch of punches) {
+        if (!punch || typeof punch !== "object" || !allowedTypes.has(punch.type)) {
+          return res.status(400).json({ success: false, message: "Each offline punch must have a valid type" });
+        }
+        const punchTime = Date.parse(punch.timestamp);
+        if (!Number.isFinite(punchTime) || punchTime < oldestAllowed || punchTime > now + 5 * 60 * 1000) {
+          return res.status(400).json({ success: false, message: "Offline punch timestamps must be valid and within the last 31 days" });
+        }
+        if (punch.latitude !== undefined && (!Number.isFinite(Number(punch.latitude)) || Number(punch.latitude) < -90 || Number(punch.latitude) > 90)) {
+          return res.status(400).json({ success: false, message: "Invalid offline punch latitude" });
+        }
+        if (punch.longitude !== undefined && (!Number.isFinite(Number(punch.longitude)) || Number(punch.longitude) < -180 || Number(punch.longitude) > 180)) {
+          return res.status(400).json({ success: false, message: "Invalid offline punch longitude" });
+        }
       }
       const result = await attendanceService.syncOfflinePunches(
         req.user.id,
         req.user.organizationId,
-        punches
+        punches,
       );
       return res.status(200).json(result);
     } catch (error) {
-      return res.status(error.statusCode || 500).json({ success: false, message: error.message });
+      return res
+        .status(error.statusCode || 500)
+        .json({ success: false, message: error.message });
     }
   }
 }

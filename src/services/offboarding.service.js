@@ -110,22 +110,31 @@ class OffboardingService {
     const isHrInitiated = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"].includes(initiatedByUser?.role);
     const initialStatus = isHrInitiated && exitType === "TERMINATION" ? "NOTICE_PERIOD" : "RESIGNED";
 
-    // 1. Create Exit Record
-    const exitRecord = await prisma.employeeExit.create({
-      data: {
-        organizationId,
-        employeeId,
-        exitType,
-        status: initialStatus,
-        resignationDate: resDate,
-        preferredLastWorkingDate: lwd,
-        approvedLastWorkingDate: isHrInitiated ? lwd : null,
-        noticePeriodDays: noticeDays,
-        reason: reason.trim(),
-        employeeComments: employeeComments ? employeeComments.trim() : null,
-        hrReviewerId: isHrInitiated ? initiatedByUser.id : null,
-        hrReviewedAt: isHrInitiated ? new Date() : null,
-      },
+    // 1. Create Exit Record and map notice-period employees
+    const exitRecord = await prisma.$transaction(async (tx) => {
+      const created = await tx.employeeExit.create({
+        data: {
+          organizationId,
+          employeeId,
+          exitType,
+          status: initialStatus,
+          resignationDate: resDate,
+          preferredLastWorkingDate: lwd,
+          approvedLastWorkingDate: isHrInitiated ? lwd : null,
+          noticePeriodDays: noticeDays,
+          reason: reason.trim(),
+          employeeComments: employeeComments ? employeeComments.trim() : null,
+          hrReviewerId: isHrInitiated ? initiatedByUser.id : null,
+          hrReviewedAt: isHrInitiated ? new Date() : null,
+        },
+      });
+      if (initialStatus === "NOTICE_PERIOD") {
+        await tx.employee.update({
+          where: { id: employeeId },
+          data: { status: "NOTICE_PERIOD" },
+        });
+      }
+      return created;
     });
 
     // 2. Auto-populate Departmental Clearance Tasks
@@ -230,18 +239,25 @@ class OffboardingService {
       ? new Date(approvedLastWorkingDate)
       : exit.preferredLastWorkingDate || new Date();
 
-    const updated = await prisma.employeeExit.update({
-      where: { id: exitId },
-      data: {
-        status: "NOTICE_PERIOD",
-        approvedLastWorkingDate: approvedLwd,
-        noticePeriodDays: noticePeriodDays !== undefined ? Number(noticePeriodDays) : exit.noticePeriodDays,
-        isNoticeWaived: Boolean(isNoticeWaived),
-        waivedNoticeDays: Number(waivedNoticeDays) || 0,
-        hrNotes: hrNotes ? hrNotes.trim() : null,
-        hrReviewerId: reviewerUser.id,
-        hrReviewedAt: new Date(),
-      },
+    const updated = await prisma.$transaction(async (tx) => {
+      const next = await tx.employeeExit.update({
+        where: { id: exitId },
+        data: {
+          status: "NOTICE_PERIOD",
+          approvedLastWorkingDate: approvedLwd,
+          noticePeriodDays: noticePeriodDays !== undefined ? Number(noticePeriodDays) : exit.noticePeriodDays,
+          isNoticeWaived: Boolean(isNoticeWaived),
+          waivedNoticeDays: Number(waivedNoticeDays) || 0,
+          hrNotes: hrNotes ? hrNotes.trim() : null,
+          hrReviewerId: reviewerUser.id,
+          hrReviewedAt: new Date(),
+        },
+      });
+      await tx.employee.update({
+        where: { id: exit.employeeId },
+        data: { status: "NOTICE_PERIOD" },
+      });
+      return next;
     });
 
     if (exit.employee?.user?.id) {
@@ -331,6 +347,7 @@ class OffboardingService {
             shift: true,
             salaryStructure: true,
             leaveBalances: { include: { leaveType: true } },
+            assignedAssets: true,
           },
         },
         clearances: { orderBy: [{ department: "asc" }, { createdAt: "asc" }] },

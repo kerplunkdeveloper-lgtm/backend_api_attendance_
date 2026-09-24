@@ -69,7 +69,16 @@ class WhatsAppService {
       }
     }
 
-    // Simulation / Dev Fallback
+    if (process.env.NODE_ENV === "production") {
+      console.error("[WhatsAppService] Twilio WhatsApp delivery is not configured.");
+      return {
+        success: false,
+        error: "WhatsApp delivery is not configured",
+        provider: "UNAVAILABLE",
+      };
+    }
+
+    // Development-only simulation fallback
     console.log("────────────────────────────────────────────────────────────");
     console.log(`[WhatsAppService:SIMULATION] Recipient: ${formattedRecipient}`);
     console.log(`[WhatsAppService:SIMULATION] Message:\n${message}`);

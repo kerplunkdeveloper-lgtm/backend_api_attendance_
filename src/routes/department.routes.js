@@ -1,6 +1,9 @@
 const express = require("express");
 const departmentController = require("../controllers/department.controller");
-const { authenticate, authorizeRoles } = require("../middleware/auth.middleware");
+const {
+  authenticate,
+  authorizeRoles,
+} = require("../middleware/auth.middleware");
 
 const router = express.Router();
 
@@ -16,21 +19,21 @@ router.get("/:id", departmentController.getById);
 router.post(
   "/",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
-  departmentController.create
+  departmentController.create,
 );
 
 // 4. PUT /api/departments/:id - Update department
 router.put(
   "/:id",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
-  departmentController.update
+  departmentController.update,
 );
 
 // 5. DELETE /api/departments/:id - Delete department
 router.delete(
   "/:id",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
-  departmentController.remove
+  departmentController.remove,
 );
 
 module.exports = router;

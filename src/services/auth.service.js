@@ -5,8 +5,30 @@ const {
   generateAccessToken,
   generateRefreshToken,
   verifyRefreshToken,
+  generatePasswordResetToken,
+  verifyPasswordResetToken,
 } = require("../utils/jwt");
 const emailService = require("./email.service");
+const { organizationWithSubscription } = require("../utils/prismaSelects");
+const { resolveAvatarUrl } = require("../utils/avatar");
+
+const MIN_PASSWORD_LENGTH = 8;
+
+/**
+ * Returns an error message when the password is unacceptable, or null when it passes.
+ */
+const validatePasswordStrength = (password) => {
+  if (!password || typeof password !== "string") {
+    return "Password is required.";
+  }
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    return `Password must be at least ${MIN_PASSWORD_LENGTH} characters long.`;
+  }
+  if (!/[a-zA-Z]/.test(password) || !/[0-9]/.test(password)) {
+    return "Password must contain at least one letter and one number.";
+  }
+  return null;
+};
 
 const SUBSCRIPTION_PLANS = [
   {
@@ -15,7 +37,7 @@ const SUBSCRIPTION_PLANS = [
     badge: "14-Day Free Trial",
     priceMonthly: 0,
     priceAnnual: 0,
-    currency: "USD",
+    currency: "INR",
     maxEmployees: 10,
     maxBranches: 1,
     description: "Full access to try WorkPulse with your core team for 14 days.",
@@ -34,9 +56,9 @@ const SUBSCRIPTION_PLANS = [
     id: "STARTER",
     name: "Starter",
     badge: "For Growing Teams",
-    priceMonthly: 29,
-    priceAnnual: 24,
-    currency: "USD",
+    priceMonthly: 2499,
+    priceAnnual: 24990,
+    currency: "INR",
     maxEmployees: 25,
     maxBranches: 2,
     description: "Essential attendance, geofencing, and leave management for small businesses.",
@@ -55,9 +77,9 @@ const SUBSCRIPTION_PLANS = [
     id: "PROFESSIONAL",
     name: "Professional",
     badge: "Most Popular",
-    priceMonthly: 79,
-    priceAnnual: 64,
-    currency: "USD",
+    priceMonthly: 6999,
+    priceAnnual: 69990,
+    currency: "INR",
     maxEmployees: 100,
     maxBranches: 10,
     description: "Complete workforce platform with shift overrides, comp-off, overtime, and payroll.",
@@ -77,9 +99,9 @@ const SUBSCRIPTION_PLANS = [
     id: "ENTERPRISE",
     name: "Enterprise",
     badge: "For Large Organizations",
-    priceMonthly: 199,
-    priceAnnual: 160,
-    currency: "USD",
+    priceMonthly: 16999,
+    priceAnnual: 169990,
+    currency: "INR",
     maxEmployees: 1000,
     maxBranches: 50,
     description: "Unlimited power, dedicated infrastructure, custom policies, and REST API access.",
@@ -113,7 +135,7 @@ const PLAN_CONFIGS = {
   STARTER: {
     plan: "STARTER",
     status: "ACTIVE",
-    price: 29,
+    price: 2499,
     maxEmployees: 25,
     maxBranches: 2,
     periodDays: 30,
@@ -125,7 +147,7 @@ const PLAN_CONFIGS = {
   PROFESSIONAL: {
     plan: "PROFESSIONAL",
     status: "ACTIVE",
-    price: 79,
+    price: 6999,
     maxEmployees: 100,
     maxBranches: 10,
     periodDays: 30,
@@ -137,7 +159,7 @@ const PLAN_CONFIGS = {
   ENTERPRISE: {
     plan: "ENTERPRISE",
     status: "ACTIVE",
-    price: 199,
+    price: 16999,
     maxEmployees: 1000,
     maxBranches: 50,
     periodDays: 30,
@@ -148,29 +170,34 @@ const PLAN_CONFIGS = {
   },
 };
 
+/**
+ * Public self-serve signup. This always provisions a NEW workspace and makes the
+ * caller its COMPANY_ADMIN. Joining an existing organization is only possible via
+ * an authenticated invite (POST /api/employees/invite) — accepting an
+ * organizationId or role from an anonymous request body would let anyone who
+ * learns another tenant's id create an admin account inside it.
+ */
 const register = async ({
   email,
   password,
   organizationName,
-  organizationId,
   firstName,
   lastName,
-  role,
   employeeCode,
   subscriptionPlan,
   billingCycle,
 }) => {
   const cleanEmail = email.trim().toLowerCase();
 
-  const existingUser = await prisma.user.findFirst({
-    where: {
-      email: { equals: cleanEmail, mode: "insensitive" },
-    },
-  });
-
-  if (existingUser) {
-    throw new Error("User with this email already exists");
+  const passwordError = validatePasswordStrength(password);
+  if (passwordError) {
+    const err = new Error(passwordError);
+    err.statusCode = 400;
+    throw err;
   }
+
+  // Email is unique per organization, not globally. A consultant can belong
+  // to more than one workspace with the same address.
 
   // Determine subscription plan configuration
   const chosenPlanKey = (subscriptionPlan || "FREE_TRIAL").toUpperCase();
@@ -183,25 +210,20 @@ const register = async ({
   const currentPeriodEnd = new Date(now.getTime() + periodDays * 24 * 60 * 60 * 1000);
   const calculatedPrice = cycle === "ANNUAL" ? planMeta.price * 10 : planMeta.price;
 
-  let finalOrgId = organizationId;
+  let finalOrgId;
 
-  if (finalOrgId) {
-    const existingOrg = await prisma.organization.findUnique({
-      where: { id: finalOrgId },
-    });
-    if (!existingOrg) {
-      throw new Error("Specified organization not found");
-    }
-  } else {
+  {
+    const isTrial = planMeta.plan === "FREE_TRIAL";
     const org = await prisma.organization.create({
       data: {
         name: organizationName || "Default Organization",
         subscriptionPlan: planMeta.plan,
         subscriptionStatus: planMeta.status,
         trialEndsAt,
-        subscriptionExpiresAt: planMeta.plan === "FREE_TRIAL" ? trialEndsAt : currentPeriodEnd,
+        subscriptionExpiresAt: isTrial ? trialEndsAt : currentPeriodEnd,
         maxEmployees: planMeta.maxEmployees,
-        planLocked: true, // locked until admin enters the unlock code
+        planLocked: false, // New workspaces start unlocked and ready to test
+        planActivatedAt: now,
         subscription: {
           create: {
             plan: planMeta.plan,
@@ -221,6 +243,52 @@ const register = async ({
       },
     });
     finalOrgId = org.id;
+
+    // Automatically provision default branch, shift, departments, and leave types for this fresh organization
+    try {
+      await prisma.branch.create({
+        data: {
+          organizationId: finalOrgId,
+          name: "Main Head Office",
+          address: "100 Corporate Boulevard, Business District",
+          latitude: 11.9344,
+          longitude: 79.8358,
+          radiusMeters: 300,
+        },
+      });
+
+      await prisma.shift.create({
+        data: {
+          organizationId: finalOrgId,
+          name: "General Shift (09:00 - 18:00)",
+          startTime: "09:00",
+          endTime: "18:00",
+          graceMinutes: 15,
+          workingDays: "1,2,3,4,5,6",
+        },
+      });
+
+      const defaultDepts = ["Management", "Human Resources", "Engineering", "Operations", "Sales"];
+      for (const dName of defaultDepts) {
+        await prisma.department.create({
+          data: { organizationId: finalOrgId, name: dName },
+        }).catch(() => {});
+      }
+
+      const defaultLeaveTypes = [
+        { name: "Casual Leave", code: "CL", daysAllowed: 12, isPaid: true },
+        { name: "Sick Leave", code: "SL", daysAllowed: 10, isPaid: true },
+        { name: "Earned / Annual Leave", code: "AL", daysAllowed: 15, isPaid: true },
+        { name: "Unpaid Leave (LWP)", code: "LWP", daysAllowed: 30, isPaid: false },
+      ];
+      for (const lt of defaultLeaveTypes) {
+        await prisma.leaveType.create({
+          data: { ...lt, organizationId: finalOrgId },
+        }).catch(() => {});
+      }
+    } catch (provisionErr) {
+      console.warn("[Register] Default org entities provisioning warning:", provisionErr.message);
+    }
   }
 
   const salt = await bcrypt.genSalt(10);
@@ -241,7 +309,9 @@ const register = async ({
     data: { unlockCode: unlockCodeHash },
   });
 
-  const finalRole = role || "COMPANY_ADMIN";
+  const finalRole = "COMPANY_ADMIN";
+
+  const registerAvatar = resolveAvatarUrl({ firstName, lastName, employeeCode });
 
   const user = await prisma.user.create({
     data: {
@@ -249,6 +319,7 @@ const register = async ({
       passwordHash,
       role: finalRole,
       organizationId: finalOrgId,
+      avatarUrl: registerAvatar,
       ...(firstName
         ? {
             employee: {
@@ -258,17 +329,14 @@ const register = async ({
                   employeeCode || `EMP-${Date.now().toString().slice(-6)}`,
                 firstName,
                 lastName: lastName || null,
+                avatarUrl: registerAvatar,
               },
             },
           }
         : {}),
     },
     include: {
-      organization: {
-        include: {
-          subscription: true,
-        },
-      },
+      organization: organizationWithSubscription,
          employee: true,
     },
   });
@@ -301,12 +369,14 @@ const register = async ({
     }
   ).catch((err) => console.warn("[Register] Unlock code email failed:", err.message));
 
-  // Log unlock code to console for dev / simulation mode
-  console.log("────────────────────────────────────────────────────────────");
-  console.log(`[Register] Organization: ${organizationName || "Default Organization"}`);
-  console.log(`[Register] Admin Email : ${cleanEmail}`);
-  console.log(`[Register] UNLOCK CODE : ${unlockCode}`);
-  console.log("────────────────────────────────────────────────────────────");
+  // Echo the unlock code locally so developers can complete the flow without a
+  // working mail provider. Never do this in production — logs are not a secret store.
+  if (process.env.NODE_ENV !== "production") {
+    console.log("────────────────────────────────────────────────────────────");
+    console.log(`[Register] Organization: ${organizationName || "Default Organization"}`);
+    console.log(`[Register] Admin Email : ${cleanEmail}`);
+    console.log("────────────────────────────────────────────────────────────");
+  }
 
   return {
     accessToken,
@@ -319,44 +389,74 @@ const register = async ({
       organizationId: user.organizationId,
       organization: user.organization,
       employee: user.employee,
-      planLocked: true,
+      planLocked: user.organization?.planLocked ?? false,
       mustChangePassword: false,
     },
   };
 };
 
 
-const login = async (email, password, client = null) => {
+const login = async (email, password, client = null, employeeCode = null) => {
+  // Mobile clients send employeeCode when the identifier has no '@'. Either
+  // form is accepted — the previous implementation only read `email`.
   const cleanEmail = email ? email.trim().toLowerCase() : "";
+  const cleanCode = employeeCode ? String(employeeCode).trim() : "";
 
-  const user = await prisma.user.findFirst({
-    where: {
-      email: { equals: cleanEmail, mode: "insensitive" },
-    },
-    include: {
-      organization: {
-        include: {
-          subscription: true,
-        },
-      },
-      employee: {
-        include: {
-          branch: true,
-          shift: true,
-          department: true,
-        },
+  const loginInclude = {
+    organization: organizationWithSubscription,
+    employee: {
+      include: {
+        branch: true,
+        shift: true,
+        department: true,
       },
     },
+  };
+
+  const candidates = await prisma.user.findMany({
+    where: cleanEmail
+      ? { email: { equals: cleanEmail, mode: "insensitive" } }
+      : cleanCode
+        ? { employee: { employeeCode: { equals: cleanCode, mode: "insensitive" }, deletedAt: null } }
+        : { id: "__never__" },
+    include: loginInclude,
   });
 
-  if (!user) {
-    throw new Error("Invalid email or password");
+  const matches = [];
+  for (const candidate of candidates) {
+    const passwordValid = await bcrypt.compare(password, candidate.passwordHash);
+    if (passwordValid) matches.push(candidate);
   }
 
-  const passwordValid = await bcrypt.compare(password, user.passwordHash);
-
-  if (!passwordValid) {
+  if (matches.length === 0) {
     throw new Error("Invalid email or password");
+  }
+  if (matches.length > 1) {
+    const error = new Error(
+      "This login matches more than one workspace. Sign in with your employee code, or ask your administrator for the correct workspace."
+    );
+    error.statusCode = 409;
+    throw error;
+  }
+
+  const user = matches[0];
+
+  if (user.isActive === false) {
+    const error = new Error("This account has been deactivated. Contact your administrator.");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  if (user.organization?.deletedAt) {
+    const error = new Error("This organization is no longer active.");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  if (user.employee?.deletedAt) {
+    const error = new Error("This employee profile has been removed. Contact your administrator.");
+    error.statusCode = 403;
+    throw error;
   }
 
   // Web access restriction: Only Admins and Managers can use the web app. Employees must use mobile app.
@@ -383,6 +483,14 @@ const login = async (email, password, client = null) => {
   await prisma.refreshToken.create({
     data: { userId: user.id, token: refreshToken, expiresAt },
   });
+
+  // Update lastLoginAt in background without blocking login response latency
+  prisma.user
+    .update({
+      where: { id: user.id },
+      data: { lastLoginAt: new Date() },
+    })
+    .catch((err) => console.warn("[Auth] Failed to update lastLoginAt:", err.message));
 
   return {
     accessToken,
@@ -419,6 +527,9 @@ const refreshAccessToken = async (refreshToken) => {
     where: { token: refreshToken },
   });
   if (!storedToken) throw new Error("Refresh token has been revoked. Please log in again.");
+  if (storedToken.userId !== decoded.userId) {
+    throw new Error("Refresh token does not belong to this user. Please log in again.");
+  }
   if (storedToken.expiresAt < new Date()) {
     await prisma.refreshToken.delete({ where: { token: refreshToken } });
     throw new Error("Refresh token has expired. Please log in again.");
@@ -427,11 +538,7 @@ const refreshAccessToken = async (refreshToken) => {
   const user = await prisma.user.findUnique({
     where: { id: decoded.userId },
     include: {
-      organization: {
-        include: {
-          subscription: true,
-        },
-      },
+      organization: organizationWithSubscription,
       employee: {
         include: {
           branch: true,
@@ -445,6 +552,21 @@ const refreshAccessToken = async (refreshToken) => {
   if (!user) {
     throw new Error("User no longer exists");
   }
+  if (user.isActive === false) {
+    const error = new Error("This account has been deactivated.");
+    error.statusCode = 403;
+    throw error;
+  }
+  if (user.organization?.deletedAt) {
+    const error = new Error("This organization is no longer active.");
+    error.statusCode = 403;
+    throw error;
+  }
+  if (user.employee?.deletedAt) {
+    const error = new Error("This employee record is no longer active.");
+    error.statusCode = 403;
+    throw error;
+  }
 
   const tokenPayload = {
     userId: user.id,
@@ -454,9 +576,21 @@ const refreshAccessToken = async (refreshToken) => {
 
   const newAccessToken = generateAccessToken(tokenPayload);
 
+  // Rotate the refresh token: revoke the presented token and issue a fresh one
+  // so a leaked token is only usable once and replay attempts are rejected.
+  const refreshExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  const newRefreshToken = generateRefreshToken(tokenPayload);
+  await prisma.$transaction([
+    prisma.refreshToken.delete({ where: { token: refreshToken } }),
+    prisma.refreshToken.create({
+      data: { userId: user.id, token: newRefreshToken, expiresAt: refreshExpiresAt },
+    }),
+  ]);
+
   return {
     accessToken: newAccessToken,
     token: newAccessToken,
+    refreshToken: newRefreshToken,
     user: {
       id: user.id,
       email: user.email,
@@ -474,11 +608,7 @@ const getMe = async (userId) => {
   const user = await prisma.user.findUnique({
     where: { id: userId },
     include: {
-      organization: {
-        include: {
-          subscription: true,
-        },
-      },
+      organization: organizationWithSubscription,
       employee: {
         include: {
           branch: true,
@@ -538,15 +668,17 @@ const activatePlan = async (organizationId, enteredCode) => {
     return { success: true, message: "Plan is already activated.", alreadyActive: true };
   }
 
-  if (!org.unlockCode) {
-    const err = new Error("No unlock code has been issued for this organization. Please contact support.");
-    err.statusCode = 400;
-    throw err;
+  let isValid = false;
+  if (org.unlockCode) {
+    try {
+      isValid = await bcrypt.compare(enteredCode.trim(), org.unlockCode);
+    } catch {
+      isValid = false;
+    }
   }
 
-  const isValid = await bcrypt.compare(enteredCode.trim(), org.unlockCode);
   if (!isValid) {
-    const err = new Error("Incorrect unlock code. Please check your registration email and try again.");
+    const err = new Error("Incorrect unlock code. Check the activation email sent to your workspace owner.");
     err.statusCode = 400;
     throw err;
   }
@@ -561,6 +693,75 @@ const activatePlan = async (organizationId, enteredCode) => {
   });
 
   return { success: true, message: "🎉 Plan activated successfully! Your dashboard is now fully unlocked." };
+};
+
+/**
+ * Upgrade or switch organization subscription plan tier.
+ */
+const upgradePlan = async (organizationId, newPlan, billingCycle = "MONTHLY") => {
+  const chosenPlanKey = (newPlan || "PROFESSIONAL").toUpperCase();
+  const planMeta = PLAN_CONFIGS[chosenPlanKey] || PLAN_CONFIGS.PROFESSIONAL;
+  const cycle = (billingCycle || "MONTHLY").toUpperCase() === "ANNUAL" ? "ANNUAL" : "MONTHLY";
+
+  const now = new Date();
+  const periodDays = cycle === "ANNUAL" ? 365 : 30;
+  const currentPeriodEnd = new Date(now.getTime() + periodDays * 24 * 60 * 60 * 1000);
+  const calculatedPrice = cycle === "ANNUAL" ? planMeta.price * 10 : planMeta.price;
+
+  const org = await prisma.organization.update({
+    where: { id: organizationId },
+    data: {
+      subscriptionPlan: planMeta.plan,
+      subscriptionStatus: "ACTIVE",
+      planLocked: false,
+      subscriptionExpiresAt: currentPeriodEnd,
+      maxEmployees: planMeta.maxEmployees,
+      planActivatedAt: now,
+    },
+    include: { subscription: true },
+  });
+
+  if (org.subscription) {
+    await prisma.subscription.update({
+      where: { id: org.subscription.id },
+      data: {
+        plan: planMeta.plan,
+        status: "ACTIVE",
+        billingCycle: cycle,
+        price: calculatedPrice,
+        maxEmployees: planMeta.maxEmployees,
+        maxBranches: planMeta.maxBranches,
+        hasGeofence: planMeta.hasGeofence,
+        hasPayroll: planMeta.hasPayroll,
+        hasShiftPlanner: planMeta.hasShiftPlanner,
+        hasApiAccess: planMeta.hasApiAccess,
+        currentPeriodEnd,
+      },
+    });
+  } else {
+    await prisma.subscription.create({
+      data: {
+        organizationId,
+        plan: planMeta.plan,
+        status: "ACTIVE",
+        billingCycle: cycle,
+        price: calculatedPrice,
+        maxEmployees: planMeta.maxEmployees,
+        maxBranches: planMeta.maxBranches,
+        hasGeofence: planMeta.hasGeofence,
+        hasPayroll: planMeta.hasPayroll,
+        hasShiftPlanner: planMeta.hasShiftPlanner,
+        hasApiAccess: planMeta.hasApiAccess,
+        currentPeriodEnd,
+      },
+    });
+  }
+
+  return {
+    success: true,
+    message: `Subscription successfully upgraded to ${planMeta.plan}!`,
+    organization: org,
+  };
 };
 
 /**
@@ -605,15 +806,239 @@ const changePassword = async (userId, currentPassword, newPassword) => {
   return { success: true, message: "Password changed successfully. Please log in with your new password." };
 };
 
+/**
+ * Initiates forgot password flow:
+ * 1. Checks if user exists by email
+ * 2. Generates single-use JWT with passwordHash version
+ * 3. Dispatches branded email with reset link
+ */
+const forgotPassword = async (email) => {
+  if (!email || !email.trim()) {
+    const err = new Error("Corporate email address is required.");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const normalizedEmail = email.toLowerCase().trim();
+  const users = await prisma.user.findMany({
+    where: { email: { equals: normalizedEmail, mode: "insensitive" }, isActive: true },
+    include: { employee: true, organization: organizationWithSubscription },
+  });
+
+  // Always return identical success message to prevent user enumeration attacks
+  const genericMessage =
+    "If that corporate email address is registered in WorkPulse, you will receive password reset instructions shortly.";
+
+  if (!users.length) {
+    return {
+      success: true,
+      message: genericMessage,
+    };
+  }
+
+  const frontendUrl = (process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/+$/, "");
+  const resetUrls = [];
+  let lastEmailResult = null;
+
+  for (const user of users) {
+    const resetToken = generatePasswordResetToken({
+      userId: user.id,
+      email: user.email,
+      type: "PASSWORD_RESET",
+      v: user.passwordHash.slice(-10),
+    });
+    const resetUrl = `${frontendUrl}/reset-password?token=${encodeURIComponent(resetToken)}`;
+    const userName = user.employee
+      ? `${user.employee.firstName} ${user.employee.lastName || ""}`.trim()
+      : user.email.split("@")[0];
+
+    lastEmailResult = await emailService.sendPasswordResetEmail(user.email, userName, {
+      resetUrl,
+      expiresIn: "60 minutes",
+      organizationName: user.organization?.name,
+    });
+    resetUrls.push(resetUrl);
+  }
+
+  return {
+    success: true,
+    message: genericMessage,
+    ...(process.env.NODE_ENV !== "production" || process.env.FRONTEND_URL?.includes("localhost") || lastEmailResult?.simulated
+      ? { resetUrl: resetUrls[0], resetUrls, simulated: lastEmailResult?.simulated || false }
+      : {}),
+  };
+};
+
+/**
+ * Completes password reset:
+ * 1. Validates and decodes resetToken
+ * 2. Verifies user exists and token has not been reused
+ * 3. Hashes new password and updates DB
+ * 4. Revokes active refresh tokens to terminate existing sessions
+ */
+const resetPassword = async (token, newPassword) => {
+  if (!token) {
+    const err = new Error("Password reset token is missing or invalid.");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  if (!newPassword || newPassword.length < 8) {
+    const err = new Error("New password must be at least 8 characters long.");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  let decoded;
+  try {
+    decoded = verifyPasswordResetToken(token);
+  } catch (err) {
+    const error = new Error("The password reset link is invalid or has expired. Please request a new one.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (decoded.type !== "PASSWORD_RESET" || !decoded.userId || !decoded.v) {
+    const error = new Error("Malformed password reset token.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: decoded.userId },
+  });
+
+  if (!user) {
+    const error = new Error("User associated with this reset request no longer exists.");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  // Token freshness check: ensures token has not already been used to change password
+  if (user.passwordHash.slice(-10) !== decoded.v) {
+    const error = new Error(
+      "This password reset link has already been used. Please submit a new forgot password request."
+    );
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const salt = await bcrypt.genSalt(10);
+  const newHash = await bcrypt.hash(newPassword, salt);
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      passwordHash: newHash,
+      mustChangePassword: false,
+    },
+  });
+
+  // Revoke all existing refresh tokens for security
+  await prisma.refreshToken.deleteMany({
+    where: { userId: user.id },
+  });
+
+  return {
+    success: true,
+    message: "Password reset successful! You can now log in with your new password.",
+  };
+};
+
+const loginWithGoogle = async (idToken, client = null) => {
+  if (!idToken) {
+    const error = new Error("Google idToken is required");
+    error.statusCode = 400;
+    throw error;
+  }
+  const expectedAud = (process.env.GOOGLE_CLIENT_ID || "").trim();
+  if (!expectedAud) {
+    const error = new Error("Google sign-in is not configured.");
+    error.statusCode = 503;
+    throw error;
+  }
+  const res = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`);
+  const profile = await res.json();
+  if (!profile.email || (profile.email_verified !== "true" && profile.email_verified !== true)) {
+    const error = new Error("Google token is invalid or email is not verified");
+    error.statusCode = 401;
+    throw error;
+  }
+  if (profile.aud !== expectedAud) {
+    const error = new Error("Google token audience is invalid.");
+    error.statusCode = 401;
+    throw error;
+  }
+  const cleanEmail = String(profile.email).trim().toLowerCase();
+  const users = await prisma.user.findMany({
+    where: { email: { equals: cleanEmail, mode: "insensitive" } },
+    include: {
+      organization: organizationWithSubscription,
+      employee: { include: { branch: true, shift: true, department: true } },
+    },
+  });
+  if (users.length === 0) {
+    const error = new Error("No WorkPulse account uses this Google email. Register or ask HR to invite you first.");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (users.length > 1) {
+    const error = new Error("This Google email matches more than one workspace. Sign in with email and password.");
+    error.statusCode = 409;
+    throw error;
+  }
+  const user = users[0];
+  if (user.isActive === false) {
+    const error = new Error("This account has been deactivated.");
+    error.statusCode = 403;
+    throw error;
+  }
+  if (client === "web" && user.role === "EMPLOYEE") {
+    const error = new Error("Web access is for admins and managers. Use the mobile app.");
+    error.statusCode = 403;
+    throw error;
+  }
+  if (profile.sub && !user.googleSub) {
+    await prisma.user.update({ where: { id: user.id }, data: { googleSub: profile.sub } });
+  }
+  const tokenPayload = { userId: user.id, organizationId: user.organizationId, role: user.role };
+  const accessToken = generateAccessToken(tokenPayload);
+  const refreshToken = generateRefreshToken(tokenPayload);
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  await prisma.$transaction([
+    prisma.refreshToken.create({ data: { userId: user.id, token: refreshToken, expiresAt } }),
+    prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } }),
+  ]);
+  return {
+    accessToken,
+    refreshToken,
+    token: accessToken,
+    user: {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      organizationId: user.organizationId,
+      organization: user.organization,
+      employee: user.employee,
+      planLocked: user.organization?.planLocked ?? false,
+      mustChangePassword: user.mustChangePassword ?? false,
+    },
+  };
+};
+
 module.exports = {
   register,
   login,
+  loginWithGoogle,
   refreshAccessToken,
   logout,
   getMe,
   getSubscriptionPlans,
   activatePlan,
+  upgradePlan,
   changePassword,
+  forgotPassword,
+  resetPassword,
   SUBSCRIPTION_PLANS,
   PLAN_CONFIGS,
 };

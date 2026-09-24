@@ -2,7 +2,10 @@ const branchService = require("../services/branch.service");
 
 const create = async (req, res) => {
   try {
-    const branch = await branchService.createBranch(req.user.organizationId, req.body);
+    const branch = await branchService.createBranch(
+      req.user.organizationId,
+      req.body,
+    );
 
     return res.status(201).json({
       success: true,
@@ -37,7 +40,10 @@ const list = async (req, res) => {
 const getById = async (req, res) => {
   try {
     const { id } = req.params;
-    const branch = await branchService.getBranchById(req.user.organizationId, id);
+    const branch = await branchService.getBranchById(
+      req.user.organizationId,
+      id,
+    );
 
     return res.json({
       success: true,
@@ -55,7 +61,11 @@ const getById = async (req, res) => {
 const update = async (req, res) => {
   try {
     const { id } = req.params;
-    const updated = await branchService.updateBranch(req.user.organizationId, id, req.body);
+    const updated = await branchService.updateBranch(
+      req.user.organizationId,
+      id,
+      req.body,
+    );
 
     return res.json({
       success: true,

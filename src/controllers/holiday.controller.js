@@ -7,7 +7,10 @@ class HolidayController {
   async create(req, res) {
     try {
       const organizationId = req.user.organizationId;
-      const holiday = await holidayService.createHoliday(organizationId, req.body);
+      const holiday = await holidayService.createHoliday(
+        organizationId,
+        req.body,
+      );
       return res.status(201).json({
         success: true,
         message: "Holiday created successfully",
@@ -28,7 +31,10 @@ class HolidayController {
     try {
       const organizationId = req.user.organizationId;
       const { holidays } = req.body;
-      const results = await holidayService.bulkCreateHolidays(organizationId, holidays);
+      const results = await holidayService.bulkCreateHolidays(
+        organizationId,
+        holidays,
+      );
       return res.status(201).json({
         success: true,
         message: `Successfully imported ${results.created} holiday(s). Skipped: ${results.skipped}`,
@@ -48,7 +54,10 @@ class HolidayController {
   async list(req, res) {
     try {
       const organizationId = req.user.organizationId;
-      const holidays = await holidayService.getHolidays(organizationId, req.query);
+      const holidays = await holidayService.getHolidays(
+        organizationId,
+        req.query,
+      );
       return res.status(200).json({
         success: true,
         data: holidays,
@@ -68,7 +77,11 @@ class HolidayController {
     try {
       const organizationId = req.user.organizationId;
       const { id } = req.params;
-      const updated = await holidayService.updateHoliday(organizationId, id, req.body);
+      const updated = await holidayService.updateHoliday(
+        organizationId,
+        id,
+        req.body,
+      );
       return res.status(200).json({
         success: true,
         message: "Holiday updated successfully",
@@ -107,7 +120,11 @@ class HolidayController {
       const organizationId = req.user.organizationId;
       const branchId = req.query.branchId || req.user.employee?.branchId;
       const limit = parseInt(req.query.limit) || 5;
-      const holidays = await holidayService.getUpcomingHolidays(organizationId, branchId, limit);
+      const holidays = await holidayService.getUpcomingHolidays(
+        organizationId,
+        branchId,
+        limit,
+      );
       return res.status(200).json({
         success: true,
         data: holidays,

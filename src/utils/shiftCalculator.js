@@ -3,30 +3,34 @@
  * early departure, working hours, and overtime.
  */
 
-// Helper to convert "HH:mm" or Date or ISO string to minutes from 00:00
-const parseTimeToMinutes = (timeInput) => {
+const { DEFAULT_TIMEZONE, getLocalMinutesOfDay } = require("./datetime");
+
+/**
+ * Converts "HH:mm", a Date, or an ISO string to minutes from midnight.
+ *
+ * Shift start/end are wall-clock strings in the tenant's timezone, so a punch
+ * instant has to be resolved in that same zone. Using the server's local clock
+ * (the previous behaviour) made late/early minutes depend on where the process
+ * happened to be deployed.
+ */
+const parseTimeToMinutes = (timeInput, timeZone = DEFAULT_TIMEZONE) => {
   if (!timeInput) return 0;
   if (typeof timeInput === "number") return timeInput;
 
   if (timeInput instanceof Date) {
-    return timeInput.getHours() * 60 + timeInput.getMinutes();
+    return getLocalMinutesOfDay(timeInput, timeZone);
   }
 
   if (typeof timeInput === "string") {
-    // Standard "HH:mm" format (e.g. "09:00", "18:00")
+    // Standard "HH:mm" format (e.g. "09:00", "18:00") — already wall-clock.
     if (/^\d{1,2}:\d{2}/.test(timeInput) && !timeInput.includes("T")) {
       const [hours, minutes] = timeInput.split(":").map(Number);
       return (hours || 0) * 60 + (minutes || 0);
     }
 
-    // ISO timestamp string
     const d = new Date(timeInput);
     if (!isNaN(d.getTime())) {
-      // If ISO string has UTC indicator 'Z', get UTC hours to avoid timezone shift
-      if (timeInput.endsWith("Z")) {
-        return d.getUTCHours() * 60 + d.getUTCMinutes();
-      }
-      return d.getHours() * 60 + d.getMinutes();
+      return getLocalMinutesOfDay(d, timeZone);
     }
   }
 
@@ -52,11 +56,11 @@ const getScheduledDurationMinutes = (startTime, endTime) => {
  * Calculates late minutes based on scheduled startTime, graceMinutes, and actual checkIn.
  * Returns 0 if check-in occurred within the allowed grace window.
  */
-const calculateLateMinutes = (startTime, graceMinutes, checkInTime) => {
+const calculateLateMinutes = (startTime, graceMinutes, checkInTime, timeZone = DEFAULT_TIMEZONE) => {
   if (!checkInTime) return 0;
 
-  const scheduledStartMins = parseTimeToMinutes(startTime);
-  const actualCheckInMins = parseTimeToMinutes(checkInTime);
+  const scheduledStartMins = parseTimeToMinutes(startTime, timeZone);
+  const actualCheckInMins = parseTimeToMinutes(checkInTime, timeZone);
   const grace = typeof graceMinutes === "number" ? graceMinutes : 10;
 
   let diff = actualCheckInMins - scheduledStartMins;
@@ -76,12 +80,27 @@ const calculateLateMinutes = (startTime, graceMinutes, checkInTime) => {
 
 /**
  * Calculates early leaving minutes based on scheduled endTime and actual checkOut.
+ *
+ * For an overnight shift the scheduled end falls on the next calendar day, so a
+ * raw minute-of-day comparison would flag every on-time checkout as hours early.
  */
-const calculateEarlyMinutes = (endTime, checkOutTime) => {
+const calculateEarlyMinutes = (endTime, checkOutTime, startTime = null, timeZone = DEFAULT_TIMEZONE) => {
   if (!checkOutTime) return 0;
 
-  const scheduledEndMins = parseTimeToMinutes(endTime);
-  const actualCheckOutMins = parseTimeToMinutes(checkOutTime);
+  const scheduledEndMins = parseTimeToMinutes(endTime, timeZone);
+  const actualCheckOutMins = parseTimeToMinutes(checkOutTime, timeZone);
+
+  const scheduledStartMins = startTime !== null ? parseTimeToMinutes(startTime, timeZone) : null;
+  const isOvernight = scheduledStartMins !== null && scheduledEndMins <= scheduledStartMins;
+
+  if (isOvernight) {
+    // Checkout in the early hours is the normal case; only a checkout that is
+    // still on the starting day (i.e. before midnight) counts as leaving early.
+    if (actualCheckOutMins > scheduledStartMins) {
+      return 1440 - actualCheckOutMins + scheduledEndMins;
+    }
+    return Math.max(0, scheduledEndMins - actualCheckOutMins);
+  }
 
   if (actualCheckOutMins < scheduledEndMins) {
     return scheduledEndMins - actualCheckOutMins;
@@ -94,7 +113,14 @@ const calculateEarlyMinutes = (endTime, checkOutTime) => {
  * Comprehensive Shift Metrics Engine
  * Evaluates attendance record against assigned shift rules.
  */
-const evaluateAttendanceAgainstShift = (shift, checkInTime, checkOutTime, breakMinutes = 0) => {
+const evaluateAttendanceAgainstShift = (
+  shift,
+  checkInTime,
+  checkOutTime,
+  breakMinutes = 0,
+  options = {}
+) => {
+  const { timeZone = DEFAULT_TIMEZONE, halfDayThresholdMinutes = null } = options;
   const scheduledMinutes = getScheduledDurationMinutes(shift.startTime, shift.endTime);
 
   let workingMinutes = 0;
@@ -104,7 +130,7 @@ const evaluateAttendanceAgainstShift = (shift, checkInTime, checkOutTime, breakM
   let status = "PRESENT";
 
   if (checkInTime) {
-    lateMinutes = calculateLateMinutes(shift.startTime, shift.graceMinutes, checkInTime);
+    lateMinutes = calculateLateMinutes(shift.startTime, shift.graceMinutes, checkInTime, timeZone);
     if (lateMinutes > 0) {
       status = "LATE";
     }
@@ -130,8 +156,8 @@ const evaluateAttendanceAgainstShift = (shift, checkInTime, checkOutTime, breakM
       elapsedMinutes = Math.floor((outMs - inMs) / (1000 * 60));
     } else {
       // If passed as "HH:mm" time strings
-      const inMins = parseTimeToMinutes(checkInTime);
-      const outMins = parseTimeToMinutes(checkOutTime);
+      const inMins = parseTimeToMinutes(checkInTime, timeZone);
+      const outMins = parseTimeToMinutes(checkOutTime, timeZone);
       elapsedMinutes = outMins >= inMins ? outMins - inMins : 1440 - inMins + outMins;
     }
 
@@ -139,14 +165,18 @@ const evaluateAttendanceAgainstShift = (shift, checkInTime, checkOutTime, breakM
     const validBreak = Math.max(0, parseInt(breakMinutes) || 0);
     workingMinutes = Math.max(0, elapsedMinutes - validBreak);
 
-    earlyMinutes = calculateEarlyMinutes(shift.endTime, checkOutTime);
+    earlyMinutes = calculateEarlyMinutes(shift.endTime, checkOutTime, shift.startTime, timeZone);
 
     if (workingMinutes > scheduledMinutes) {
       overtimeMinutes = workingMinutes - scheduledMinutes;
     }
 
-    // Half-day check: worked less than 50% of scheduled shift
-    const halfDayThreshold = Math.floor(scheduledMinutes / 2);
+    // Half-day threshold comes from org policy when configured; otherwise it
+    // falls back to half the scheduled shift.
+    const halfDayThreshold =
+      Number.isFinite(halfDayThresholdMinutes) && halfDayThresholdMinutes > 0
+        ? halfDayThresholdMinutes
+        : Math.floor(scheduledMinutes / 2);
 
     // 8-Hour Full-Day Completion Policy:
     // When employee checks out, if total working time completes 8 hours (480 mins) or scheduled shift duration,

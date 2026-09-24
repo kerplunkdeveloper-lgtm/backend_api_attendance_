@@ -1,8 +1,4 @@
 const prisma = require("../config/database");
-
-/**
- * Normalizes a date to UTC midnight for consistent daily holiday indexing.
- */
 const getMidnightDate = (dateInput) => {
   const d = new Date(dateInput);
   d.setUTCHours(0, 0, 0, 0);
@@ -10,10 +6,7 @@ const getMidnightDate = (dateInput) => {
 };
 
 class HolidayService {
-  /**
-   * Create a single holiday (Government, Company, or Optional)
-   * branchId = null means the holiday applies organization-wide across all branches.
-   */
+ 
   async createHoliday(organizationId, data) {
     const { name, date, type = "GOVERNMENT", branchId = null, description = null, isOptional = false } = data;
 

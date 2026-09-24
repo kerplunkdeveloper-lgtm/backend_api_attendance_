@@ -1,6 +1,10 @@
 const express = require("express");
 const attendanceController = require("../controllers/attendance.controller");
-const { authenticate, authorizeRoles } = require("../middleware/auth.middleware");
+const {
+  authenticate,
+  authorizeRoles,
+} = require("../middleware/auth.middleware");
+const { validate, schemas } = require("../middleware/validate.middleware");
 
 const router = express.Router();
 
@@ -9,13 +13,30 @@ router.use(authenticate);
 
 // ── Employee Self-Service Punch Station ───────────────────────────────────────
 // Standard GPS check-in (geofence enforced)
-router.post("/check-in", attendanceController.checkIn);
+router.post(
+  "/check-in",
+  validate(schemas.checkIn),
+  attendanceController.checkIn,
+);
 
 // WFH check-in (no geofence required — sets WORK_FROM_HOME status)
-router.post("/check-in-wfh", attendanceController.wfhCheckIn);
+router.post(
+  "/check-in-wfh",
+  validate(schemas.checkIn),
+  attendanceController.wfhCheckIn,
+);
+router.post(
+  "/wfh-check-in",
+  validate(schemas.checkIn),
+  attendanceController.wfhCheckIn,
+);
 
 // Check-out
-router.post("/check-out", attendanceController.checkOut);
+router.post(
+  "/check-out",
+  validate(schemas.checkIn),
+  attendanceController.checkOut,
+);
 
 // Break management
 router.post("/break-start", attendanceController.startBreak);
@@ -41,28 +62,33 @@ router.get("/history", attendanceController.getAttendanceHistory);
 router.get(
   "/summary",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
-  attendanceController.getAttendanceSummary
+  attendanceController.getAttendanceSummary,
 );
 
 // All org attendance logs (filterable)
 router.get(
   "/",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
-  attendanceController.getAllAttendance
+  attendanceController.getAllAttendance,
+);
+router.get(
+  "/all",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  attendanceController.getAllAttendance,
 );
 
 // Admin direct mark (bypass GPS/correction flow)
 router.post(
   "/admin-mark",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
-  attendanceController.adminMarkAttendance
+  attendanceController.adminMarkAttendance,
 );
 
 // Manual EOD absent marking (on-demand trigger)
 router.post(
   "/mark-absent",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
-  attendanceController.markAbsent
+  attendanceController.markAbsent,
 );
 
 module.exports = router;

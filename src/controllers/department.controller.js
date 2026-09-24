@@ -3,7 +3,10 @@ const departmentService = require("../services/department.service");
 const create = async (req, res) => {
   try {
     const { name } = req.body;
-    const department = await departmentService.createDepartment(req.user.organizationId, name);
+    const department = await departmentService.createDepartment(
+      req.user.organizationId,
+      name,
+    );
 
     return res.status(201).json({
       success: true,
@@ -20,7 +23,9 @@ const create = async (req, res) => {
 
 const list = async (req, res) => {
   try {
-    const departments = await departmentService.getDepartments(req.user.organizationId);
+    const departments = await departmentService.getDepartments(
+      req.user.organizationId,
+    );
 
     return res.json({
       success: true,
@@ -38,7 +43,10 @@ const list = async (req, res) => {
 const getById = async (req, res) => {
   try {
     const { id } = req.params;
-    const department = await departmentService.getDepartmentById(req.user.organizationId, id);
+    const department = await departmentService.getDepartmentById(
+      req.user.organizationId,
+      id,
+    );
 
     return res.json({
       success: true,
@@ -57,7 +65,11 @@ const update = async (req, res) => {
   try {
     const { id } = req.params;
     const { name } = req.body;
-    const updated = await departmentService.updateDepartment(req.user.organizationId, id, name);
+    const updated = await departmentService.updateDepartment(
+      req.user.organizationId,
+      id,
+      name,
+    );
 
     return res.json({
       success: true,

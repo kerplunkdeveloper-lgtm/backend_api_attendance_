@@ -1,4 +1,5 @@
 const correctionService = require("../services/correction.service");
+const { paginated, fail } = require("../utils/response");
 
 class CorrectionController {
   async create(req, res) {
@@ -6,7 +7,7 @@ class CorrectionController {
       const result = await correctionService.createCorrectionRequest(
         req.user.id,
         req.user.organizationId,
-        req.body
+        req.body,
       );
       return res.status(201).json({
         success: true,
@@ -25,7 +26,7 @@ class CorrectionController {
     try {
       const result = await correctionService.getMyRequests(
         req.user.id,
-        req.user.organizationId
+        req.user.organizationId,
       );
       return res.status(200).json({
         success: true,
@@ -43,17 +44,12 @@ class CorrectionController {
     try {
       const result = await correctionService.getAllRequests(
         req.user.organizationId,
-        req.query
+        req.query,
       );
-      return res.status(200).json({
-        success: true,
-        ...result,
-      });
+      // `corrections` is the key the approvals inbox reads.
+      return paginated(res, result, { corrections: result.records ?? [] });
     } catch (error) {
-      return res.status(error.statusCode || 500).json({
-        success: false,
-        message: error.message,
-      });
+      return fail(res, error);
     }
   }
 
@@ -64,7 +60,7 @@ class CorrectionController {
         id,
         req.user.organizationId,
         req.user.id,
-        req.body
+        req.body,
       );
       return res.status(200).json({
         success: true,

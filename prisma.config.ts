@@ -1,12 +1,12 @@
 import "dotenv/config";
-import { defineConfig, env } from "prisma/config";
+import { defineConfig } from "prisma/config";
 
-const NEON_PRODUCTION_URL =
-  "postgresql://neondb_owner:npg_dSVOQNUIf24F@ep-flat-mountain-ay9pcqr8-pooler.c-5.us-east-2.aws.neon.tech/neondb?channel_binding=require&sslmode=require";
+const dbUrl = (process.env.DATABASE_URL || "").trim();
 
-let dbUrl = (process.env.DATABASE_URL || "").trim();
-if (!dbUrl || dbUrl.includes("base") || !dbUrl.includes("neon.tech")) {
-  dbUrl = NEON_PRODUCTION_URL;
+if (!dbUrl) {
+  throw new Error(
+    "DATABASE_URL is not set. Copy .env.example to .env before running Prisma commands."
+  );
 }
 
 export default defineConfig({

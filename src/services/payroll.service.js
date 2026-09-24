@@ -2,8 +2,64 @@ const prisma = require("../config/database");
 const { getPolicy } = require("./attendance.service");
 const emailService = require("./email.service");
 const whatsappService = require("./whatsapp.service");
+const money = require("../utils/money");
+const statutoryService = require("./statutory.service");
+
+/** Mask a bank account so only the last 4 digits are shown on payslips. */
+const maskAccount = (value) => {
+  const digits = String(value).replace(/\s+/g, "");
+  if (!digits) return null;
+  if (digits.length <= 4) return "••••";
+  return `${"•".repeat(Math.max(4, digits.length - 4))}${digits.slice(-4)}`;
+};
+
+/** Statuses after which a payslip's numbers are final and must not be recomputed. */
+const LOCKED_PAYSLIP_STATUSES = ["APPROVED", "DISBURSED"];
+
+/** Allowed payslip status transitions. Disbursed is terminal. */
+const STATUS_TRANSITIONS = {
+  DRAFT: ["PENDING_APPROVAL", "APPROVED", "REJECTED"],
+  PENDING_APPROVAL: ["APPROVED", "REJECTED", "DRAFT"],
+  APPROVED: ["DISBURSED", "REJECTED"],
+  REJECTED: ["DRAFT", "PENDING_APPROVAL"],
+  DISBURSED: [],
+};
+
+/** Normalise a Date to a YYYY-MM-DD key for set membership tests. */
+const toDateKey = (date) => new Date(date).toISOString().slice(0, 10);
 
 class PayrollService {
+  /**
+   * Returns the set of YYYY-MM-DD dates in the range that are covered by an
+   * APPROVED leave request whose leave type is unpaid (loss of pay).
+   */
+  async _getUnpaidLeaveDates(organizationId, employeeId, startDate, endDate) {
+    const unpaidRequests = await prisma.leaveRequest.findMany({
+      where: {
+        organizationId,
+        employeeId,
+        status: "APPROVED",
+        leaveType: { isPaid: false },
+        startDate: { lte: endDate },
+        endDate: { gte: startDate },
+      },
+      select: { startDate: true, endDate: true },
+    });
+
+    const dates = new Set();
+    for (const req of unpaidRequests) {
+      const cursor = new Date(
+        Math.max(new Date(req.startDate).getTime(), startDate.getTime())
+      );
+      const last = new Date(Math.min(new Date(req.endDate).getTime(), endDate.getTime()));
+      while (cursor <= last) {
+        dates.add(toDateKey(cursor));
+        cursor.setUTCDate(cursor.getUTCDate() + 1);
+      }
+    }
+    return dates;
+  }
+
   /**
    * 1. Set or update employee salary structure
    */
@@ -113,19 +169,15 @@ class PayrollService {
       throw error;
     }
 
-    const salary = employee.salaryStructure || {
-      annualCtc: 600000,
-      monthlyCtc: 50000,
-      baseSalary: 25000,
-      hra: 12500,
-      transport: 3000,
-      special: 6500,
-      otherAllowance: 0,
-      pf: 1800,
-      esi: 0,
-      professionalTax: 200,
-      overtimeRate: 1.5,
-    };
+    if (!employee.salaryStructure) {
+      const error = new Error(
+        `No salary structure configured for ${employee.firstName} (${employee.employeeCode}). Set CTC before generating payroll.`
+      );
+      error.statusCode = 422;
+      throw error;
+    }
+
+    const salary = employee.salaryStructure;
 
     const annualCtc = salary.annualCtc ? Number(salary.annualCtc) : null;
     const monthlyCtc = salary.monthlyCtc ? Number(salary.monthlyCtc) : null;
@@ -134,14 +186,14 @@ class PayrollService {
     const transport = Number(salary.transport);
     const special = Number(salary.special);
     const otherAllowance = Number(salary.otherAllowance || 0);
-    const allowancesTotal = hra + transport + special + otherAllowance;
+    const allowancesTotal = money.sum(hra, transport, special, otherAllowance);
     const pf = Number(salary.pf || 0);
     const esi = Number(salary.esi || 0);
     const professionalTax = Number(salary.professionalTax || 0);
     const overtimeMultiplier = Number(salary.overtimeRate) || 1.5;
 
-    const dailyRate = baseSalary / standardWorkingDays;
-    const hourlyRate = dailyRate / 8;
+    const dailyRate = money.divide(baseSalary, standardWorkingDays);
+    const hourlyRate = money.divide(dailyRate, 8);
 
     // Fetch all attendance records for this employee in this month
     const attendances = await prisma.attendance.findMany({
@@ -154,6 +206,16 @@ class PayrollService {
         },
       },
     });
+
+    // An ON_LEAVE attendance row does not say whether the leave was paid — that
+    // lives on LeaveType.isPaid. Without this lookup, loss-of-pay leave would be
+    // counted as paid leave and the employee would be paid in full.
+    const unpaidLeaveDates = await this._getUnpaidLeaveDates(
+      organizationId,
+      employeeId,
+      startDate,
+      endDate
+    );
 
     let presentDays = 0;
     let halfDays = 0;
@@ -172,27 +234,60 @@ class PayrollService {
         halfDays += 1;
         presentDays += 0.5;
       } else if (att.status === "ON_LEAVE") {
-        paidLeaveDays += 1;
+        if (unpaidLeaveDates.has(toDateKey(att.date))) {
+          unpaidLeaveDays += 1;
+        } else {
+          paidLeaveDays += 1;
+        }
       }
-      totalOvertimeMinutes += att.overtimeMinutes || 0;
+      if (!policy.requireOtApproval) {
+        totalOvertimeMinutes += att.overtimeMinutes || 0;
+      }
     });
 
-    const overtimeHours = Math.round((totalOvertimeMinutes / 60) * 10) / 10;
-    const overtimePay = Math.round(overtimeHours * hourlyRate * overtimeMultiplier);
-
-    // Calculate unpaid leave days (e.g. if presentDays + paidLeaveDays < workingDays)
-    const effectiveDays = presentDays + paidLeaveDays;
-    if (effectiveDays < standardWorkingDays) {
-      unpaidLeaveDays = Math.max(0, standardWorkingDays - effectiveDays);
+    if (policy.requireOtApproval) {
+      const approvedOt = await prisma.overtimeRequest.findMany({
+        where: {
+          organizationId,
+          employeeId,
+          status: "APPROVED",
+          attendance: { date: { gte: startDate, lte: endDate } },
+        },
+        select: { approvedMinutes: true, requestedMinutes: true },
+      });
+      totalOvertimeMinutes = approvedOt.reduce(
+        (sum, row) => sum + (row.approvedMinutes ?? row.requestedMinutes ?? 0),
+        0
+      );
     }
 
-    const unpaidLeaveDeduction = Math.round(unpaidLeaveDays * dailyRate);
+    const overtimeHours = Math.round((totalOvertimeMinutes / 60) * 10) / 10;
+    const overtimePay = money.multiply(
+      money.multiply(hourlyRate, overtimeHours),
+      overtimeMultiplier
+    );
+
+    // Any working day with neither attendance nor paid leave is also loss of pay.
+    const accountedDays = presentDays + paidLeaveDays + unpaidLeaveDays;
+    if (accountedDays < standardWorkingDays) {
+      unpaidLeaveDays += standardWorkingDays - accountedDays;
+    }
+    unpaidLeaveDays = Math.max(0, unpaidLeaveDays);
+
+    const unpaidLeaveDeduction = money.multiply(dailyRate, unpaidLeaveDays);
     const lateDeduction =
       lateCount > maxLatesBeforeDeduction
-        ? (lateCount - maxLatesBeforeDeduction) * Math.round(dailyRate * lateDeductionPercent)
+        ? money.multiply(
+            money.multiply(dailyRate, lateDeductionPercent),
+            lateCount - maxLatesBeforeDeduction
+          )
         : 0;
-    const statutoryDeductions = pf + esi + professionalTax;
-    const deductionsTotal = unpaidLeaveDeduction + lateDeduction + statutoryDeductions;
+    const statutoryDeductions = money.sum(pf, esi, professionalTax);
+    const deductionsTotal = money.sum(
+      unpaidLeaveDeduction,
+      lateDeduction,
+      statutoryDeductions
+    );
 
     // Fetch approved unbundled expense claims for this employee
     const approvedExpenses = await prisma.expenseClaim.findMany({
@@ -204,13 +299,13 @@ class PayrollService {
       },
     });
 
-    const reimbursements = approvedExpenses.reduce(
-      (sum, exp) => sum + Number(exp.amount),
-      0
-    );
+    const reimbursements = money.sum(...approvedExpenses.map((exp) => exp.amount));
 
-    const grossSalary = baseSalary + allowancesTotal + overtimePay;
-    const netSalary = Math.max(0, grossSalary - deductionsTotal) + reimbursements;
+    const grossSalary = money.sum(baseSalary, allowancesTotal, overtimePay);
+    const netSalary = money.sum(
+      money.atLeastZero(money.subtract(grossSalary, deductionsTotal)),
+      reimbursements
+    );
 
     return {
       employee: {
@@ -243,8 +338,8 @@ class PayrollService {
         special,
         otherAllowance,
         allowancesTotal,
-        hourlyRate: Math.round(hourlyRate),
-        dailyRate: Math.round(dailyRate),
+        hourlyRate: money.round(hourlyRate),
+        dailyRate: money.round(dailyRate),
         overtimePay,
         grossSalary,
       },
@@ -270,20 +365,94 @@ class PayrollService {
   }
 
   /**
+   * Preview every active employee who has a salary structure.
+   */
+  async calculateOrganizationPayroll(organizationId, month, year) {
+    const employees = await prisma.employee.findMany({
+      where: { organizationId, status: "ACTIVE" },
+      select: { id: true, employeeCode: true, firstName: true },
+    });
+
+    const previews = [];
+    const skipped = [];
+
+    for (const emp of employees) {
+      try {
+        previews.push(await this.calculateEmployeePayroll(organizationId, emp.id, month, year));
+      } catch (err) {
+        skipped.push({
+          employeeId: emp.id,
+          employeeCode: emp.employeeCode,
+          reason: err.message,
+        });
+      }
+    }
+
+    return { month: parseInt(month, 10), year: parseInt(year, 10), previews, skipped };
+  }
+
+  /**
    * 4. Generate payslips for the entire organization for a month/year
    */
   async generateOrganizationPayslips(organizationId, month, year) {
     const m = parseInt(month);
     const y = parseInt(year);
 
+    // Regenerating a run that has already been approved or paid out would rewrite
+    // settled amounts and silently reset the run to pending. Refuse instead.
+    const lockedCount = await prisma.payslip.count({
+      where: {
+        organizationId,
+        month: m,
+        year: y,
+        status: { in: LOCKED_PAYSLIP_STATUSES },
+      },
+    });
+
+    if (lockedCount > 0) {
+      const err = new Error(
+        `Payroll for ${m}/${y} is locked: ${lockedCount} payslip(s) are already approved or disbursed. Reject them first if you need to regenerate.`
+      );
+      err.statusCode = 409;
+      throw err;
+    }
+
     const employees = await prisma.employee.findMany({
       where: { organizationId, status: "ACTIVE" },
     });
 
     const generated = [];
+    const skipped = [];
 
     for (const emp of employees) {
-      const payroll = await this.calculateEmployeePayroll(organizationId, emp.id, m, y);
+      const existingPayslip = await prisma.payslip.findFirst({
+        where: { organizationId, employeeId: emp.id, month: m, year: y },
+        select: { id: true, status: true },
+      });
+
+      if (existingPayslip && !LOCKED_PAYSLIP_STATUSES.includes(existingPayslip.status)) {
+        await prisma.expenseClaim.updateMany({
+          where: { organizationId, payslipId: existingPayslip.id },
+          data: { payslipId: null, status: "APPROVED" },
+        });
+      }
+
+      let payroll;
+      try {
+        payroll = await this.calculateEmployeePayroll(organizationId, emp.id, m, y);
+      } catch (err) {
+        // One employee with bad data must not abort the whole run.
+        skipped.push({
+          employeeId: emp.id,
+          employeeCode: emp.employeeCode,
+          reason: err.message,
+        });
+        continue;
+      }
+
+      const tdsDeduction = await statutoryService.monthlyTdsForEmployee(organizationId, emp.id);
+      const deductionsWithTds = money.sum(payroll.deductions.deductionsTotal, tdsDeduction);
+      const netAfterTds = money.atLeastZero(money.subtract(payroll.netSalary, tdsDeduction));
 
       const payslipPayload = {
         workingDays: payroll.period.workingDays,
@@ -305,41 +474,47 @@ class PayrollService {
         esiDeduction: payroll.deductions.esiDeduction || 0,
         ptDeduction: payroll.deductions.ptDeduction || 0,
         statutoryDeductions: payroll.deductions.statutoryDeductions || 0,
-        deductionsTotal: payroll.deductions.deductionsTotal,
+        tdsDeduction,
+        deductionsTotal: deductionsWithTds,
         reimbursements: payroll.reimbursements || 0,
-        netSalary: payroll.netSalary,
+        netSalary: netAfterTds,
         status: "PENDING_APPROVAL",
       };
 
-      const payslip = await prisma.payslip.upsert({
-        where: {
-          employeeId_month_year: {
+      // The payslip and the claims it settles must land together — otherwise a
+      // failure between them leaves claims reimbursed on paper but still open.
+      const payslip = await prisma.$transaction(async (tx) => {
+        const created = await tx.payslip.upsert({
+          where: {
+            employeeId_month_year: {
+              employeeId: emp.id,
+              month: m,
+              year: y,
+            },
+          },
+          update: payslipPayload,
+          create: {
+            organizationId,
             employeeId: emp.id,
             month: m,
             year: y,
-          },
-        },
-        update: payslipPayload,
-        create: {
-          organizationId,
-          employeeId: emp.id,
-          month: m,
-          year: y,
-          ...payslipPayload,
-        },
-      });
-
-      // Automatically bundle approved claims into this payslip and mark PAID
-      if (payroll.approvedExpenses && payroll.approvedExpenses.length > 0) {
-        const claimIds = payroll.approvedExpenses.map((exp) => exp.id);
-        await prisma.expenseClaim.updateMany({
-          where: { id: { in: claimIds } },
-          data: {
-            payslipId: payslip.id,
-            status: "PAID",
+            ...payslipPayload,
           },
         });
-      }
+
+        if (payroll.approvedExpenses && payroll.approvedExpenses.length > 0) {
+          const claimIds = payroll.approvedExpenses.map((exp) => exp.id);
+          await tx.expenseClaim.updateMany({
+            where: { id: { in: claimIds }, organizationId, payslipId: null },
+            data: {
+              payslipId: created.id,
+              status: "PAID",
+            },
+          });
+        }
+
+        return created;
+      });
 
       generated.push(payslip);
     }
@@ -348,6 +523,8 @@ class PayrollService {
       month: m,
       year: y,
       totalGenerated: generated.length,
+      totalSkipped: skipped.length,
+      skipped,
       payslips: generated,
     };
   }
@@ -528,10 +705,32 @@ class PayrollService {
    * 9. Update Individual Payslip Status
    */
   async updatePayslipStatus(organizationId, payslipId, status, adminUserId, remarks) {
-    const validStatuses = ["DRAFT", "PENDING_APPROVAL", "APPROVED", "DISBURSED", "REJECTED"];
+    const validStatuses = Object.keys(STATUS_TRANSITIONS);
     if (!validStatuses.includes(status)) {
       const err = new Error(`Invalid status. Must be one of: ${validStatuses.join(", ")}`);
       err.statusCode = 400;
+      throw err;
+    }
+
+    // Scope by organization so a payslip id from another tenant cannot be touched.
+    const existing = await prisma.payslip.findFirst({
+      where: { id: payslipId, organizationId },
+      select: { id: true, status: true },
+    });
+
+    if (!existing) {
+      const err = new Error("Payslip not found");
+      err.statusCode = 404;
+      throw err;
+    }
+
+    const allowed = STATUS_TRANSITIONS[existing.status] || [];
+    if (existing.status !== status && !allowed.includes(status)) {
+      const err = new Error(
+        `Cannot move a payslip from ${existing.status} to ${status}.` +
+          (allowed.length ? ` Allowed: ${allowed.join(", ")}.` : " This status is final.")
+      );
+      err.statusCode = 409;
       throw err;
     }
 
@@ -543,18 +742,31 @@ class PayrollService {
       data.disbursedAt = new Date();
     }
 
-    return await prisma.payslip.update({
-      where: { id: payslipId },
-      data,
+    return await prisma.$transaction(async (tx) => {
+      if (status === "REJECTED") {
+        await tx.expenseClaim.updateMany({
+          where: { organizationId, payslipId },
+          data: { payslipId: null, status: "APPROVED" },
+        });
+      }
+
+      return tx.payslip.update({
+        where: { id: payslipId },
+        data,
+      });
     });
   }
 
   /**
    * 10. Get Detailed Payslip with Company Letterhead, Bank Info & Amount in Words for PDF
    */
-  async getPayslipDetails(organizationId, payslipId) {
+  async getPayslipDetails(organizationId, payslipId, restrictToEmployeeId = null) {
     const payslip = await prisma.payslip.findFirst({
-      where: { id: payslipId, organizationId },
+      where: {
+        id: payslipId,
+        organizationId,
+        ...(restrictToEmployeeId ? { employeeId: restrictToEmployeeId } : {}),
+      },
       include: {
         organization: {
           select: { id: true, name: true, email: true, phone: true, createdAt: true },
@@ -584,9 +796,19 @@ class PayrollService {
     const gross = Number(payslip.grossSalary || (Number(payslip.baseSalary) + Number(payslip.allowancesTotal) + Number(payslip.overtimePay)));
     const net = Number(payslip.netSalary);
 
+    const template = await prisma.payslipTemplate.findUnique({
+      where: { organizationId },
+    });
+
+    const companyDisplayName = template?.companyName || payslip.organization.name || "WorkPulse Enterprise";
+    const companyDisplayAddress = template?.addressLine1
+      ? `${template.addressLine1}${template.addressLine2 ? ", " + template.addressLine2 : ""}`
+      : (payslip.employee.branch?.address || "Corporate Headquarters, Cyber City, Phase II");
+
     return {
       payslipId: payslip.id,
       referenceNo: `WP-PAY-${payslip.year}-${String(payslip.month).padStart(2, "0")}-${payslip.employee.employeeCode}`,
+      template: template || null,
       period: {
         month: payslip.month,
         monthName,
@@ -594,9 +816,13 @@ class PayrollService {
         periodLabel: `${monthName} ${payslip.year}`,
       },
       organization: {
-        name: payslip.organization.name || "WorkPulse Enterprise",
-        address: payslip.employee.branch?.address || "Corporate Headquarters, Cyber City, Phase II",
-        logoUrl: payslip.organization.logoUrl,
+        name: companyDisplayName,
+        address: companyDisplayAddress,
+        logoUrl: template?.logoUrl || payslip.organization.logoUrl,
+        taxIdentifierLabel: template?.taxIdentifierLabel || "CIN / GSTIN",
+        taxIdentifierValue: template?.taxIdentifierValue || null,
+        contactEmail: template?.contactEmail || payslip.organization.email,
+        contactPhone: template?.contactPhone || payslip.organization.phone,
       },
       employee: {
         id: payslip.employee.id,
@@ -608,11 +834,13 @@ class PayrollService {
         email: payslip.employee.user?.email || "N/A",
         phone: payslip.employee.phone || "N/A",
         dateOfJoining: payslip.employee.dateOfJoining ? payslip.employee.dateOfJoining.toISOString().split("T")[0] : "N/A",
-        // Statutory & Bank identifiers placeholder / standard fallback
-        panNumber: "ABCDE1234F",
-        bankName: "HDFC Bank Ltd.",
-        accountNumber: "••••••••4892",
-        ifscCode: "HDFC0001824",
+        panNumber: payslip.employee.panNumber || null,
+        uanNumber: payslip.employee.uanNumber || null,
+        bankName: payslip.employee.bankName || null,
+        accountNumber: payslip.employee.bankAccountNumber
+          ? maskAccount(payslip.employee.bankAccountNumber)
+          : null,
+        ifscCode: payslip.employee.bankIfsc || null,
       },
       attendance: {
         workingDays: payslip.workingDays,
@@ -720,9 +948,11 @@ class PayrollService {
         employeeCode: p.employee?.employeeCode,
         employeeName: `${p.employee?.firstName} ${p.employee?.lastName || ""}`.trim(),
         department: deptName,
-        bankName: "Corporate Salary Partner (HDFC)",
-        accountNumber: `XXXX${Math.floor(1000 + Math.random() * 9000)}`,
-        ifsc: "HDFC0001824",
+        bankName: p.employee?.bankName || null,
+        accountNumber: p.employee?.bankAccountNumber
+          ? maskAccount(p.employee.bankAccountNumber)
+          : null,
+        ifsc: p.employee?.bankIfsc || null,
         grossSalary: gross,
         deductionsTotal: deductions,
         netDisbursed: net,

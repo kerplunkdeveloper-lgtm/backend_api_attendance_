@@ -1,6 +1,9 @@
 const express = require("express");
 const offboardingController = require("../controllers/offboarding.controller");
-const { authenticate, authorizeRoles } = require("../middleware/auth.middleware");
+const {
+  authenticate,
+  authorizeRoles,
+} = require("../middleware/auth.middleware");
 
 const router = express.Router();
 
@@ -16,53 +19,49 @@ router.post("/initiate", offboardingController.initiateExit);
 router.get(
   "/",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
-  offboardingController.getExitList
+  offboardingController.getExitList,
 );
 
-// 4. Details of an exit
-router.get(
-  "/:id",
-  offboardingController.getExitDetails
-);
+// 4. Details of an exit. Employees may only read their own — the controller
+// checks ownership, since exit records carry settlement figures.
+router.get("/:id", offboardingController.getExitDetails);
 
 // 5. HR Review of Resignation (Admins & Managers)
 router.post(
   "/:id/review",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
-  offboardingController.reviewResignation
+  offboardingController.reviewResignation,
 );
 
 // 6. Update Department Clearance Item
 router.put(
   "/:id/clearances/:clearanceId",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
-  offboardingController.updateClearanceItem
+  offboardingController.updateClearanceItem,
 );
 
-// 7. Save Exit Interview
-router.post(
-  "/:id/interview",
-  offboardingController.saveExitInterview
-);
+// 7. Save Exit Interview — the departing employee fills it in, or HR records it
+// on their behalf. Ownership is verified in the controller.
+router.post("/:id/interview", offboardingController.saveExitInterview);
 
 // 8. Calculate / Update Full & Final (F&F) Settlement
 router.post(
   "/:id/calculate-settlement",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
-  offboardingController.calculateFinalSettlement
+  offboardingController.calculateFinalSettlement,
 );
 
 // 9. Disburse Settlement and Terminate Employee
 router.post(
   "/:id/disburse-and-terminate",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
-  offboardingController.disburseSettlementAndTerminate
+  offboardingController.disburseSettlementAndTerminate,
 );
 
 // 10. Printable Documents Data (F&F Statement, Relieving, Experience, Clearance)
 router.get(
   "/:id/documents/:docType",
-  offboardingController.getExitDocumentData
+  offboardingController.getExitDocumentData,
 );
 
 module.exports = router;

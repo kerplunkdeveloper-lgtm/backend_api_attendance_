@@ -21,18 +21,28 @@ class EmployeeDocumentController {
       let targetEmployeeId = req.params.employeeId;
       if (targetEmployeeId === "me") {
         if (!req.user.employee) {
-          return res.status(404).json({ success: false, message: "No employee profile linked to current user" });
+          return res
+            .status(404)
+            .json({
+              success: false,
+              message: "No employee profile linked to current user",
+            });
         }
         targetEmployeeId = req.user.employee.id;
       }
 
       if (!this._canAccessEmployee(req, targetEmployeeId)) {
-        return res.status(403).json({ success: false, message: "Unauthorized to access these documents" });
+        return res
+          .status(403)
+          .json({
+            success: false,
+            message: "Unauthorized to access these documents",
+          });
       }
 
       const data = await employeeDocumentService.getEmployeeDocuments(
         req.user.organizationId,
-        targetEmployeeId
+        targetEmployeeId,
       );
 
       return res.status(200).json({
@@ -53,13 +63,23 @@ class EmployeeDocumentController {
       let targetEmployeeId = req.params.employeeId;
       if (targetEmployeeId === "me") {
         if (!req.user.employee) {
-          return res.status(404).json({ success: false, message: "No employee profile linked to current user" });
+          return res
+            .status(404)
+            .json({
+              success: false,
+              message: "No employee profile linked to current user",
+            });
         }
         targetEmployeeId = req.user.employee.id;
       }
 
       if (!this._canAccessEmployee(req, targetEmployeeId)) {
-        return res.status(403).json({ success: false, message: "Unauthorized to upload documents for this employee" });
+        return res
+          .status(403)
+          .json({
+            success: false,
+            message: "Unauthorized to upload documents for this employee",
+          });
       }
 
       const fileBuffer = req.file ? req.file.buffer : null;
@@ -75,7 +95,7 @@ class EmployeeDocumentController {
         targetEmployeeId,
         payload,
         fileBuffer,
-        req.user
+        req.user,
       );
 
       return res.status(201).json({
@@ -97,13 +117,20 @@ class EmployeeDocumentController {
       let targetEmployeeId = req.params.employeeId;
       if (targetEmployeeId === "me") {
         if (!req.user.employee) {
-          return res.status(404).json({ success: false, message: "No employee profile linked" });
+          return res
+            .status(404)
+            .json({ success: false, message: "No employee profile linked" });
         }
         targetEmployeeId = req.user.employee.id;
       }
 
       if (!this._canAccessEmployee(req, targetEmployeeId)) {
-        return res.status(403).json({ success: false, message: "Unauthorized to update this document" });
+        return res
+          .status(403)
+          .json({
+            success: false,
+            message: "Unauthorized to update this document",
+          });
       }
 
       const fileBuffer = req.file ? req.file.buffer : null;
@@ -120,7 +147,7 @@ class EmployeeDocumentController {
         req.params.documentId,
         payload,
         fileBuffer,
-        req.user
+        req.user,
       );
 
       return res.status(200).json({
@@ -141,19 +168,26 @@ class EmployeeDocumentController {
       let targetEmployeeId = req.params.employeeId;
       if (targetEmployeeId === "me") {
         if (!req.user.employee) {
-          return res.status(404).json({ success: false, message: "No employee profile linked" });
+          return res
+            .status(404)
+            .json({ success: false, message: "No employee profile linked" });
         }
         targetEmployeeId = req.user.employee.id;
       }
 
       if (!this._canAccessEmployee(req, targetEmployeeId)) {
-        return res.status(403).json({ success: false, message: "Unauthorized to delete this document" });
+        return res
+          .status(403)
+          .json({
+            success: false,
+            message: "Unauthorized to delete this document",
+          });
       }
 
       const result = await employeeDocumentService.deleteDocument(
         req.user.organizationId,
         targetEmployeeId,
-        req.params.documentId
+        req.params.documentId,
       );
 
       return res.status(200).json(result);
@@ -182,7 +216,7 @@ class EmployeeDocumentController {
           rejectionReason,
           reviewerName,
           reviewerId: req.user.id,
-        }
+        },
       );
 
       return res.status(200).json({
@@ -203,7 +237,7 @@ class EmployeeDocumentController {
       const result = await employeeDocumentService.sendExpiryReminder(
         req.user.organizationId,
         req.params.employeeId,
-        req.params.documentId
+        req.params.documentId,
       );
 
       return res.status(200).json(result);
@@ -217,7 +251,8 @@ const controller = new EmployeeDocumentController();
 // Bind methods to controller instance
 controller.getDocuments = controller.getDocuments.bind(controller);
 controller.uploadDocument = controller.uploadDocument.bind(controller);
-controller.replaceOrUpdateDocument = controller.replaceOrUpdateDocument.bind(controller);
+controller.replaceOrUpdateDocument =
+  controller.replaceOrUpdateDocument.bind(controller);
 controller.deleteDocument = controller.deleteDocument.bind(controller);
 controller.verifyDocument = controller.verifyDocument.bind(controller);
 controller.sendExpiryReminder = controller.sendExpiryReminder.bind(controller);
