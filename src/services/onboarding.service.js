@@ -1,7 +1,7 @@
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const prisma = require("../config/database");
-const { uploadImage } = require("../config/cloudinary");
+const { uploadImage, uploadBuffer } = require("../config/cloudinary");
 const emailService = require("./email.service");
 const whatsappService = require("./whatsapp.service");
 const { generateTempPassword, resolveAssignableRole } = require("../utils/password");
@@ -143,7 +143,7 @@ class OnboardingService {
 
     return {
       candidate,
-      onboardingUrl: `/onboarding/${token}`,
+      onboardingUrl: `/onboarding/portal/${token}`,
     };
   }
 
@@ -256,7 +256,7 @@ class OnboardingService {
   /**
    * 4. Candidate: Upload onboarding document
    */
-  async uploadCandidateDocument(token, docData) {
+  async uploadCandidateDocument(token, docData = {}, file = null) {
     const candidate = await prisma.onboardingCandidate.findUnique({
       where: { token },
       include: { documents: true },
@@ -268,7 +268,26 @@ class OnboardingService {
       throw error;
     }
 
-    const { documentType, fileName, fileUrl, fileSize, mimeType } = docData;
+    if (["ACTIVATED", "REJECTED", "OFFER_REJECTED"].includes(candidate.status)) {
+      throw Object.assign(new Error("This invitation no longer accepts uploads"), { statusCode: 403 });
+    }
+    const { documentType } = docData;
+    if (file) {
+      const { assertSniffedType } = require("../middleware/upload.middleware");
+      assertSniffedType(file);
+      const signature = file.buffer.subarray(0, 12);
+      const recognized = (file.mimetype === "application/pdf" && signature.subarray(0, 5).toString() === "%PDF-") ||
+        (file.mimetype === "image/png" && signature.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) ||
+        (file.mimetype === "image/jpeg" && signature[0] === 255 && signature[1] === 216 && signature[2] === 255) ||
+        (file.mimetype === "image/webp" && signature.subarray(0,4).toString() === "RIFF" && signature.subarray(8,12).toString() === "WEBP");
+      if (!recognized) throw Object.assign(new Error("Invalid file contents"), { statusCode: 415 });
+      if (!["GOVT_ID", "TAX_ID", "DEGREE_CERTIFICATE", "PREVIOUS_EXPERIENCE", "BANK_PROOF", "PHOTO", "OTHER"].includes(String(documentType).toUpperCase())) {
+        throw Object.assign(new Error("Invalid document type"), { statusCode: 400 });
+      }
+      const stored = await uploadBuffer(file.buffer, { folder: `workpulse/onboarding/${candidate.id}`, resource_type: "auto" });
+      docData = { ...docData, fileName: file.originalname, fileUrl: stored.secure_url, fileSize: file.size, mimeType: file.mimetype };
+    }
+    const { fileName, fileUrl, fileSize, mimeType } = docData;
 
     if (!documentType || !fileName || !fileUrl) {
       const error = new Error("documentType, fileName, and fileUrl are required");

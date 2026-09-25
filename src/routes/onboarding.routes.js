@@ -1,5 +1,16 @@
 const express = require("express");
 const router = express.Router();
+const { createUploader, handleUploadErrors } = require("../middleware/upload.middleware");
+const portalUpload = createUploader({ allowed: ["application/pdf", "image/jpeg", "image/png", "image/webp"], maxBytes: 10 * 1024 * 1024 });
+const validatePortal = async (req, res, next) => {
+  try {
+    const candidate = await require("../services/onboarding.service").getCandidateByToken(req.params.token);
+    if (["ACTIVATED", "REJECTED", "OFFER_REJECTED"].includes(candidate.status)) {
+      return res.status(403).json({ success: false, message: "This invitation no longer accepts uploads" });
+    }
+    next();
+  } catch (error) { next(error); }
+};
 const onboardingController = require("../controllers/onboarding.controller");
 const {
   authenticate,
@@ -22,6 +33,8 @@ router.put(
 // Candidate uploads mandatory onboarding document
 router.post(
   "/portal/:token/documents",
+  validatePortal,
+  portalUpload.single("file"),
   onboardingController.uploadCandidateDocument,
 );
 
@@ -85,4 +98,5 @@ router.post(
   onboardingController.adminApproveAndActivate,
 );
 
+router.use(handleUploadErrors);
 module.exports = router;

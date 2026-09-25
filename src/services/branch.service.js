@@ -10,7 +10,13 @@ const createBranch = async (organizationId, data) => {
     throw new Error("Branch name is required");
   }
 
-  return await prisma.branch.create({
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${organizationId}))`;
+    const org = await tx.organization.findUnique({ where: { id: organizationId }, include: { subscription: true } });
+    const plan = require("./entitlement.service").assertEntitled(org);
+    const count = await tx.branch.count({ where: { organizationId } });
+    if (count >= plan.maxBranches) throw Object.assign(new Error("Branch limit reached for this plan"), { statusCode: 402 });
+  return await tx.branch.create({
     data: {
       organizationId,
       name: name.trim(),
@@ -24,6 +30,7 @@ const createBranch = async (organizationId, data) => {
         select: { employees: true },
       },
     },
+  });
   });
 };
 

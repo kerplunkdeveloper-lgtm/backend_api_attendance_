@@ -285,7 +285,7 @@ const getEmployeeById = async (organizationId, employeeId) => {
 /**
  * 4. PUT /api/employees/:id - Update Employee
  */
-const updateEmployee = async (organizationId, employeeId, data) => {
+const updateEmployee = async (organizationId, employeeId, data, actor) => {
   const employee = await prisma.employee.findFirst({
     where: { id: employeeId, organizationId },
     include: { user: true },
@@ -293,6 +293,23 @@ const updateEmployee = async (organizationId, employeeId, data) => {
 
   if (!employee) {
     throw new Error("Employee not found");
+  }
+
+  if (!actor || !["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"].includes(actor.role)) {
+    throw Object.assign(new Error("Not allowed to edit employees"), { statusCode: 403 });
+  }
+  const targetRole = employee.user?.role;
+  const requestedRole = data.role === "HR" ? "MANAGER" : data.role;
+  if (targetRole === "SUPER_ADMIN" ||
+      (targetRole === "COMPANY_ADMIN" && employee.userId !== actor.id) ||
+      (actor.role === "MANAGER" && targetRole !== "EMPLOYEE")) {
+    throw Object.assign(new Error("Not allowed to modify this account"), { statusCode: 403 });
+  }
+  if (requestedRole !== undefined && requestedRole !== targetRole) {
+    if (actor.role === "MANAGER" || actor.id === employee.userId) {
+      throw Object.assign(new Error("Not allowed to change this role"), { statusCode: 403 });
+    }
+    resolveAssignableRole(requestedRole, actor.role);
   }
 
   const {

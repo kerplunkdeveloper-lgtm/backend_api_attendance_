@@ -119,56 +119,7 @@ const SUBSCRIPTION_PLANS = [
   },
 ];
 
-const PLAN_CONFIGS = {
-  FREE_TRIAL: {
-    plan: "FREE_TRIAL",
-    status: "TRIALING",
-    price: 0,
-    maxEmployees: 10,
-    maxBranches: 1,
-    trialDays: 14,
-    hasGeofence: true,
-    hasPayroll: true,
-    hasShiftPlanner: true,
-    hasApiAccess: false,
-  },
-  STARTER: {
-    plan: "STARTER",
-    status: "ACTIVE",
-    price: 2499,
-    maxEmployees: 25,
-    maxBranches: 2,
-    periodDays: 30,
-    hasGeofence: true,
-    hasPayroll: true,
-    hasShiftPlanner: true,
-    hasApiAccess: false,
-  },
-  PROFESSIONAL: {
-    plan: "PROFESSIONAL",
-    status: "ACTIVE",
-    price: 6999,
-    maxEmployees: 100,
-    maxBranches: 10,
-    periodDays: 30,
-    hasGeofence: true,
-    hasPayroll: true,
-    hasShiftPlanner: true,
-    hasApiAccess: true,
-  },
-  ENTERPRISE: {
-    plan: "ENTERPRISE",
-    status: "ACTIVE",
-    price: 16999,
-    maxEmployees: 1000,
-    maxBranches: 50,
-    periodDays: 30,
-    hasGeofence: true,
-    hasPayroll: true,
-    hasShiftPlanner: true,
-    hasApiAccess: true,
-  },
-};
+const { PLAN_CONFIGS } = require("../config/plans");
 
 /**
  * Public self-serve signup. This always provisions a NEW workspace and makes the
@@ -200,7 +151,8 @@ const register = async ({
   // to more than one workspace with the same address.
 
   // Determine subscription plan configuration
-  const chosenPlanKey = (subscriptionPlan || "FREE_TRIAL").toUpperCase();
+  // Plan selection is not payment. Every new workspace receives only a trial.
+  const chosenPlanKey = "FREE_TRIAL";
   const planMeta = PLAN_CONFIGS[chosenPlanKey] || PLAN_CONFIGS.FREE_TRIAL;
   const cycle = (billingCycle || "MONTHLY").toUpperCase() === "ANNUAL" ? "ANNUAL" : "MONTHLY";
 
@@ -664,6 +616,8 @@ const activatePlan = async (organizationId, enteredCode) => {
     throw err;
   }
 
+  require("./entitlement.service").assertEntitled(org);
+
   if (!org.planLocked) {
     return { success: true, message: "Plan is already activated.", alreadyActive: true };
   }
@@ -698,70 +652,8 @@ const activatePlan = async (organizationId, enteredCode) => {
 /**
  * Upgrade or switch organization subscription plan tier.
  */
-const upgradePlan = async (organizationId, newPlan, billingCycle = "MONTHLY") => {
-  const chosenPlanKey = (newPlan || "PROFESSIONAL").toUpperCase();
-  const planMeta = PLAN_CONFIGS[chosenPlanKey] || PLAN_CONFIGS.PROFESSIONAL;
-  const cycle = (billingCycle || "MONTHLY").toUpperCase() === "ANNUAL" ? "ANNUAL" : "MONTHLY";
-
-  const now = new Date();
-  const periodDays = cycle === "ANNUAL" ? 365 : 30;
-  const currentPeriodEnd = new Date(now.getTime() + periodDays * 24 * 60 * 60 * 1000);
-  const calculatedPrice = cycle === "ANNUAL" ? planMeta.price * 10 : planMeta.price;
-
-  const org = await prisma.organization.update({
-    where: { id: organizationId },
-    data: {
-      subscriptionPlan: planMeta.plan,
-      subscriptionStatus: "ACTIVE",
-      planLocked: false,
-      subscriptionExpiresAt: currentPeriodEnd,
-      maxEmployees: planMeta.maxEmployees,
-      planActivatedAt: now,
-    },
-    include: { subscription: true },
-  });
-
-  if (org.subscription) {
-    await prisma.subscription.update({
-      where: { id: org.subscription.id },
-      data: {
-        plan: planMeta.plan,
-        status: "ACTIVE",
-        billingCycle: cycle,
-        price: calculatedPrice,
-        maxEmployees: planMeta.maxEmployees,
-        maxBranches: planMeta.maxBranches,
-        hasGeofence: planMeta.hasGeofence,
-        hasPayroll: planMeta.hasPayroll,
-        hasShiftPlanner: planMeta.hasShiftPlanner,
-        hasApiAccess: planMeta.hasApiAccess,
-        currentPeriodEnd,
-      },
-    });
-  } else {
-    await prisma.subscription.create({
-      data: {
-        organizationId,
-        plan: planMeta.plan,
-        status: "ACTIVE",
-        billingCycle: cycle,
-        price: calculatedPrice,
-        maxEmployees: planMeta.maxEmployees,
-        maxBranches: planMeta.maxBranches,
-        hasGeofence: planMeta.hasGeofence,
-        hasPayroll: planMeta.hasPayroll,
-        hasShiftPlanner: planMeta.hasShiftPlanner,
-        hasApiAccess: planMeta.hasApiAccess,
-        currentPeriodEnd,
-      },
-    });
-  }
-
-  return {
-    success: true,
-    message: `Subscription successfully upgraded to ${planMeta.plan}!`,
-    organization: org,
-  };
+const upgradePlan = async () => {
+  throw Object.assign(new Error("Use billing checkout to purchase a plan. Direct activation is disabled."), { statusCode: 403 });
 };
 
 /**

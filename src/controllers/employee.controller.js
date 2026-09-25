@@ -74,6 +74,7 @@ const update = async (req, res) => {
       req.user.organizationId,
       id,
       req.body,
+      { id: req.user.id, role: req.user.role },
     );
 
     return res.json({

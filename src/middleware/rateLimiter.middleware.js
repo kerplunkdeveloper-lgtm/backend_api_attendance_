@@ -1,4 +1,5 @@
 const rateStore = new Map();
+let limiterSequence = 0;
 /**
  * Creates an Express rate-limiter middleware.
  * @param {object} options
@@ -12,17 +13,19 @@ const createRateLimiter = ({
   max = 100,
   keyBy = "ip",
   message,
+  namespace = `limiter-${++limiterSequence}`,
 }) => {
   return (req, res, next) => {
-    let key;
+    let subject;
     if (keyBy === "user" && req.user?.id) {
-      key = `user:${req.user.id}`;
+      subject = `user:${req.user.id}`;
     } else {
       // req.ip only trusts forwarding headers when Express is explicitly
       // configured with trusted proxies. Directly reading X-Forwarded-For lets
       // clients evade the limiter by inventing a new address per request.
-      key = `ip:${req.ip || req.socket?.remoteAddress || "unknown"}`;
+      subject = `ip:${req.ip || req.socket?.remoteAddress || "unknown"}`;
     }
+    const key = `${namespace}:${subject}`;
 
     const now = Date.now();
     const entry = rateStore.get(key);
@@ -62,6 +65,7 @@ const createRateLimiter = ({
  * Protects login/register from brute force
  */
 const authRateLimiter = createRateLimiter({
+  namespace: "auth",
   windowMs: 15 * 60 * 1000,
   max: 10,
   keyBy: "ip",
@@ -73,6 +77,7 @@ const authRateLimiter = createRateLimiter({
  * Protects all other endpoints from abuse
  */
 const apiRateLimiter = createRateLimiter({
+  namespace: "api",
   windowMs: 60 * 1000,
   max: 200,
   keyBy: "ip",
@@ -84,6 +89,7 @@ const apiRateLimiter = createRateLimiter({
  * Use on password reset, admin bulk operations, etc.
  */
 const strictRateLimiter = createRateLimiter({
+  namespace: "strict",
   windowMs: 60 * 60 * 1000,
   max: 5,
   keyBy: "ip",

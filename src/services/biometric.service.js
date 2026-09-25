@@ -69,55 +69,28 @@ async function ingestPunch({ apiKey, employeeCode, punchType, timestamp }) {
     err.statusCode = 401;
     throw err;
   }
+  const org = await prisma.organization.findUnique({ where: { id: device.organizationId }, include: { subscription: true } });
+  require("./entitlement.service").assertEntitled(org);
   const employee = await prisma.employee.findFirst({
-    where: { organizationId: device.organizationId, employeeCode: String(employeeCode || "").trim() },
+    where: { organizationId: device.organizationId, employeeCode: String(employeeCode || "").trim(), deletedAt: null },
+    include: { user: true },
   });
-  if (!employee) {
-    const err = new Error("Employee code not found");
-    err.statusCode = 404;
-    throw err;
+  if (!employee || !employee.userId || employee.user?.isActive === false || ["INACTIVE", "TERMINATED"].includes(employee.status)) {
+    throw Object.assign(new Error("Active employee not found"), { statusCode: 404 });
   }
-
   const at = timestamp ? new Date(timestamp) : new Date();
-  if (Number.isNaN(at.getTime())) {
-    const err = new Error("Invalid timestamp");
-    err.statusCode = 400;
-    throw err;
+  const age = Date.now() - at.getTime();
+  if (!Number.isFinite(age) || age < -300000 || age > 7 * 86400000) {
+    throw Object.assign(new Error("Timestamp must be within the last 7 days and at most 5 minutes ahead"), { statusCode: 400 });
   }
-  const date = await attendanceService.getOrgDateOnly(device.organizationId, at);
-  const type = String(punchType || "IN").toUpperCase();
+  const type = String(punchType || "").toUpperCase();
+  if (!["IN", "OUT"].includes(type)) throw Object.assign(new Error("punchType must be IN or OUT"), { statusCode: 400 });
+  const args = { userId: employee.userId, employeeId: employee.id, organizationId: device.organizationId, actorRole: "EMPLOYEE", timestamp: at.toISOString(), biometricDeviceId: device.id };
+  // Both channels now use the same attendance events and payroll calculations.
+  const result = type === "IN" ? await attendanceService.checkIn(args) : await attendanceService.checkOut(args);
+  await prisma.biometricDevice.update({ where: { id: device.id }, data: { lastSeenAt: new Date() } });
+  return { ...result, punch: type, deviceId: device.id };
 
-  await prisma.biometricDevice.update({
-    where: { id: device.id },
-    data: { lastSeenAt: new Date() },
-  });
-
-  if (type === "OUT") {
-    const open = await attendanceService.findOpenAttendance(employee.id, device.organizationId, at);
-    if (!open?.checkIn) {
-      const err = new Error("No open check-in to close");
-      err.statusCode = 400;
-      throw err;
-    }
-    const updated = await prisma.attendance.update({
-      where: { id: open.id },
-      data: { checkOut: at },
-    });
-    return { punch: "OUT", attendance: updated, deviceId: device.id };
-  }
-
-  const attendance = await prisma.attendance.upsert({
-    where: { employeeId_date: { employeeId: employee.id, date } },
-    update: { checkIn: at, status: "PRESENT" },
-    create: {
-      organizationId: device.organizationId,
-      employeeId: employee.id,
-      date,
-      checkIn: at,
-      status: "PRESENT",
-    },
-  });
-  return { punch: "IN", attendance, deviceId: device.id };
 }
 
 module.exports = { createDevice, listDevices, revokeDevice, ingestPunch };

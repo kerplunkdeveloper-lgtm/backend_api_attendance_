@@ -44,7 +44,7 @@ class CorrectionController {
     try {
       const result = await correctionService.getAllRequests(
         req.user.organizationId,
-        req.query,
+        { ...req.query, ...(req.forcedStatus ? { status: req.forcedStatus } : {}) },
       );
       // `corrections` is the key the approvals inbox reads.
       return paginated(res, result, { corrections: result.records ?? [] });

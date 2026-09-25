@@ -25,7 +25,7 @@ router.get(
   "/pending",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
   (req, res) => {
-    req.query.status = "PENDING";
+    req.forcedStatus = "PENDING";
     return overtimeController.getAllRequests(req, res);
   },
 );

@@ -68,7 +68,8 @@ class OnboardingController {
       const { token } = req.params;
       const document = await onboardingService.uploadCandidateDocument(
         token,
-        req.body,
+        req.body || {},
+        req.file,
       );
       res.status(201).json({
         success: true,

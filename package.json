@@ -16,7 +16,7 @@
     "db:local:seed": "node scripts/seed_demo_accounts.js",
     "db:local:setup": "npm run db:local:push && npm run db:local:seed",
     "db:push": "prisma db push",
-    "test": "node --test --test-concurrency=1 tests/auth.test.js tests/tenant.test.js tests/attendance.test.js tests/leave.test.js tests/payroll.test.js"
+    "test": "node --test --test-concurrency=1 tests/*.test.js"
   },
   "keywords": [],
   "author": "",

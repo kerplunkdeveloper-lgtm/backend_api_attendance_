@@ -157,6 +157,9 @@ const resolveEmployee = async (userId, employeeId, organizationId, actorRole = n
     throw error;
   }
 
+  if (employee.deletedAt || employee.user?.isActive === false || ["INACTIVE", "TERMINATED"].includes(employee.status)) {
+    throw Object.assign(new Error("Employee account is inactive"), { statusCode: 403 });
+  }
   return employee;
 };
 
@@ -226,7 +229,14 @@ const assertTrustedDevice = async (employee, organizationId, policy, deviceId) =
   await prisma.employeeDevice.update({ where: { id: device.id }, data: { lastUsedAt: new Date() } });
 };
 
-const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude, accuracy, timestamp, workMode = "OFFICE", note, actorRole = null, deviceId = null }) => {
+const assertBiometricDevice = async (id, organizationId) => {
+  if (!id) return false;
+  const device = await prisma.biometricDevice.findFirst({ where: { id, organizationId, isActive: true } });
+  if (!device) throw Object.assign(new Error("Biometric device is revoked"), { statusCode: 403 });
+  return true;
+};
+
+const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude, accuracy, timestamp, workMode = "OFFICE", note, actorRole = null, deviceId = null, biometricDeviceId = null }) => {
   const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
   const checkInTime = timestamp ? new Date(timestamp) : new Date();
   const timezone = await getOrgTimezone(organizationId);
@@ -237,7 +247,8 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
     error.statusCode = 403;
     throw error;
   }
-  await assertTrustedDevice(employee, organizationId, policy, deviceId);
+  const isBiometric = await assertBiometricDevice(biometricDeviceId, organizationId);
+  if (!isBiometric) await assertTrustedDevice(employee, organizationId, policy, deviceId);
 
   // ── Week-Off / Holiday / Leave Detection ──────────────────────────────────
   const shift = await resolveShift(employee, organizationId, checkInTime);
@@ -325,6 +336,12 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
     };
   }
 
+  if (isBiometric) {
+    isBypassed = true;
+    bypassReason = "REGISTERED_BIOMETRIC_DEVICE";
+    geofenceResult = { isInside: true, bypassed: true, distanceMeters: null };
+  }
+
   if (!geofenceResult || (!geofenceResult.isInside && !geofenceResult.bypassed)) {
     const isSpecialWorkMode = ["WORK_FROM_HOME", "CLIENT_VISIT", "TRAVEL"].includes(workMode);
     if (policy.geofenceStrict && !isSpecialWorkMode) {
@@ -368,6 +385,10 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
 
   // ── Persist ─────────────────────────────────────────────────────────────────
   const attendance = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${employee.id}))`;
+    const current = await tx.attendance.findUnique({ where: { employeeId_date: { employeeId: employee.id, date: today } } });
+    if (current?.checkIn) throw Object.assign(new Error("Already checked in for this date"), { statusCode: 400 });
+
     const record = await tx.attendance.upsert({
       where: { employeeId_date: { employeeId: employee.id, date: today } },
       update: {
@@ -489,6 +510,10 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
   }
 
   const attendance = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${employee.id}))`;
+    const current = await tx.attendance.findUnique({ where: { employeeId_date: { employeeId: employee.id, date: today } } });
+    if (current?.checkIn) throw Object.assign(new Error("Already checked in for this date"), { statusCode: 400 });
+
     const record = await tx.attendance.upsert({
       where: { employeeId_date: { employeeId: employee.id, date: today } },
       update: {
@@ -541,10 +566,11 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
 // Clock-Out
 // ─────────────────────────────────────────────────────────────────────────────
 
-const checkOut = async ({ userId, employeeId, organizationId, latitude, longitude, accuracy, timestamp, workMode, note, actorRole = null, deviceId = null }) => {
+const checkOut = async ({ userId, employeeId, organizationId, latitude, longitude, accuracy, timestamp, workMode, note, actorRole = null, deviceId = null, biometricDeviceId = null }) => {
   const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
   const policy = await getPolicy(organizationId);
-  await assertTrustedDevice(employee, organizationId, policy, deviceId);
+  const isBiometric = await assertBiometricDevice(biometricDeviceId, organizationId);
+  if (!isBiometric) await assertTrustedDevice(employee, organizationId, policy, deviceId);
   const checkOutTime = timestamp ? new Date(timestamp) : new Date();
   const timezone = await getOrgTimezone(organizationId);
   const today = getLocalDateOnly(checkOutTime, timezone);
@@ -600,6 +626,10 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
     error.statusCode = 400;
     error.attendance = attendance;
     throw error;
+  }
+
+  if (checkOutTime <= new Date(attendance.checkIn)) {
+    throw Object.assign(new Error("Check-out must be after check-in"), { statusCode: 400 });
   }
 
   // Metrics are evaluated against the shift's own day, not the checkout instant,
@@ -713,6 +743,10 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
   }
 
   const updatedAttendance = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${employee.id}))`;
+    const current = await tx.attendance.findUnique({ where: { id: attendance.id } });
+    if (!current || current.checkOut) throw Object.assign(new Error("Already checked out or attendance unavailable"), { statusCode: 400 });
+
     if (isOnActiveBreak) {
       await tx.attendanceEvent.create({
         data: {
@@ -1452,7 +1486,7 @@ const syncOfflinePunches = async (userId, organizationId, punches) => {
         results.push({ localId, status: "SKIPPED", reason: err.message });
         skipped++;
       } else {
-        results.push({ localId, status: "FAILED", reason: err.message });
+        results.push({ localId, status: "FAILED", reason: err.message, statusCode: err.statusCode || 500 });
         failed++;
       }
     }

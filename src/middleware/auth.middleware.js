@@ -59,11 +59,20 @@ const authenticate = async (req, res, next) => {
       });
     }
 
-    if (user.employee?.deletedAt) {
+    if (user.employee?.deletedAt || ["INACTIVE", "TERMINATED"].includes(user.employee?.status)) {
       return res.status(403).json({
         success: false,
-        message: "This employee profile has been removed.",
+        message: "This employee profile is inactive or removed.",
       });
+    }
+
+    const modulePath = (req.baseUrl || "").replace(/^\/api(?=\/|$)/, "");
+    const recoveryModule = ["/auth", "/billing", "/organization"].includes(modulePath);
+    if (!recoveryModule) {
+      const { assertEntitled, assertFeature } = require("../services/entitlement.service");
+      assertEntitled(user.organization);
+      const feature = { "/payroll": "hasPayroll", "/api-keys": "hasApiAccess", "/shifts": "hasShiftPlanner", "/shift-overrides": "hasShiftPlanner" }[modulePath];
+      if (feature) assertFeature(user.organization, feature);
     }
 
     req.user = {
@@ -77,9 +86,9 @@ const authenticate = async (req, res, next) => {
 
     next();
   } catch (error) {
-    return res.status(401).json({
+    return res.status(error.statusCode || 401).json({
       success: false,
-      message: "Invalid or expired token",
+      message: error.statusCode ? error.message : "Invalid or expired token",
     });
   }
 };
