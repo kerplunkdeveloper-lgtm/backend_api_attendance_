@@ -4,13 +4,26 @@ const {
   authenticate,
   authorizeRoles,
 } = require("../middleware/auth.middleware");
+const { imageUploader, handleUploadErrors } = require("../middleware/upload.middleware");
 
 const router = express.Router();
+const avatarUpload = imageUploader(6);
+const avatarFields = avatarUpload.fields([
+  { name: "image", maxCount: 1 },
+  { name: "file", maxCount: 1 },
+  { name: "avatar", maxCount: 1 },
+]);
 
 router.use(authenticate);
 
 router.get("/me", employeeController.getMe);
 router.put("/me", employeeController.updateMe);
+router.post(
+  "/me/avatar",
+  avatarFields,
+  handleUploadErrors,
+  employeeController.uploadMyAvatar,
+);
 
 router.get(
   "/",
@@ -36,6 +49,14 @@ router.put(
   "/:id",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
   employeeController.update,
+);
+
+router.post(
+  "/:id/avatar",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  avatarFields,
+  handleUploadErrors,
+  employeeController.uploadEmployeeAvatar,
 );
 
 // Delete employee

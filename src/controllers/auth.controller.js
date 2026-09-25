@@ -208,6 +208,58 @@ const getMe = async (req, res) => {
   }
 };
 
+const updateMe = async (req, res) => {
+  try {
+    const avatarUrl = req.body?.avatarUrl;
+    if (avatarUrl === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: "Nothing to update. Send avatarUrl or upload a photo to /auth/avatar.",
+      });
+    }
+    const avatarService = require("../services/avatar.service");
+    const user = await avatarService.setMyAvatar(
+      req.user.id,
+      req.user.organizationId,
+      avatarUrl === "" || avatarUrl === null ? null : avatarUrl,
+    );
+    return res.json({
+      success: true,
+      message: "Profile photo updated",
+      data: user,
+      user,
+    });
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+const uploadAvatar = async (req, res) => {
+  try {
+    const avatarService = require("../services/avatar.service");
+    const url = await avatarService.uploadAvatarFile(req);
+    const user = await avatarService.setMyAvatar(
+      req.user.id,
+      req.user.organizationId,
+      url,
+    );
+    return res.json({
+      success: true,
+      message: "Profile photo updated",
+      data: { ...user, url, avatarUrl: url },
+      user,
+    });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Failed to upload photo",
+    });
+  }
+};
+
 const getPlans = (req, res) => {
   try {
     const plans = authService.getSubscriptionPlans();
@@ -339,6 +391,8 @@ module.exports = {
   refreshToken,
   logout,
   getMe,
+  updateMe,
+  uploadAvatar,
   getPlans,
   activatePlan,
   upgradePlan,

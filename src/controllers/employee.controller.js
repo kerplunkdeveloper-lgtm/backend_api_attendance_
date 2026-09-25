@@ -151,6 +151,49 @@ const updateMe = async (req, res) => {
   }
 };
 
+const uploadMyAvatar = async (req, res) => {
+  try {
+    const avatarService = require("../services/avatar.service");
+    const url = await avatarService.uploadAvatarFile(req);
+    const user = await avatarService.setMyAvatar(
+      req.user.id,
+      req.user.organizationId,
+      url,
+    );
+    return res.json({
+      success: true,
+      message: "Profile photo updated",
+      data: user,
+      user,
+    });
+  } catch (error) {
+    return res
+      .status(error.statusCode || 500)
+      .json({ success: false, message: error.message || "Failed to upload photo" });
+  }
+};
+
+const uploadEmployeeAvatar = async (req, res) => {
+  try {
+    const avatarService = require("../services/avatar.service");
+    const url = await avatarService.uploadAvatarFile(req);
+    const employee = await avatarService.setEmployeeAvatar(
+      req.user.organizationId,
+      req.params.id,
+      url,
+    );
+    return res.json({
+      success: true,
+      message: "Employee photo updated",
+      data: employee,
+    });
+  } catch (error) {
+    return res
+      .status(error.statusCode || 500)
+      .json({ success: false, message: error.message || "Failed to upload photo" });
+  }
+};
+
 module.exports = {
   create,
   list,
@@ -160,4 +203,6 @@ module.exports = {
   invite,
   getMe,
   updateMe,
+  uploadMyAvatar,
+  uploadEmployeeAvatar,
 };

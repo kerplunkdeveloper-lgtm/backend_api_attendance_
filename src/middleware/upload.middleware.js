@@ -2,10 +2,12 @@ const multer = require("multer");
 
 const IMAGE_MIME_TYPES = [
   "image/jpeg",
+  "image/jpg",
   "image/png",
   "image/webp",
   "image/gif",
   "image/heic",
+  "image/heif",
 ];
 
 const DOCUMENT_MIME_TYPES = [

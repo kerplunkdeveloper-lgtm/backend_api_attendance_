@@ -6,8 +6,15 @@ const {
 } = require("../middleware/auth.middleware");
 const { authRateLimiter } = require("../middleware/rateLimiter.middleware");
 const { validate, schemas } = require("../middleware/validate.middleware");
+const { imageUploader, handleUploadErrors } = require("../middleware/upload.middleware");
 
 const router = express.Router();
+const avatarUpload = imageUploader(6);
+const avatarFields = avatarUpload.fields([
+  { name: "image", maxCount: 1 },
+  { name: "file", maxCount: 1 },
+  { name: "avatar", maxCount: 1 },
+]);
 
 // Public Authentication Endpoints
 router.get("/plans", authController.getPlans);
@@ -42,6 +49,14 @@ router.post(
 
 // Protected Authentication Endpoints
 router.get("/me", authenticate, authController.getMe);
+router.put("/me", authenticate, authController.updateMe);
+router.post(
+  "/avatar",
+  authenticate,
+  avatarFields,
+  handleUploadErrors,
+  authController.uploadAvatar,
+);
 
 // Plan unlock — admin enters the code from their registration email
 router.post(
