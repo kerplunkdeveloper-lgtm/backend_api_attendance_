@@ -74,6 +74,7 @@ const update = async (req, res) => {
       req.user.organizationId,
       id,
       req.body,
+      { actorRole: req.user.role, actorUserId: req.user.id },
     );
 
     return res.json({
@@ -112,6 +113,7 @@ const invite = async (req, res) => {
       req.user.organizationId,
       req.user.id,
       req.body,
+      req.user.role,
     );
     return res.status(201).json(result);
   } catch (error) {

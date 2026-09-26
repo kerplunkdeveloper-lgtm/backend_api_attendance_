@@ -47,4 +47,47 @@ describe("auth", () => {
     assert.equal(body.success, false);
     assert.match(body.message, /Authorization token required/);
   });
+
+  it("returns 402 when an expired canceled organization presents a valid JWT", async () => {
+    const { generateAccessToken } = require("../src/utils/jwt");
+    prisma.user.findUnique = async () => ({
+      id: "u1",
+      isActive: true,
+      role: "COMPANY_ADMIN",
+      organizationId: "org-a",
+      email: "admin@example.com",
+      organization: {
+        subscriptionStatus: "CANCELED",
+        subscriptionExpiresAt: new Date("2020-01-01T00:00:00.000Z"),
+        deletedAt: null,
+      },
+      employee: null,
+    });
+
+    const token = generateAccessToken({ userId: "u1", organizationId: "org-a" });
+    const req = {
+      headers: { authorization: `Bearer ${token}` },
+      originalUrl: "/api/employees",
+      path: "/api/employees",
+    };
+    let statusCode = 0;
+    let body = null;
+    const res = {
+      status(code) {
+        statusCode = code;
+        return this;
+      },
+      json(payload) {
+        body = payload;
+        return this;
+      },
+    };
+
+    await authenticate(req, res, () => {
+      throw new Error("next should not be called");
+    });
+
+    assert.equal(statusCode, 402);
+    assert.equal(body.code, "SUBSCRIPTION_CANCELED");
+  });
 });

@@ -47,6 +47,7 @@ const prisma = {
       if (where?.id === "lr-1") {
         return {
           ...createdRequest,
+          status: prisma._leaveStatus || createdRequest.status,
           employee: { ...employee, userId: "user-1", user: { email: "ada@example.com" } },
         };
       }
@@ -54,6 +55,10 @@ const prisma = {
     },
     create: async () => createdRequest,
     update: async ({ data }) => ({ ...createdRequest, ...data, status: data.status }),
+    updateMany: async ({ data }) => {
+      prisma._leaveStatus = data.status;
+      return { count: 1 };
+    },
     aggregate: async () => ({ _sum: { totalDays: 0 } }),
   },
   holiday: {

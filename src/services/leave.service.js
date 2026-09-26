@@ -481,6 +481,20 @@ class LeaveService {
     }
 
     const result = await prisma.$transaction(async (tx) => {
+      const claimed = await tx.leaveRequest.updateMany({
+        where: { id: requestId, organizationId, status: "PENDING" },
+        data: {
+          status,
+          reviewedBy: reviewerUserId,
+          reviewNote: reviewNote || null,
+        },
+      });
+      if (claimed.count === 0) {
+        const error = new Error("Leave request has already been reviewed");
+        error.statusCode = 409;
+        throw error;
+      }
+
       if (status === "APPROVED") {
         // Update LeaveBalance if paid leave
         if (request.leaveType.isPaid) {
@@ -571,13 +585,8 @@ class LeaveService {
         }
       }
 
-      const updated = await tx.leaveRequest.update({
-        where: { id: requestId },
-        data: {
-          status,
-          reviewedBy: reviewerUserId,
-          reviewNote: reviewNote || null,
-        },
+      const updated = await tx.leaveRequest.findFirst({
+        where: { id: requestId, organizationId },
         include: {
           leaveType: true,
           employee: {

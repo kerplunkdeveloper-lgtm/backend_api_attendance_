@@ -6,6 +6,7 @@ module.exports = {
       const data = await apikeyService.createKey(
         req.user.organizationId,
         req.body.name,
+        req.body.scopes,
       );
       return res
         .status(201)

@@ -159,7 +159,7 @@ router.put("/read-all", async (req, res) => {
   }
 });
 
-// Trigger daily morning (08:50 AM) and evening (06:00 PM) shift reminder notifications
+// Trigger daily reminders (morning before shift start, evening after shift end). Admin trigger ignores the clock window.
 router.post("/trigger-reminders", adminOnly, async (req, res) => {
   try {
     // Postman/legacy clients send `type`; the web app sends `reminderType`.

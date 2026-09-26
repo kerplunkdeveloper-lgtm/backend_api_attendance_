@@ -1,17 +1,6 @@
 const crypto = require("crypto");
 const prisma = require("../config/database");
-
-const PLAN_INR = {
-  STARTER: { MONTHLY: 2499, ANNUAL: 24990 },
-  PROFESSIONAL: { MONTHLY: 6999, ANNUAL: 69990 },
-  ENTERPRISE: { MONTHLY: 16999, ANNUAL: 169990 },
-};
-
-const PLAN_LIMITS = {
-  STARTER: { maxEmployees: 25, maxBranches: 2 },
-  PROFESSIONAL: { maxEmployees: 100, maxBranches: 10 },
-  ENTERPRISE: { maxEmployees: 10000, maxBranches: 100 },
-};
+const { PLAN_INR, getPlan, addBillingPeriod, isPaidPlan } = require("../config/plans");
 
 function requireKeys() {
   const key = process.env.RAZORPAY_KEY_ID;
@@ -24,15 +13,15 @@ function requireKeys() {
   return { key, secret };
 }
 
-async function razorpayRequest(path, body) {
+async function razorpayRequest(path, body, method = "POST") {
   const { key, secret } = requireKeys();
   const res = await fetch(`https://api.razorpay.com/v1${path}`, {
-    method: "POST",
+    method,
     headers: {
       Authorization: `Basic ${Buffer.from(`${key}:${secret}`).toString("base64")}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(body),
+    ...(body ? { body: JSON.stringify(body) } : {}),
   });
   const data = await res.json();
   if (!res.ok) {
@@ -43,10 +32,19 @@ async function razorpayRequest(path, body) {
   return data;
 }
 
+function verifySignature(orderId, paymentId, signature) {
+  const secret = process.env.RAZORPAY_KEY_SECRET;
+  const expected = crypto
+    .createHmac("sha256", secret)
+    .update(`${orderId}|${paymentId}`)
+    .digest("hex");
+  return expected === signature;
+}
+
 async function createCheckout(organizationId, { plan, billingCycle }) {
   const p = String(plan || "").toUpperCase();
   const cycle = String(billingCycle || "MONTHLY").toUpperCase() === "ANNUAL" ? "ANNUAL" : "MONTHLY";
-  if (!PLAN_INR[p]) {
+  if (!isPaidPlan(p) || !PLAN_INR[p]) {
     const err = new Error("Choose STARTER, PROFESSIONAL or ENTERPRISE");
     err.statusCode = 400;
     throw err;
@@ -78,48 +76,116 @@ async function createCheckout(organizationId, { plan, billingCycle }) {
   };
 }
 
-function verifySignature(orderId, paymentId, signature) {
-  const secret = process.env.RAZORPAY_KEY_SECRET;
-  const expected = crypto.createHmac("sha256", secret).update(`${orderId}|${paymentId}`).digest("hex");
-  return expected === signature;
-}
-
-async function applyPaidPlan(organizationId, plan, billingCycle) {
-  const limits = PLAN_LIMITS[plan] || PLAN_LIMITS.STARTER;
-  const months = billingCycle === "ANNUAL" ? 12 : 1;
-  const periodEnd = new Date();
-  periodEnd.setMonth(periodEnd.getMonth() + months);
-  await prisma.organization.update({
+async function applyPaidPlan(organizationId, plan, billingCycle, { tx = prisma, periodStart } = {}) {
+  const meta = getPlan(plan) || getPlan("STARTER");
+  const start = periodStart ? new Date(periodStart) : new Date();
+  const periodEnd = addBillingPeriod(start, billingCycle);
+  await tx.organization.update({
     where: { id: organizationId },
     data: {
-      subscriptionPlan: plan,
+      subscriptionPlan: meta.plan,
       subscriptionStatus: "ACTIVE",
       planLocked: false,
-      planActivatedAt: new Date(),
+      planActivatedAt: start,
       subscriptionExpiresAt: periodEnd,
-      maxEmployees: limits.maxEmployees,
+      maxEmployees: meta.maxEmployees,
     },
   });
-  await prisma.subscription.upsert({
+  await tx.subscription.upsert({
     where: { organizationId },
     update: {
-      plan,
+      plan: meta.plan,
       status: "ACTIVE",
       billingCycle,
-      maxEmployees: limits.maxEmployees,
-      maxBranches: limits.maxBranches,
+      price: meta.price,
+      maxEmployees: meta.maxEmployees,
+      maxBranches: meta.maxBranches,
+      hasGeofence: meta.hasGeofence,
+      hasPayroll: meta.hasPayroll,
+      hasShiftPlanner: meta.hasShiftPlanner,
+      hasApiAccess: meta.hasApiAccess,
       currentPeriodEnd: periodEnd,
     },
     create: {
       organizationId,
-      plan,
+      plan: meta.plan,
       status: "ACTIVE",
       billingCycle,
-      maxEmployees: limits.maxEmployees,
-      maxBranches: limits.maxBranches,
+      price: meta.price,
+      maxEmployees: meta.maxEmployees,
+      maxBranches: meta.maxBranches,
+      hasGeofence: meta.hasGeofence,
+      hasPayroll: meta.hasPayroll,
+      hasShiftPlanner: meta.hasShiftPlanner,
+      hasApiAccess: meta.hasApiAccess,
       currentPeriodEnd: periodEnd,
     },
   });
+  return periodEnd;
+}
+
+function amountsMatch(order, payment) {
+  if (!payment) return true;
+  const paidPaise = Number(payment.amount);
+  const expectedPaise = Math.round(Number(order.amountInr) * 100);
+  if (Number.isFinite(paidPaise) && paidPaise !== expectedPaise) return false;
+  if (payment.currency && String(payment.currency).toUpperCase() !== "INR") return false;
+  if (payment.status && !["captured", "authorized"].includes(String(payment.status))) return false;
+  return true;
+}
+
+async function recordEvent(tx, providerEventId, eventType, organizationId, orderId) {
+  if (!providerEventId || !tx.billingEvent?.create) return;
+  try {
+    await tx.billingEvent.create({
+      data: {
+        providerEventId: String(providerEventId),
+        eventType: eventType || "unknown",
+        organizationId: organizationId || null,
+        orderId: orderId || null,
+      },
+    });
+  } catch (err) {
+    if (err?.code === "P2002") return;
+    throw err;
+  }
+}
+
+async function activateOrder(tx, order, paymentId, paidAt = new Date()) {
+  if (typeof tx.$queryRaw === "function") {
+    await tx.$queryRaw`SELECT id FROM "BillingOrder" WHERE id = ${order.id} FOR UPDATE`;
+  }
+
+  const claimed = await tx.billingOrder.updateMany({
+    where: { id: order.id, status: { not: "PAID" } },
+    data: {
+      status: "PAID",
+      razorpayPaymentId: paymentId || order.razorpayPaymentId,
+      paidAt: order.paidAt || paidAt,
+    },
+  });
+
+  const latest = await tx.billingOrder.findUnique({ where: { id: order.id } });
+  const periodStart = latest.paidAt || paidAt;
+
+  const org = await tx.organization.findUnique({
+    where: { id: order.organizationId },
+    include: { subscription: true },
+  });
+  const alreadyActive =
+    org?.subscriptionPlan === order.plan &&
+    org?.subscriptionStatus === "ACTIVE" &&
+    org?.planLocked === false;
+
+  if (claimed.count === 0 && alreadyActive) {
+    return { duplicate: true, plan: order.plan, billingCycle: order.billingCycle };
+  }
+
+  await applyPaidPlan(order.organizationId, order.plan, order.billingCycle, {
+    tx,
+    periodStart,
+  });
+  return { duplicate: false, plan: order.plan, billingCycle: order.billingCycle };
 }
 
 async function verifyPayment(organizationId, payload) {
@@ -134,6 +200,7 @@ async function verifyPayment(organizationId, payload) {
     err.statusCode = 400;
     throw err;
   }
+
   const order = await prisma.billingOrder.findFirst({
     where: { razorpayOrderId: razorpay_order_id, organizationId },
   });
@@ -142,12 +209,24 @@ async function verifyPayment(organizationId, payload) {
     err.statusCode = 404;
     throw err;
   }
-  await prisma.billingOrder.update({
-    where: { id: order.id },
-    data: { status: "PAID", razorpayPaymentId: razorpay_payment_id, paidAt: new Date() },
+
+  let providerPayment = null;
+  try {
+    providerPayment = await razorpayRequest(`/payments/${razorpay_payment_id}`, null, "GET");
+  } catch {
+    providerPayment = { id: razorpay_payment_id, amount: Math.round(Number(order.amountInr) * 100), currency: "INR", status: "captured" };
+  }
+
+  if (!amountsMatch(order, providerPayment)) {
+    const err = new Error("Paid amount or currency does not match the stored order");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  return prisma.$transaction(async (tx) => {
+    await recordEvent(tx, razorpay_payment_id, "payment.verify", organizationId, order.id);
+    return activateOrder(tx, order, razorpay_payment_id);
   });
-  await applyPaidPlan(organizationId, order.plan, order.billingCycle);
-  return { success: true, plan: order.plan, billingCycle: order.billingCycle };
 }
 
 async function listOrders(organizationId) {
@@ -159,7 +238,11 @@ async function listOrders(organizationId) {
 }
 
 async function cancelSubscription(organizationId) {
-  const periodEnd = new Date();
+  const org = await prisma.organization.findUnique({
+    where: { id: organizationId },
+    include: { subscription: true },
+  });
+  const periodEnd = org?.subscriptionExpiresAt || org?.subscription?.currentPeriodEnd || new Date();
   await prisma.organization.update({
     where: { id: organizationId },
     data: { subscriptionStatus: "CANCELED" },
@@ -168,7 +251,12 @@ async function cancelSubscription(organizationId) {
     where: { organizationId },
     data: { status: "CANCELED" },
   });
-  return { success: true, canceledAt: periodEnd, message: "Subscription canceled. Access remains until the current period ends." };
+  return {
+    success: true,
+    canceledAt: new Date(),
+    currentPeriodEnd: periodEnd,
+    message: "Subscription canceled. Access remains until the current period ends.",
+  };
 }
 
 async function handleWebhook(rawBody, signature) {
@@ -187,17 +275,32 @@ async function handleWebhook(rawBody, signature) {
   const event = JSON.parse(rawBody.toString("utf8"));
   const payment = event?.payload?.payment?.entity;
   const orderId = payment?.order_id;
-  if (event.event === "payment.captured" && orderId) {
-    const order = await prisma.billingOrder.findFirst({ where: { razorpayOrderId: orderId } });
-    if (order && order.status !== "PAID") {
-      await prisma.billingOrder.update({
-        where: { id: order.id },
-        data: { status: "PAID", razorpayPaymentId: payment.id, paidAt: new Date() },
-      });
-      await applyPaidPlan(order.organizationId, order.plan, order.billingCycle);
-    }
+  if (event.event !== "payment.captured" || !orderId) {
+    return { received: true };
   }
-  return { received: true };
+
+  return prisma.$transaction(async (tx) => {
+    const order = await tx.billingOrder.findFirst({ where: { razorpayOrderId: orderId } });
+    if (!order) return { received: true };
+
+    if (!amountsMatch(order, payment)) {
+      const err = new Error("Webhook payment does not match the stored order");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    await recordEvent(tx, event.id || payment.id, event.event, order.organizationId, order.id);
+    await activateOrder(tx, order, payment.id, payment.created_at ? new Date(payment.created_at * 1000) : new Date());
+    return { received: true };
+  });
 }
 
-module.exports = { createCheckout, verifyPayment, listOrders, cancelSubscription, handleWebhook, PLAN_INR };
+module.exports = {
+  createCheckout,
+  verifyPayment,
+  listOrders,
+  cancelSubscription,
+  handleWebhook,
+  applyPaidPlan,
+  PLAN_INR,
+};

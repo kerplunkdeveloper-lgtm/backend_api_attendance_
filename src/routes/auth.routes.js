@@ -67,11 +67,11 @@ router.post(
   authController.activatePlan,
 );
 
-// Plan upgrade / change tier
+// Platform-owner grant only. Company admins must use /billing/checkout.
 router.post(
   "/upgrade-plan",
   authenticate,
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
+  authorizeRoles("SUPER_ADMIN"),
   authController.upgradePlan,
 );
 

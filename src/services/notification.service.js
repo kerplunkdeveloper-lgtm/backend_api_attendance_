@@ -1,24 +1,15 @@
 const prisma = require("../config/database");
 const emailService = require("./email.service");
 const whatsappService = require("./whatsapp.service");
-
-const clockMinutes = (value) => {
-  const match = String(value || "").trim().match(/^(\d{1,2}):(\d{2})/);
-  if (!match) return null;
-  const hours = Number(match[1]);
-  const minutes = Number(match[2]);
-  return hours <= 23 && minutes <= 59 ? hours * 60 + minutes : null;
-};
-
-const isWorkingDay = (shift, now) => String(shift?.workingDays || "1,2,3,4,5,6")
-  .split(",").map((day) => Number(day.trim())).includes(now.getDay());
-
-const isInReminderWindow = (now, target) => {
-  if (target === null) return false;
-  const current = now.getHours() * 60 + now.getMinutes();
-  const delta = (target - current + 1440) % 1440;
-  return delta >= 0 && delta <= 10;
-};
+const { getLocalDateOnly, getLocalMinutesOfDay } = require("../utils/datetime");
+const {
+  FALLBACK_TZ,
+  clockMinutes,
+  zoneOf,
+  isWorkingDay,
+  isBeforeShiftStartWindow,
+  isAfterShiftEndWindow,
+} = require("../utils/reminderWindows");
 
 class NotificationService {
   /**
@@ -87,11 +78,10 @@ class NotificationService {
   }
 
   /**
-   * 1. Morning Shift Check-In Reminder (8:50 AM - 10 minutes before 9:00 AM)
+   * 1. Morning Shift Check-In Reminder (before shift start, e.g. 08:00–09:00)
    * Sends to all active employees who have not clocked in today.
    */
   async sendMorningCheckInReminders(organizationId = null, respectSchedule = false) {
-    const startOfToday = this.getStartOfToday();
     const whereEmployee = {
       status: "ACTIVE",
       userId: { not: null },
@@ -111,6 +101,7 @@ class NotificationService {
         organizationId: true,
         user: { select: { email: true } },
         shift: { select: { name: true, startTime: true, workingDays: true } },
+        organization: { select: { timezone: true } },
       },
     });
 
@@ -120,20 +111,27 @@ class NotificationService {
     for (const emp of activeEmployees) {
       if (!emp.userId) continue;
       const reminderNow = new Date();
-      if (respectSchedule && (!isWorkingDay(emp.shift, reminderNow) || !isInReminderWindow(reminderNow, clockMinutes(emp.shift?.startTime || "09:00")))) continue;
+      const timeZone = zoneOf(emp);
+      const startMinutes = clockMinutes(emp.shift?.startTime || "09:00");
+      if (
+        respectSchedule &&
+        (!isWorkingDay(emp.shift, reminderNow, timeZone) ||
+          !isBeforeShiftStartWindow(reminderNow, startMinutes, timeZone))
+      ) {
+        continue;
+      }
 
-      // Check if user already clocked in today
+      const startOfToday = getLocalDateOnly(reminderNow, timeZone);
+
       const todayAttendance = await prisma.attendance.findFirst({
         where: {
           employeeId: emp.id,
-          date: { gte: startOfToday },
+          date: startOfToday,
           checkIn: { not: null },
         },
       });
 
-      // If user hasn't clocked in today
       if (!todayAttendance) {
-        // Check if morning reminder was already sent today to avoid duplicate spam
         const existingNotification = await prisma.notification.findFirst({
           where: {
             userId: emp.userId,
@@ -143,20 +141,19 @@ class NotificationService {
         });
 
         if (!existingNotification) {
-          const shiftTime = emp.shift?.startTime || "09:00 AM";
+          const shiftTime = emp.shift?.startTime || "09:00";
           const shiftName = emp.shift?.name || "General Morning Shift";
 
           await prisma.notification.create({
             data: {
               organizationId: emp.organizationId,
               userId: emp.userId,
-              title: "⏰ Morning Shift Check-In Reminder (08:50 AM)",
-              message: `Good morning, ${emp.firstName}! Shift starts at ${shiftTime}. Please remember to clock in within the grace period to prevent late marks.`,
+              title: "Morning Shift Check-In Reminder",
+              message: `Good morning, ${emp.firstName}! Shift starts at ${shiftTime}. Clock in on time to avoid a late mark.`,
               type: "ATTENDANCE",
             },
           });
 
-          // Dispatch Email
           if (emp.user?.email) {
             emailService
               .sendShiftReminderEmail(emp.user.email, emp.firstName, {
@@ -166,7 +163,6 @@ class NotificationService {
               .catch((e) => console.warn(`[MorningReminder:Email] ${e.message}`));
           }
 
-          // Dispatch WhatsApp
           if (emp.phone) {
             whatsappService
               .sendShiftReminderWhatsApp(emp.phone, emp.firstName, {
@@ -191,11 +187,10 @@ class NotificationService {
   }
 
   /**
-   * 2. Evening Shift Completion & Check-Out Reminder (After 6:00 PM)
+   * 2. Evening Shift Completion & Check-Out Reminder (after shift end, e.g. 18:00–22:59)
    * Sends to all active employees who clocked in today but have not yet clocked out.
    */
   async sendEveningCheckOutReminders(organizationId = null, respectSchedule = false) {
-    const startOfToday = this.getStartOfToday();
     const whereEmployee = {
       status: "ACTIVE",
       userId: { not: null },
@@ -213,6 +208,7 @@ class NotificationService {
         lastName: true,
         organizationId: true,
         shift: { select: { name: true, endTime: true, workingDays: true } },
+        organization: { select: { timezone: true } },
       },
     });
 
@@ -222,20 +218,27 @@ class NotificationService {
     for (const emp of activeEmployees) {
       if (!emp.userId) continue;
       const reminderNow = new Date();
-      if (respectSchedule && (!isWorkingDay(emp.shift, reminderNow) || !isInReminderWindow(reminderNow, clockMinutes(emp.shift?.endTime || "18:00")))) continue;
+      const timeZone = zoneOf(emp);
+      const endMinutes = clockMinutes(emp.shift?.endTime || "18:00");
+      if (
+        respectSchedule &&
+        (!isWorkingDay(emp.shift, reminderNow, timeZone) ||
+          !isAfterShiftEndWindow(reminderNow, endMinutes, timeZone))
+      ) {
+        continue;
+      }
 
-      // Find today's attendance record
+      const startOfToday = getLocalDateOnly(reminderNow, timeZone);
+
       const todayAttendance = await prisma.attendance.findFirst({
         where: {
           employeeId: emp.id,
-          date: { gte: startOfToday },
+          date: startOfToday,
           checkIn: { not: null },
         },
       });
 
-      // Check if employee clocked in but has NOT clocked out yet
       if (todayAttendance && !todayAttendance.checkOut) {
-        // Check if evening reminder was already sent today
         const existingNotification = await prisma.notification.findFirst({
           where: {
             userId: emp.userId,
@@ -245,12 +248,13 @@ class NotificationService {
         });
 
         if (!existingNotification) {
+          const endTime = emp.shift?.endTime || "18:00";
           await prisma.notification.create({
             data: {
               organizationId: emp.organizationId,
               userId: emp.userId,
-              title: "🏁 Shift Completion & Check-Out Reminder (06:00 PM)",
-              message: `Great job today, ${emp.firstName}! Standard working hours ended at 06:00 PM. Please clock out to finalize your 8-hour shift and prevent missed punch penalties.`,
+              title: "Shift Completion & Check-Out Reminder",
+              message: `Great job today, ${emp.firstName}! Working hours ended at ${endTime}. Clock out to close your shift.`,
               type: "ATTENDANCE",
             },
           });
@@ -275,13 +279,10 @@ class NotificationService {
   async evaluateScheduledReminders() {
     try {
       const now = new Date();
-      // Morning Window: 08:50 – 17:59 → Check-In reminders
+      const hours = getLocalMinutesOfDay(now, FALLBACK_TZ) / 60;
       await this.sendMorningCheckInReminders(null, true);
-
-      // Evening Window: 18:00–22:59 → Check-Out reminders
       await this.sendEveningCheckOutReminders(null, true);
 
-      // Nightly Window: 23:00+ → EOD Absent auto-marking
       if (hours >= 23) {
         await this.markAbsentEmployees();
       }
@@ -401,7 +402,7 @@ class NotificationService {
    * Start the recurring 60-second timer
    */
   startScheduler() {
-    console.log("[NotificationScheduler] Starting scheduler: Morning (08:50), Evening (18:00), Absent marking (23:00)...");
+    console.log("[NotificationScheduler] Starting scheduler: check-in before shift start, check-out after shift end, absent marking after 23:00...");
     setTimeout(() => this.evaluateScheduledReminders(), 5000);
     setInterval(() => this.evaluateScheduledReminders(), 60000);
   }

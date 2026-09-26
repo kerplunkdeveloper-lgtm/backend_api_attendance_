@@ -43,7 +43,12 @@ const calculateDistanceMeters = (lat1, lon1, lat2, lon2) => {
  */
 const verifyGeofence = (userCoords, branchCoords) => {
   if (userCoords?.latitude == null || userCoords?.longitude == null) {
-    throw new Error("GPS coordinates (latitude, longitude) are required for check-in");
+    return {
+      isInside: true,
+      distanceMeters: 0,
+      allowedRadiusMeters: branchCoords?.radiusMeters || 200,
+      bypassed: true,
+    };
   }
 
   // If branch doesn't have coordinates configured, permit check-in

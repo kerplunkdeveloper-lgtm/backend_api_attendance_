@@ -61,6 +61,8 @@ const register = async (req, res) => {
         token: result.accessToken,
         refreshToken: result.refreshToken,
         user: result.user,
+        requiresCheckout: result.requiresCheckout,
+        selectedPlan: result.selectedPlan,
       },
     });
   } catch (error) {
@@ -340,6 +342,7 @@ const upgradePlan = async (req, res) => {
       req.user.organizationId,
       plan,
       billingCycle,
+      { actorRole: req.user.role, actorUserId: req.user.id },
     );
     return res.status(200).json(result);
   } catch (error) {

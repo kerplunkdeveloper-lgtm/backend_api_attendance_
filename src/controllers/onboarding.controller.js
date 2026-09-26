@@ -68,7 +68,15 @@ class OnboardingController {
       const { token } = req.params;
       const document = await onboardingService.uploadCandidateDocument(
         token,
-        req.body,
+        {
+          ...(req.body || {}),
+          file: req.file,
+          documentType: req.body?.documentType,
+          fileName: req.body?.fileName || req.file?.originalname,
+          fileUrl: req.body?.fileUrl,
+          fileSize: req.body?.fileSize || req.file?.size,
+          mimeType: req.body?.mimeType || req.file?.mimetype,
+        },
       );
       res.status(201).json({
         success: true,
@@ -155,7 +163,7 @@ class OnboardingController {
         organizationId,
         id,
         adminUserId,
-        req.body,
+        { ...(req.body || {}), actorRole: req.user.role },
       );
       res.status(200).json({
         success: true,

@@ -1,11 +1,44 @@
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const prisma = require("../config/database");
-const { uploadImage } = require("../config/cloudinary");
+const { uploadImage, uploadBuffer, signedDeliveryUrl, isSensitiveDocumentType } = require("../config/cloudinary");
 const emailService = require("./email.service");
 const whatsappService = require("./whatsapp.service");
 const { generateTempPassword, resolveAssignableRole } = require("../utils/password");
 const { resolveAvatarUrl } = require("../utils/avatar");
+const { assertSeatAvailable } = require("./entitlement.service");
+
+const PORTAL_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+const CLOSED_PORTAL_STATUSES = new Set(["ACTIVATED", "REJECTED", "OFFER_REJECTED"]);
+
+const assertPortalCandidate = (candidate) => {
+  if (!candidate) {
+    const error = new Error("Invalid or expired onboarding invitation link");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (candidate.revokedAt) {
+    const error = new Error("This onboarding invitation has been revoked");
+    error.statusCode = 403;
+    throw error;
+  }
+  const expiresAt = candidate.expiresAt
+    ? new Date(candidate.expiresAt)
+    : candidate.createdAt
+      ? new Date(new Date(candidate.createdAt).getTime() + PORTAL_TTL_MS)
+      : new Date(0);
+  if (expiresAt.getTime() < Date.now()) {
+    const error = new Error("This onboarding invitation has expired");
+    error.statusCode = 410;
+    throw error;
+  }
+  if (CLOSED_PORTAL_STATUSES.has(candidate.status)) {
+    const error = new Error("This onboarding invitation is no longer active");
+    error.statusCode = 410;
+    throw error;
+  }
+  return candidate;
+};
 
 class OnboardingService {
   /**
@@ -134,6 +167,7 @@ class OnboardingService {
         proposedSalary: proposedSalary ? Number(proposedSalary) : null,
         status: "INVITED",
         hrReviewerId: hrUserId || null,
+        expiresAt: new Date(Date.now() + PORTAL_TTL_MS),
       },
       include: {
         branch: { select: { id: true, name: true } },
@@ -143,7 +177,7 @@ class OnboardingService {
 
     return {
       candidate,
-      onboardingUrl: `/onboarding/${token}`,
+      onboardingUrl: `/onboarding/portal/${token}`,
     };
   }
 
@@ -183,7 +217,17 @@ class OnboardingService {
       throw error;
     }
 
-    return candidate;
+    const live = assertPortalCandidate(candidate);
+    return {
+      ...live,
+      documents: (live.documents || []).map((doc) => ({
+        ...doc,
+        fileUrl: signedDeliveryUrl(doc.fileUrl, {
+          ttlSeconds: 300,
+          authenticated: isSensitiveDocumentType(doc.documentType),
+        }),
+      })),
+    };
   }
 
   /**
@@ -194,11 +238,7 @@ class OnboardingService {
       where: { token },
     });
 
-    if (!candidate) {
-      const error = new Error("Invalid or expired onboarding link");
-      error.statusCode = 404;
-      throw error;
-    }
+    assertPortalCandidate(candidate);
 
     if (candidate.status === "ACTIVATED") {
       const error = new Error("This profile has already been activated and cannot be edited");
@@ -256,22 +296,35 @@ class OnboardingService {
   /**
    * 4. Candidate: Upload onboarding document
    */
-  async uploadCandidateDocument(token, docData) {
+  async uploadCandidateDocument(token, docData = {}) {
     const candidate = await prisma.onboardingCandidate.findUnique({
       where: { token },
       include: { documents: true },
     });
 
-    if (!candidate) {
-      const error = new Error("Invalid or expired onboarding link");
-      error.statusCode = 404;
-      throw error;
+    assertPortalCandidate(candidate);
+
+    const file = docData.file;
+    let { documentType, fileName, fileUrl, fileSize, mimeType } = docData;
+    documentType = documentType || file?.documentType;
+    const cleanType = documentType ? String(documentType).toUpperCase() : "";
+
+    if (file?.buffer) {
+      const { assertSniffedType } = require("../middleware/upload.middleware");
+      assertSniffedType(file);
+      const uploadRes = await uploadBuffer(file.buffer, {
+        folder: `workpulse/onboarding/${candidate.organizationId}/${candidate.id}`,
+        resource_type: "auto",
+        type: isSensitiveDocumentType(cleanType) ? "authenticated" : "upload",
+      });
+      fileUrl = uploadRes.secure_url;
+      fileName = fileName || file.originalname || "document";
+      fileSize = file.size || uploadRes.bytes;
+      mimeType = file.mimetype || uploadRes.format;
     }
 
-    const { documentType, fileName, fileUrl, fileSize, mimeType } = docData;
-
     if (!documentType || !fileName || !fileUrl) {
-      const error = new Error("documentType, fileName, and fileUrl are required");
+      const error = new Error("documentType and a file (or fileUrl) are required");
       error.statusCode = 400;
       throw error;
     }
@@ -286,7 +339,6 @@ class OnboardingService {
       "OTHER",
     ];
 
-    const cleanType = String(documentType).toUpperCase();
     if (!validTypes.includes(cleanType)) {
       const error = new Error(`Invalid documentType. Must be one of: ${validTypes.join(", ")}`);
       error.statusCode = 400;
@@ -294,7 +346,7 @@ class OnboardingService {
     }
 
     // Auto-upload to Cloudinary if base64 / data URI
-    let finalFileUrl = fileUrl.trim();
+    let finalFileUrl = String(fileUrl).trim();
     if (typeof finalFileUrl === "string" && finalFileUrl.startsWith("data:")) {
       try {
         const uploadRes = await uploadImage(finalFileUrl, {
@@ -514,37 +566,19 @@ class OnboardingService {
       throw error;
     }
 
-    // Check organization subscription limit
-    const org = await prisma.organization.findUnique({
-      where: { id: organizationId },
-      include: { subscription: true },
-    });
-    if (org) {
-      const activeEmployeesCount = await prisma.employee.count({
-        where: { organizationId, status: "ACTIVE" },
-      });
-      const maxAllowed = org.subscription?.maxEmployees || org.maxEmployees || 10;
-      if (activeEmployeesCount >= maxAllowed) {
-        const error = new Error(
-          `Cannot activate candidate: employee limit reached for current subscription plan (${maxAllowed} active employees max). Please upgrade subscription.`
-        );
-        error.statusCode = 400;
-        throw error;
-      }
-    }
-
     const {
       adminNotes,
       initialPassword,
       employeeCode,
       role = "EMPLOYEE",
+      actorRole = "COMPANY_ADMIN",
     } = approvalData;
 
     const tempPassword = initialPassword && String(initialPassword).trim()
       ? String(initialPassword).trim()
       : generateTempPassword();
     const passwordHash = await bcrypt.hash(tempPassword, 10);
-    const assignedRole = resolveAssignableRole(role, "COMPANY_ADMIN");
+    const assignedRole = resolveAssignableRole(role, actorRole);
     const finalEmployeeCode =
       employeeCode?.trim() || `EMP-${Date.now().toString().slice(-6)}`;
 
@@ -583,6 +617,7 @@ class OnboardingService {
 
     // Execute atomic transaction for user, employee, candidate activation, and offer letter
     const result = await prisma.$transaction(async (tx) => {
+      await assertSeatAvailable(organizationId, tx);
       // 1. Create User
       const newUser = await tx.user.create({
         data: {
@@ -911,6 +946,7 @@ class OnboardingService {
       error.statusCode = 404;
       throw error;
     }
+    assertPortalCandidate(candidate);
 
     const { action, signature, reason } = responseData;
 
@@ -957,6 +993,7 @@ class OnboardingService {
       const specialAllowance = Math.round(salaryVal * 0.2);
 
       const created = await prisma.$transaction(async (tx) => {
+        await assertSeatAvailable(candidate.organizationId, tx);
         let u = await tx.user.findUnique({
           where: {
             organizationId_email: {

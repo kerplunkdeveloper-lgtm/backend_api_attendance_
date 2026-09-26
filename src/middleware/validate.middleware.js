@@ -92,6 +92,7 @@ const schemas = {
       workMode: z.string().trim().max(40).optional(),
       note: z.string().trim().max(500).optional(),
       wfhNote: z.string().trim().max(500).optional(),
+      locationLabel: z.string().trim().max(180).optional(),
       deviceId: z.string().trim().min(4).max(200).optional(),
     })
     .strict(),

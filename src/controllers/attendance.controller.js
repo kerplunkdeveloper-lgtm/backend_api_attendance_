@@ -16,6 +16,7 @@ class AttendanceController {
         workMode,
         note,
         deviceId,
+        locationLabel,
       } = req.body;
       const organizationId = req.user.organizationId;
       const userId = req.user.id;
@@ -32,6 +33,7 @@ class AttendanceController {
         note,
         actorRole: req.user.role,
         deviceId: deviceId || req.headers["x-device-id"],
+        locationLabel,
       });
 
       return res.status(201).json(result);
@@ -58,6 +60,7 @@ class AttendanceController {
         workMode,
         note,
         deviceId,
+        locationLabel,
       } = req.body;
       const organizationId = req.user.organizationId;
       const userId = req.user.id;
@@ -74,6 +77,7 @@ class AttendanceController {
         note,
         actorRole: req.user.role,
         deviceId: deviceId || req.headers["x-device-id"],
+        locationLabel,
       });
 
       return res.status(200).json(result);
@@ -146,6 +150,18 @@ class AttendanceController {
         success: false,
         message: error.message,
       });
+    }
+  }
+
+  /**
+   * Today's punch locations for everyone in the workspace
+   */
+  async getLiveToday(req, res) {
+    try {
+      const result = await attendanceService.getLiveToday(req.user.organizationId);
+      return ok(res, result);
+    } catch (error) {
+      return fail(res, error);
     }
   }
 

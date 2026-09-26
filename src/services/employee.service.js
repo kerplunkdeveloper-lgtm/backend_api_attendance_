@@ -1,8 +1,9 @@
 const bcrypt = require("bcryptjs");
 const prisma = require("../config/database");
 const emailService = require("./email.service");
-const { generateTempPassword, resolveAssignableRole } = require("../utils/password");
+const { generateTempPassword, resolveAssignableRole, assertRoleAssignment } = require("../utils/password");
 const { resolveAvatarUrl } = require("../utils/avatar");
+const { assertSeatAvailable } = require("./entitlement.service");
 
 /**
  * 1. POST /api/employees - Create Employee
@@ -58,28 +59,11 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
     throw new Error(`Employee code '${finalEmployeeCode}' is already taken in this organization`);
   }
 
-  // Check organization subscription limit
   const org = await prisma.organization.findUnique({
     where: { id: organizationId },
     include: { subscription: true },
   });
   if (!org) throw new Error("Organization not found.");
-  if (org.planLocked) {
-    const err = new Error("Your plan is locked. Activate the plan before adding employees.");
-    err.statusCode = 403;
-    throw err;
-  }
-  if (org) {
-    const activeEmployeesCount = await prisma.employee.count({
-      where: { organizationId, status: "ACTIVE" },
-    });
-    const maxAllowed = org.subscription?.maxEmployees || org.maxEmployees || 10;
-    if (activeEmployeesCount >= maxAllowed) {
-      throw new Error(
-        `Employee limit reached for your current plan (${maxAllowed} max active employees). Please upgrade your subscription to add more team members.`
-      );
-    }
-  }
 
   // Validate branch
   if (branchId) {
@@ -122,6 +106,7 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
 
   // Atomic creation of User + Employee
   const createdEmployee = await prisma.$transaction(async (tx) => {
+    await assertSeatAvailable(organizationId, tx);
     const user = await tx.user.create({
       data: {
         email: cleanEmail,
@@ -285,7 +270,10 @@ const getEmployeeById = async (organizationId, employeeId) => {
 /**
  * 4. PUT /api/employees/:id - Update Employee
  */
-const updateEmployee = async (organizationId, employeeId, data) => {
+const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
+  const actorRole = actor.actorRole || actor.role || "COMPANY_ADMIN";
+  const actorUserId = actor.actorUserId || actor.id || null;
+
   const employee = await prisma.employee.findFirst({
     where: { id: employeeId, organizationId },
     include: { user: true },
@@ -293,6 +281,12 @@ const updateEmployee = async (organizationId, employeeId, data) => {
 
   if (!employee) {
     throw new Error("Employee not found");
+  }
+
+  if (actorRole === "MANAGER" && employee.user?.role && employee.user.role !== "EMPLOYEE") {
+    const error = new Error("Managers can only update employee accounts");
+    error.statusCode = 403;
+    throw error;
   }
 
   const {
@@ -353,7 +347,13 @@ const updateEmployee = async (organizationId, employeeId, data) => {
     if (employee.userId && (role || avatarToSet !== undefined)) {
       const userUpdates = {};
       if (role) {
-        userUpdates.role = (role === 'HR' || role === 'MANAGER') ? 'MANAGER' : role;
+        userUpdates.role = assertRoleAssignment({
+          requestedRole: role,
+          actorRole,
+          actorUserId,
+          targetUserId: employee.userId,
+          targetRole: employee.user?.role,
+        });
       }
       if (avatarToSet !== undefined) {
         userUpdates.avatarUrl = avatarToSet ? String(avatarToSet).trim() : null;
@@ -438,7 +438,7 @@ const deleteEmployee = async (organizationId, employeeId) => {
  * 6. POST /api/employees/invite — Admin invites an employee by email.
  * Auto-creates User+Employee account, sends welcome email with temp credentials.
  */
-const inviteEmployee = async (organizationId, invitedByUserId, data) => {
+const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole = "COMPANY_ADMIN") => {
   const emailService = require("./email.service");
   const {
     firstName,
@@ -460,21 +460,8 @@ const inviteEmployee = async (organizationId, invitedByUserId, data) => {
   });
   if (existing) throw new Error(`A user with email '${cleanEmail}' already exists in this organization.`);
 
-  // Check plan lock — must be unlocked before inviting
   const org = await prisma.organization.findUnique({ where: { id: organizationId } });
   if (!org) throw new Error("Organization not found.");
-  if (org.planLocked) {
-    const err = new Error("Your plan is locked. Please activate your plan before inviting employees.");
-    err.statusCode = 403;
-    throw err;
-  }
-
-  // Check employee seat limit
-  const activeCount = await prisma.employee.count({ where: { organizationId, status: "ACTIVE" } });
-  const maxAllowed = org.maxEmployees || 10;
-  if (activeCount >= maxAllowed) {
-    throw new Error(`Employee seat limit reached (${maxAllowed} max). Upgrade your plan to add more.`);
-  }
 
   // Generate temp password: TMP-XXXXXX + 4 random digits
   const tempPassword = generateTempPassword();
@@ -483,7 +470,7 @@ const inviteEmployee = async (organizationId, invitedByUserId, data) => {
 
   // Determine employee code
   const employeeCode = data.employeeCode?.trim() || `EMP-${Date.now().toString().slice(-6)}`;
-  const userRole = (role === "HR" || role === "MANAGER") ? "MANAGER" : "EMPLOYEE";
+  const userRole = resolveAssignableRole(role, actorRole);
   const avatarUrl = resolveAvatarUrl({
     avatarUrl: data.avatarUrl,
     profileImage: data.profileImage,
@@ -496,6 +483,7 @@ const inviteEmployee = async (organizationId, invitedByUserId, data) => {
 
   // Atomic: create User + Employee
   const { user, employee } = await prisma.$transaction(async (tx) => {
+    await assertSeatAvailable(organizationId, tx);
     const user = await tx.user.create({
       data: {
         email: cleanEmail,

@@ -125,6 +125,7 @@ model Organization {
   form16Records     Form16Record[]
   statutoryExports  StatutoryExport[]
   billingOrders     BillingOrder[]
+  billingEvents     BillingEvent[]
   chatThreads       ChatThread[]
   chatMessages      ChatMessage[]
   biometricDevices  BiometricDevice[]
@@ -166,7 +167,7 @@ model AttendancePolicy {
   lateDeductionPercent  Decimal  @default(0.25) @db.Decimal(4, 2) // % of daily rate per extra late
   allowWfh              Boolean  @default(true)
   requireOtApproval     Boolean  @default(false)  // OT must be approved before payroll
-  geofenceStrict        Boolean  @default(true)   // Enforce geofence on check-in
+  geofenceStrict        Boolean  @default(false)  // When true, reject punches outside branch radius
   requireTrustedDevice  Boolean  @default(false)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
@@ -439,6 +440,8 @@ model Attendance {
   checkInLongitude Decimal? @db.Decimal(10, 7)
   checkOutLatitude Decimal? @db.Decimal(10, 7)
   checkOutLongitude Decimal? @db.Decimal(10, 7)
+  checkInLocation  String?
+  checkOutLocation String?
 
   status          AttendanceStatus @default(PRESENT)
   workingMinutes  Int              @default(0)
@@ -479,6 +482,8 @@ model AttendanceEvent {
   createdAt DateTime @default(now())
 
   attendance Attendance @relation(fields: [attendanceId], references: [id], onDelete: Cascade)
+
+  clientEventId String? @unique
 
   @@index([attendanceId])
 }
@@ -646,6 +651,7 @@ model Payslip {
   deductionsTotal       Decimal   @db.Decimal(10, 2)
   netSalary             Decimal   @db.Decimal(10, 2)
   reimbursements        Decimal   @default(0) @db.Decimal(10, 2)
+  loanRecovery          Decimal   @default(0) @db.Decimal(10, 2)
   status                String    @default("DRAFT") // DRAFT, PENDING_APPROVAL, APPROVED, DISBURSED, REJECTED
   approvedBy            String?
   approvedAt            DateTime?
@@ -860,6 +866,8 @@ model OnboardingCandidate {
   aadhaarNumber         String?
   
   status                OnboardingStatus  @default(INVITED)
+  expiresAt             DateTime?
+  revokedAt             DateTime?
   
   // HR Review Details
   hrReviewerId          String?
@@ -1387,7 +1395,7 @@ model BillingOrder {
   billingCycle       String
   amountInr          Decimal   @db.Decimal(12, 2)
   razorpayOrderId    String?   @unique
-  razorpayPaymentId  String?
+  razorpayPaymentId  String?   @unique
   status             String    @default("CREATED")
   createdAt          DateTime  @default(now())
   paidAt             DateTime?
@@ -1473,9 +1481,28 @@ model LoanAdvance {
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  repayments   LoanRepayment[]
 
   @@index([organizationId, status])
   @@index([employeeId])
+}
+
+model LoanRepayment {
+  id             String   @id @default(uuid())
+  organizationId String
+  loanId         String
+  employeeId     String
+  amount         Decimal  @db.Decimal(12, 2)
+  year           Int
+  month          Int
+  source         String   @default("PAYROLL")
+  payslipId      String?
+  createdAt      DateTime @default(now())
+
+  loan LoanAdvance @relation(fields: [loanId], references: [id], onDelete: Cascade)
+
+  @@unique([loanId, year, month, source])
+  @@index([organizationId, employeeId])
 }
 
 model AppraisalCycle {
@@ -1523,9 +1550,23 @@ model OrgApiKey {
   keyPrefix      String
   isActive       Boolean   @default(true)
   lastUsedAt     DateTime?
+  scopes         String    @default("read:employees,read:attendance,read:reports,read:payroll,write:attendance")
   createdAt      DateTime  @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+model BillingEvent {
+  id              String   @id @default(uuid())
+  providerEventId String   @unique
+  eventType       String
+  organizationId  String?
+  orderId         String?
+  createdAt       DateTime @default(now())
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([organizationId])
 }

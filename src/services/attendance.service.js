@@ -11,6 +11,8 @@ const {
   getLocalDayOfWeek,
   isOvernightShift,
 } = require("../utils/datetime");
+const { assertPunchTimestamp } = require("../utils/punchTime");
+const { resolvePunchLocation } = require("../utils/reverseGeocode");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -30,6 +32,12 @@ const getTodayDateOnly = (date = new Date()) => {
 };
 
 const timezoneCache = new Map();
+
+/** Namespaces device/offline ids so two employees can reuse the same local key. */
+const durableClientEventId = (organizationId, userId, clientEventId) => {
+  if (!clientEventId) return null;
+  return `${organizationId}:${userId || "anon"}:${String(clientEventId)}`;
+};
 
 /** Resolves (and briefly caches) a tenant's IANA timezone. */
 const getOrgTimezone = async (organizationId) => {
@@ -112,8 +120,8 @@ const getPolicy = async (organizationId) => {
     lateDeductionPercent: policy ? Number(policy.lateDeductionPercent) : 0.25,
     allowWfh: policy?.allowWfh ?? true,
     requireOtApproval: policy?.requireOtApproval ?? false,
-    // Matches the schema default: geofence is enforced unless an admin relaxes it.
-    geofenceStrict: policy?.geofenceStrict ?? true,
+    // Open location: punches are allowed from anywhere unless an admin turns strict geofence on.
+    geofenceStrict: policy?.geofenceStrict ?? false,
     requireTrustedDevice: policy?.requireTrustedDevice ?? false,
   };
 };
@@ -226,9 +234,9 @@ const assertTrustedDevice = async (employee, organizationId, policy, deviceId) =
   await prisma.employeeDevice.update({ where: { id: device.id }, data: { lastUsedAt: new Date() } });
 };
 
-const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude, accuracy, timestamp, workMode = "OFFICE", note, actorRole = null, deviceId = null }) => {
+const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude, accuracy, timestamp, workMode = "OFFICE", note, actorRole = null, deviceId = null, skipGeofence = false, source = "WEB", clientEventId = null, locationLabel = null }) => {
   const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
-  const checkInTime = timestamp ? new Date(timestamp) : new Date();
+  const checkInTime = assertPunchTimestamp(timestamp, { actorRole, source });
   const timezone = await getOrgTimezone(organizationId);
   const today = getLocalDateOnly(checkInTime, timezone);
   const policy = await getPolicy(organizationId);
@@ -272,7 +280,11 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
   let isBypassed = false;
   let bypassReason = null;
 
-  if (matchedBranch?.latitude && matchedBranch?.longitude) {
+  if (skipGeofence) {
+    isBypassed = true;
+    bypassReason = source === "BIOMETRIC" ? "BIOMETRIC_DEVICE" : "DEVICE";
+    geofenceResult = { isInside: true, distanceMeters: 0, allowedRadiusMeters: 0, bypassed: true };
+  } else if (matchedBranch?.latitude && matchedBranch?.longitude) {
     try {
       geofenceResult = verifyGeofence(
         { latitude, longitude },
@@ -327,7 +339,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
 
   if (!geofenceResult || (!geofenceResult.isInside && !geofenceResult.bypassed)) {
     const isSpecialWorkMode = ["WORK_FROM_HOME", "CLIENT_VISIT", "TRAVEL"].includes(workMode);
-    if (policy.geofenceStrict && !isSpecialWorkMode) {
+    if (policy.geofenceStrict && !isSpecialWorkMode && latitude != null && longitude != null) {
       const error = new Error(
         `Outside allowed branch boundary. Distance: ${geofenceResult?.distanceMeters || "N/A"}m, Max allowed: ${geofenceResult?.allowedRadiusMeters || 200}m`
       );
@@ -335,9 +347,16 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
       error.details = geofenceResult;
       throw error;
     }
-    // Non-strict or remote/field mode: allow and record as eligible
     isBypassed = true;
-    bypassReason = workMode || "GEOFENCE_FLEXIBLE";
+    bypassReason = policy.geofenceStrict ? (workMode || "GEOFENCE_FLEXIBLE") : "OPEN_LOCATION";
+    if (!geofenceResult) {
+      geofenceResult = {
+        isInside: true,
+        distanceMeters: 0,
+        allowedRadiusMeters: 0,
+        bypassed: true,
+      };
+    }
   }
 
   // ── Late Calculation ────────────────────────────────────────────────────────
@@ -365,6 +384,13 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
   }
 
   const formattedNote = note || (workMode !== "OFFICE" ? workMode.replace(/_/g, " ") : null);
+  const checkInLocation = await resolvePunchLocation({
+    locationLabel,
+    latitude,
+    longitude,
+    workMode,
+    branchName: matchedBranch?.name,
+  });
 
   // ── Persist ─────────────────────────────────────────────────────────────────
   const attendance = await prisma.$transaction(async (tx) => {
@@ -374,6 +400,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
         checkIn: checkInTime,
         checkInLatitude: latitude ? String(latitude) : null,
         checkInLongitude: longitude ? String(longitude) : null,
+        checkInLocation,
         branchId: matchedBranch?.id || null,
         shiftId: shift?.id || null,
         status,
@@ -389,6 +416,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
         checkIn: checkInTime,
         checkInLatitude: latitude ? String(latitude) : null,
         checkInLongitude: longitude ? String(longitude) : null,
+        checkInLocation,
         status,
         lateMinutes,
         wfhNote: formattedNote,
@@ -405,6 +433,9 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
         accuracy: accuracy ? String(accuracy) : null,
         isBypassed,
         bypassReason: bypassReason || workMode || "FLEXIBLE_LOCATION",
+        ...(durableClientEventId(organizationId, employee.userId || userId, clientEventId)
+          ? { clientEventId: durableClientEventId(organizationId, employee.userId || userId, clientEventId) }
+          : {}),
       },
     });
 
@@ -435,7 +466,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
 
 const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNote, actorRole = null, deviceId = null }) => {
   const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
-  const checkInTime = timestamp ? new Date(timestamp) : new Date();
+  const checkInTime = assertPunchTimestamp(timestamp, { actorRole, source: "WEB" });
   const timezone = await getOrgTimezone(organizationId);
   const today = getLocalDateOnly(checkInTime, timezone);
   const policy = await getPolicy(organizationId);
@@ -488,6 +519,12 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
     lateMinutes = calculateLateMinutes(shift.startTime, shift.graceMinutes, checkInTime);
   }
 
+  const checkInLocation = await resolvePunchLocation({
+    locationLabel: wfhNote,
+    workMode: "WORK_FROM_HOME",
+    branchName: employee.branch?.name,
+  });
+
   const attendance = await prisma.$transaction(async (tx) => {
     const record = await tx.attendance.upsert({
       where: { employeeId_date: { employeeId: employee.id, date: today } },
@@ -497,6 +534,7 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
         status: "WORK_FROM_HOME",
         lateMinutes,
         wfhNote: wfhNote || null,
+        checkInLocation,
       },
       create: {
         organizationId,
@@ -507,6 +545,7 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
         status: "WORK_FROM_HOME",
         lateMinutes,
         wfhNote: wfhNote || null,
+        checkInLocation,
       },
     });
 
@@ -541,11 +580,11 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
 // Clock-Out
 // ─────────────────────────────────────────────────────────────────────────────
 
-const checkOut = async ({ userId, employeeId, organizationId, latitude, longitude, accuracy, timestamp, workMode, note, actorRole = null, deviceId = null }) => {
+const checkOut = async ({ userId, employeeId, organizationId, latitude, longitude, accuracy, timestamp, workMode, note, actorRole = null, deviceId = null, skipGeofence = false, source = "WEB", clientEventId = null, locationLabel = null }) => {
   const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
   const policy = await getPolicy(organizationId);
   await assertTrustedDevice(employee, organizationId, policy, deviceId);
-  const checkOutTime = timestamp ? new Date(timestamp) : new Date();
+  const checkOutTime = assertPunchTimestamp(timestamp, { actorRole, source: source || "WEB" });
   const timezone = await getOrgTimezone(organizationId);
   const today = getLocalDateOnly(checkOutTime, timezone);
 
@@ -712,6 +751,14 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
     metrics.status = "WORK_FROM_HOME";
   }
 
+  const checkOutLocation = await resolvePunchLocation({
+    locationLabel,
+    latitude,
+    longitude,
+    workMode,
+    branchName: attendance.branch?.name || employee.branch?.name,
+  });
+
   const updatedAttendance = await prisma.$transaction(async (tx) => {
     if (isOnActiveBreak) {
       await tx.attendanceEvent.create({
@@ -732,6 +779,7 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
         checkOut: checkOutTime,
         checkOutLatitude: latitude ? String(latitude) : null,
         checkOutLongitude: longitude ? String(longitude) : null,
+        checkOutLocation,
         workingMinutes: metrics.workingMinutes,
         breakMinutes: totalBreakMinutes,
         lateMinutes: metrics.lateMinutes !== undefined ? metrics.lateMinutes : (attendance.lateMinutes || 0),
@@ -818,6 +866,9 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
         accuracy: accuracy ? String(accuracy) : null,
         isBypassed: true,
         bypassReason: workMode || "GEOFENCE_FLEXIBLE",
+        ...(durableClientEventId(organizationId, employee.userId || userId, clientEventId)
+          ? { clientEventId: durableClientEventId(organizationId, employee.userId || userId, clientEventId) }
+          : {}),
       },
     });
 
@@ -858,12 +909,7 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
 
 const startBreak = async ({ userId, employeeId, organizationId, latitude, longitude, timestamp, actorRole = null }) => {
   const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
-  const eventTime = timestamp ? new Date(timestamp) : new Date();
-  if (Number.isNaN(eventTime.getTime())) {
-    const error = new Error("Invalid break timestamp");
-    error.statusCode = 400;
-    throw error;
-  }
+  const eventTime = assertPunchTimestamp(timestamp, { actorRole, source: "WEB" });
 
   const attendance = await findOpenAttendance(employee.id, organizationId, eventTime, {
     events: { orderBy: { timestamp: "desc" } },
@@ -909,12 +955,7 @@ const startBreak = async ({ userId, employeeId, organizationId, latitude, longit
 
 const endBreak = async ({ userId, employeeId, organizationId, latitude, longitude, timestamp, actorRole = null }) => {
   const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
-  const eventTime = timestamp ? new Date(timestamp) : new Date();
-  if (Number.isNaN(eventTime.getTime())) {
-    const error = new Error("Invalid break timestamp");
-    error.statusCode = 400;
-    throw error;
-  }
+  const eventTime = assertPunchTimestamp(timestamp, { actorRole, source: "WEB" });
 
   const attendance = await findOpenAttendance(employee.id, organizationId, eventTime, {
     events: { orderBy: { timestamp: "desc" } },
@@ -1200,6 +1241,77 @@ const getTodayStatus = async (userId, organizationId) => {
   };
 };
 
+const getLiveToday = async (organizationId) => {
+  const timezone = await getOrgTimezone(organizationId);
+  const today = getLocalDateOnly(new Date(), timezone);
+
+  const [employees, attendances] = await Promise.all([
+    prisma.employee.findMany({
+      where: { organizationId, status: "ACTIVE" },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        employeeCode: true,
+        designation: true,
+        department: { select: { name: true } },
+        branch: { select: { id: true, name: true } },
+      },
+      orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
+    }),
+    prisma.attendance.findMany({
+      where: { organizationId, date: today },
+      select: {
+        employeeId: true,
+        checkIn: true,
+        checkOut: true,
+        status: true,
+        checkInLocation: true,
+        checkOutLocation: true,
+        wfhNote: true,
+        branch: { select: { name: true } },
+      },
+    }),
+  ]);
+
+  const byEmployee = new Map(attendances.map((row) => [row.employeeId, row]));
+  const people = employees.map((employee) => {
+    const attendance = byEmployee.get(employee.id);
+    const name = `${employee.firstName || ""} ${employee.lastName || ""}`.trim() || "Team member";
+    const clockedIn = Boolean(attendance?.checkIn && !attendance?.checkOut);
+    const location = attendance
+      ? attendance.checkInLocation || attendance.branch?.name || employee.branch?.name || "Location not shared"
+      : null;
+    return {
+      employeeId: employee.id,
+      name,
+      employeeCode: employee.employeeCode,
+      designation: employee.designation || "Staff",
+      department: employee.department?.name || null,
+      branchName: employee.branch?.name || attendance?.branch?.name || null,
+      status: attendance?.status || "ABSENT",
+      checkIn: attendance?.checkIn || null,
+      checkOut: attendance?.checkOut || null,
+      location,
+      clockedIn,
+    };
+  });
+
+  people.sort((a, b) => {
+    if (a.clockedIn !== b.clockedIn) return a.clockedIn ? -1 : 1;
+    if (Boolean(a.checkIn) !== Boolean(b.checkIn)) return a.checkIn ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  return {
+    date: today,
+    total: people.length,
+    clockedIn: people.filter((person) => person.clockedIn).length,
+    punched: people.filter((person) => person.checkIn).length,
+    people,
+  };
+};
+
 const getMyAttendance = async (userId, organizationId, { limit = 30, page = 1 }) => {
   const employee = await prisma.employee.findFirst({ where: { userId, organizationId } });
   if (!employee) return { records: [], total: 0 };
@@ -1408,14 +1520,27 @@ const syncOfflinePunches = async (userId, organizationId, punches) => {
   let failed = 0;
 
   for (const punch of sorted) {
-    const { id: localId, type, timestamp, latitude, longitude, accuracy, wfhNote, workMode, note, deviceId } = punch;
+    const { id: localId, type, timestamp, latitude, longitude, accuracy, wfhNote, workMode, note, deviceId, locationLabel } = punch;
 
     try {
+      const eventKey = durableClientEventId(organizationId, userId, localId);
+      if (eventKey && prisma.attendanceEvent?.findFirst) {
+        const already = await prisma.attendanceEvent.findFirst({
+          where: { clientEventId: eventKey },
+          select: { id: true },
+        });
+        if (already) {
+          results.push({ localId, status: "SKIPPED", reason: "Duplicate event id" });
+          skipped++;
+          continue;
+        }
+      }
+
       let result;
 
       switch (type) {
         case "CHECK_IN":
-          result = await checkIn({ userId, organizationId, latitude, longitude, accuracy, timestamp, workMode, note, deviceId });
+          result = await checkIn({ userId, organizationId, latitude, longitude, accuracy, timestamp, workMode, note, deviceId, locationLabel, clientEventId: localId });
           break;
 
         case "WFH_CHECK_IN":
@@ -1423,7 +1548,7 @@ const syncOfflinePunches = async (userId, organizationId, punches) => {
           break;
 
         case "CHECK_OUT":
-          result = await checkOut({ userId, organizationId, latitude, longitude, accuracy, timestamp, workMode, note, deviceId });
+          result = await checkOut({ userId, organizationId, latitude, longitude, accuracy, timestamp, workMode, note, deviceId, locationLabel, clientEventId: localId });
           break;
 
         case "BREAK_START":
@@ -1452,7 +1577,7 @@ const syncOfflinePunches = async (userId, organizationId, punches) => {
         results.push({ localId, status: "SKIPPED", reason: err.message });
         skipped++;
       } else {
-        results.push({ localId, status: "FAILED", reason: err.message });
+        results.push({ localId, status: "FAILED", reason: err.message, statusCode: err.statusCode || 500 });
         failed++;
       }
     }
@@ -1480,6 +1605,7 @@ module.exports = {
   getBreakDetails,
   adminMarkAttendance,
   getTodayStatus,
+  getLiveToday,
   getMyAttendance,
   getAllAttendance,
   getAttendanceHistory,

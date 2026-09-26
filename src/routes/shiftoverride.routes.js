@@ -1,6 +1,6 @@
 const express = require("express");
 const shiftOverrideController = require("../controllers/shiftoverride.controller");
-const { authenticate, authorizeRoles } = require("../middleware/auth.middleware");
+const { authenticate, authorizeRoles, requireFeature } = require("../middleware/auth.middleware");
 
 const router = express.Router();
 router.use(authenticate);
@@ -9,6 +9,7 @@ router.use(authenticate);
 router.post(
   "/",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  requireFeature("hasShiftPlanner", "Shift planner"),
   shiftOverrideController.setOverride
 );
 

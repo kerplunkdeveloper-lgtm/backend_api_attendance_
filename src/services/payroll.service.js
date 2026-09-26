@@ -301,10 +301,22 @@ class PayrollService {
 
     const reimbursements = money.sum(...approvedExpenses.map((exp) => exp.amount));
 
+    const loanService = require("./loan.service");
+    const loanPreview = await loanService.recoverForPayroll({
+      organizationId,
+      employeeId,
+      month: m,
+      year: y,
+      commit: false,
+    });
+    const loanRecovery = money.round(loanPreview.total || 0);
+
     const grossSalary = money.sum(baseSalary, allowancesTotal, overtimePay);
-    const netSalary = money.sum(
-      money.atLeastZero(money.subtract(grossSalary, deductionsTotal)),
-      reimbursements
+    const netSalary = money.atLeastZero(
+      money.subtract(
+        money.sum(money.subtract(grossSalary, deductionsTotal), reimbursements),
+        loanRecovery,
+      ),
     );
 
     return {
@@ -350,7 +362,8 @@ class PayrollService {
         esiDeduction: esi,
         ptDeduction: professionalTax,
         statutoryDeductions,
-        deductionsTotal,
+        loanRecovery,
+        deductionsTotal: money.sum(deductionsTotal, loanRecovery),
       },
       reimbursements,
       approvedExpenses: approvedExpenses.map((e) => ({
@@ -475,6 +488,7 @@ class PayrollService {
         ptDeduction: payroll.deductions.ptDeduction || 0,
         statutoryDeductions: payroll.deductions.statutoryDeductions || 0,
         tdsDeduction,
+        loanRecovery: payroll.deductions.loanRecovery || 0,
         deductionsTotal: deductionsWithTds,
         reimbursements: payroll.reimbursements || 0,
         netSalary: netAfterTds,
@@ -512,6 +526,17 @@ class PayrollService {
             },
           });
         }
+
+        const loanService = require("./loan.service");
+        await loanService.recoverForPayroll({
+          organizationId,
+          employeeId: emp.id,
+          month: m,
+          year: y,
+          payslipId: created.id,
+          commit: true,
+          tx,
+        });
 
         return created;
       });

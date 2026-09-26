@@ -8,7 +8,7 @@ const DEFAULT_POLICY = {
   lateDeductionPercent: 0.25,
   allowWfh: true,
   requireOtApproval: false,
-  geofenceStrict: true,
+  geofenceStrict: false,
   requireTrustedDevice: false,
 };
 

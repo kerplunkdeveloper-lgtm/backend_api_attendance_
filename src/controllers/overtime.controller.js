@@ -35,7 +35,7 @@ class OvertimeController {
     try {
       const result = await overtimeService.getOvertimeRequests(
         req.user.organizationId,
-        req.query,
+        req.pendingOnly ? { ...req.query, status: "PENDING" } : req.query,
       );
       // `overtimeRequests` is the key the approvals inbox reads.
       return paginated(res, result, { overtimeRequests: result.records ?? [] });

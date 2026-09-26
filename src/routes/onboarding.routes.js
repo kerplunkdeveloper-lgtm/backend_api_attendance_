@@ -5,6 +5,9 @@ const {
   authenticate,
   authorizeRoles,
 } = require("../middleware/auth.middleware");
+const { documentUploader, handleUploadErrors } = require("../middleware/upload.middleware");
+
+const portalUpload = documentUploader(10);
 
 // ==========================================
 // PUBLIC CANDIDATE PORTAL ROUTES
@@ -22,6 +25,7 @@ router.put(
 // Candidate uploads mandatory onboarding document
 router.post(
   "/portal/:token/documents",
+  portalUpload.single("file"),
   onboardingController.uploadCandidateDocument,
 );
 
@@ -84,5 +88,7 @@ router.post(
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
   onboardingController.adminApproveAndActivate,
 );
+
+router.use(handleUploadErrors);
 
 module.exports = router;

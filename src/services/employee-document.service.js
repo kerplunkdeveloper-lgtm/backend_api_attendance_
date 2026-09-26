@@ -1,5 +1,5 @@
 const prisma = require("../config/database");
-const { uploadImage, uploadBuffer } = require("../config/cloudinary");
+const { uploadImage, uploadBuffer, signedDeliveryUrl, isSensitiveDocumentType } = require("../config/cloudinary");
 const notificationService = require("./notification.service");
 
 const DOCUMENT_DEFINITIONS = [
@@ -61,6 +61,10 @@ class EmployeeDocumentService {
 
       return {
         ...doc,
+        fileUrl: signedDeliveryUrl(doc.fileUrl, {
+          ttlSeconds: 300,
+          authenticated: isSensitiveDocumentType(doc.documentType),
+        }),
         isExpired,
         isExpiringSoon,
         daysUntilExpiry,
@@ -167,6 +171,7 @@ class EmployeeDocumentService {
         const uploadRes = await uploadBuffer(fileBuffer, {
           folder: `workpulse/employees/${employeeId}/documents`,
           resource_type: "auto",
+          type: isSensitiveDocumentType(documentType) ? "authenticated" : "upload",
         });
         if (uploadRes && uploadRes.secure_url) {
           finalFileUrl = uploadRes.secure_url;
@@ -276,6 +281,7 @@ class EmployeeDocumentService {
         const uploadRes = await uploadBuffer(fileBuffer, {
           folder: `workpulse/employees/${employeeId}/documents`,
           resource_type: "auto",
+          type: isSensitiveDocumentType(documentType) ? "authenticated" : "upload",
         });
         if (uploadRes && uploadRes.secure_url) {
           finalFileUrl = uploadRes.secure_url;

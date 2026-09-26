@@ -44,6 +44,13 @@ const app = express();
 
 const isProduction = process.env.NODE_ENV === "production";
 
+// Railway terminates TLS one hop in front of Express. Trusting exactly that
+// hop makes req.ip reflect the real client address without trusting arbitrary
+// forwarding chains supplied by callers.
+if (isProduction) {
+  app.set("trust proxy", 1);
+}
+
 // Extra origins can be supplied as a comma-separated list without a redeploy.
 const configuredOrigins = (process.env.CORS_ALLOWED_ORIGINS || "")
   .split(",")
@@ -98,8 +105,9 @@ app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true, limit: "5mb" }));
 app.use(morgan(isProduction ? "combined" : "dev"));
 
-// Apply general rate limiter to all API routes
-app.use("/api", apiRateLimiter);
+// Apply the general limiter before both /api and root aliases so clients that
+// omit the /api prefix cannot skip throttling.
+app.use(apiRateLimiter);
 
 // Records mutating requests once the response is sent. Registered before the
 // routers so it wraps every module, but reads req.user which the per-router

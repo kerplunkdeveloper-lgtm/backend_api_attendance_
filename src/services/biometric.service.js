@@ -70,7 +70,12 @@ async function ingestPunch({ apiKey, employeeCode, punchType, timestamp }) {
     throw err;
   }
   const employee = await prisma.employee.findFirst({
-    where: { organizationId: device.organizationId, employeeCode: String(employeeCode || "").trim() },
+    where: {
+      organizationId: device.organizationId,
+      employeeCode: String(employeeCode || "").trim(),
+      deletedAt: null,
+      status: { in: ["ACTIVE", "PROBATION", "NOTICE_PERIOD"] },
+    },
   });
   if (!employee) {
     const err = new Error("Employee code not found");
@@ -78,46 +83,36 @@ async function ingestPunch({ apiKey, employeeCode, punchType, timestamp }) {
     throw err;
   }
 
-  const at = timestamp ? new Date(timestamp) : new Date();
-  if (Number.isNaN(at.getTime())) {
-    const err = new Error("Invalid timestamp");
+  const type = String(punchType || "").toUpperCase();
+  if (type !== "IN" && type !== "OUT") {
+    const err = new Error("punchType must be IN or OUT");
     err.statusCode = 400;
     throw err;
   }
-  const date = await attendanceService.getOrgDateOnly(device.organizationId, at);
-  const type = String(punchType || "IN").toUpperCase();
 
   await prisma.biometricDevice.update({
     where: { id: device.id },
     data: { lastSeenAt: new Date() },
   });
 
+  const punchArgs = {
+    userId: employee.userId,
+    employeeId: employee.id,
+    organizationId: device.organizationId,
+    timestamp,
+    actorRole: "COMPANY_ADMIN",
+    skipGeofence: true,
+    source: "BIOMETRIC",
+    workMode: "OFFICE",
+  };
+
   if (type === "OUT") {
-    const open = await attendanceService.findOpenAttendance(employee.id, device.organizationId, at);
-    if (!open?.checkIn) {
-      const err = new Error("No open check-in to close");
-      err.statusCode = 400;
-      throw err;
-    }
-    const updated = await prisma.attendance.update({
-      where: { id: open.id },
-      data: { checkOut: at },
-    });
-    return { punch: "OUT", attendance: updated, deviceId: device.id };
+    const updated = await attendanceService.checkOut(punchArgs);
+    return { punch: "OUT", attendance: updated.attendance || updated, deviceId: device.id };
   }
 
-  const attendance = await prisma.attendance.upsert({
-    where: { employeeId_date: { employeeId: employee.id, date } },
-    update: { checkIn: at, status: "PRESENT" },
-    create: {
-      organizationId: device.organizationId,
-      employeeId: employee.id,
-      date,
-      checkIn: at,
-      status: "PRESENT",
-    },
-  });
-  return { punch: "IN", attendance, deviceId: device.id };
+  const created = await attendanceService.checkIn(punchArgs);
+  return { punch: "IN", attendance: created.attendance || created, deviceId: device.id };
 }
 
 module.exports = { createDevice, listDevices, revokeDevice, ingestPunch };

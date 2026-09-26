@@ -5,6 +5,7 @@ const payslipTemplateController = require("../controllers/payslip-template.contr
 const {
   authenticate,
   authorizeRoles,
+  requireFeature,
 } = require("../middleware/auth.middleware");
 
 const upload = multer({
@@ -15,6 +16,7 @@ const upload = multer({
 const router = express.Router();
 
 router.use(authenticate);
+router.use(requireFeature("hasPayroll", "Payroll"));
 
 // Personal Payslips for logged-in employee
 router.get("/payslips/my", payrollController.getMyPayslips);

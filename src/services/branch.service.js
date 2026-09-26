@@ -1,4 +1,4 @@
-const prisma = require("../config/database");
+const { assertBranchAvailable } = require("./entitlement.service");
 
 /**
  * 1. POST /api/branches - Create Branch
@@ -10,20 +10,23 @@ const createBranch = async (organizationId, data) => {
     throw new Error("Branch name is required");
   }
 
-  return await prisma.branch.create({
-    data: {
-      organizationId,
-      name: name.trim(),
-      address: address ? address.trim() : null,
-      latitude: latitude !== undefined && latitude !== null && latitude !== '' ? parseFloat(latitude) : null,
-      longitude: longitude !== undefined && longitude !== null && longitude !== '' ? parseFloat(longitude) : null,
-      radiusMeters: radiusMeters ? parseInt(radiusMeters, 10) : 200,
-    },
-    include: {
-      _count: {
-        select: { employees: true },
+  return prisma.$transaction(async (tx) => {
+    await assertBranchAvailable(organizationId, tx);
+    return tx.branch.create({
+      data: {
+        organizationId,
+        name: name.trim(),
+        address: address ? address.trim() : null,
+        latitude: latitude !== undefined && latitude !== null && latitude !== '' ? parseFloat(latitude) : null,
+        longitude: longitude !== undefined && longitude !== null && longitude !== '' ? parseFloat(longitude) : null,
+        radiusMeters: radiusMeters ? parseInt(radiusMeters, 10) : 200,
       },
-    },
+      include: {
+        _count: {
+          select: { employees: true },
+        },
+      },
+    });
   });
 };
 

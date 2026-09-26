@@ -88,10 +88,54 @@ const deleteImage = async (publicId, options = {}) => {
   return await cloudinary.uploader.destroy(publicId, options);
 };
 
+const SENSITIVE_DOCUMENT_TYPES = new Set([
+  "AADHAAR",
+  "PAN",
+  "PASSPORT",
+  "DRIVING_LICENCE",
+  "BANK_DOCUMENT",
+  "BANK_PROOF",
+  "GOVT_ID",
+  "TAX_ID",
+]);
+
+const isSensitiveDocumentType = (type) =>
+  SENSITIVE_DOCUMENT_TYPES.has(String(type || "").toUpperCase());
+
+const publicIdFromUrl = (fileUrl) => {
+  if (!fileUrl || typeof fileUrl !== "string") return null;
+  const match = fileUrl.match(/\/(?:image|raw|video|auto)\/(?:upload|authenticated|private)\/(?:v\d+\/)?(.+)$/);
+  if (!match) return null;
+  return match[1].replace(/\.[a-zA-Z0-9]+$/, "");
+};
+
+/**
+ * Time-limited Cloudinary URL for identity and bank documents.
+ * Legacy public URLs still resolve if signing is unavailable.
+ */
+const signedDeliveryUrl = (fileUrl, { ttlSeconds = 300, authenticated = false } = {}) => {
+  if (!fileUrl || !isConfigured) return fileUrl;
+  const publicId = publicIdFromUrl(fileUrl);
+  if (!publicId) return fileUrl;
+  try {
+    return cloudinary.url(publicId, {
+      resource_type: "auto",
+      type: authenticated ? "authenticated" : "upload",
+      sign_url: true,
+      secure: true,
+      expires_at: Math.floor(Date.now() / 1000) + ttlSeconds,
+    });
+  } catch {
+    return fileUrl;
+  }
+};
+
 module.exports = {
   cloudinary,
   isConfigured,
   uploadImage,
   uploadBuffer,
   deleteImage,
+  signedDeliveryUrl,
+  isSensitiveDocumentType,
 };

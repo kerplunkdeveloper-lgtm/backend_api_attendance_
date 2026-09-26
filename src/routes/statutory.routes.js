@@ -1,9 +1,10 @@
 const express = require("express");
 const statutoryController = require("../controllers/statutory.controller");
-const { authenticate, authorizeRoles } = require("../middleware/auth.middleware");
+const { authenticate, authorizeRoles, requireFeature } = require("../middleware/auth.middleware");
 
 const router = express.Router();
 router.use(authenticate);
+router.use(requireFeature("hasPayroll", "Payroll"));
 
 router.get("/it-declaration", statutoryController.getDeclaration);
 router.put("/it-declaration", statutoryController.saveDeclaration);

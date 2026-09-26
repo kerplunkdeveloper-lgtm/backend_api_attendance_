@@ -603,7 +603,11 @@ class OffboardingService {
 
     const lopDays = customOverrides.lopDays !== undefined ? Number(customOverrides.lopDays) : 0;
     const lopDeduction = customOverrides.lopDeduction !== undefined ? Number(customOverrides.lopDeduction) : Math.round(lopDays * dailyRate * 100) / 100;
-    const loanOrAdvanceRecovery = customOverrides.loanOrAdvanceRecovery !== undefined ? Number(customOverrides.loanOrAdvanceRecovery) : 0;
+    const loanService = require("./loan.service");
+    const outstandingLoans = await loanService.outstandingForEmployee(organizationId, employee.id);
+    const loanOrAdvanceRecovery = customOverrides.loanOrAdvanceRecovery !== undefined
+      ? Number(customOverrides.loanOrAdvanceRecovery)
+      : outstandingLoans;
     const statutoryDeductions = customOverrides.statutoryDeductions !== undefined ? Number(customOverrides.statutoryDeductions) : Math.round((salary ? Number(salary.pf || 0) + Number(salary.professionalTax || 0) : 0) * (workedDaysInFinalMonth / standardWorkingDays));
     const otherDeductions = customOverrides.otherDeductions !== undefined ? Number(customOverrides.otherDeductions) : 0;
 

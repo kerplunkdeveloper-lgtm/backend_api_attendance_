@@ -52,6 +52,9 @@ router.get("/:attendanceId/breaks", attendanceController.getBreakDetails);
 // Today's active session status
 router.get("/today", attendanceController.getTodayStatus);
 
+// Team punch locations for today (every signed-in employee)
+router.get("/live-today", attendanceController.getLiveToday);
+
 // Personal attendance history
 router.get("/my", attendanceController.getMyAttendance);
 router.get("/history", attendanceController.getAttendanceHistory);

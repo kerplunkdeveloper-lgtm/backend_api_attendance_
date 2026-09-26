@@ -1,6 +1,6 @@
 const express = require("express");
 const shiftController = require("../controllers/shift.controller");
-const { authenticate, authorizeRoles } = require("../middleware/auth.middleware");
+const { authenticate, authorizeRoles, requireFeature } = require("../middleware/auth.middleware");
 
 const router = express.Router();
 
@@ -13,12 +13,17 @@ router.get("/", shiftController.list);
 router.get("/:id", shiftController.getById);
 
 // 3. POST /api/shifts/simulate - Interactive calculation simulator
-router.post("/simulate", shiftController.simulate);
+router.post(
+  "/simulate",
+  requireFeature("hasShiftPlanner", "Shift planner"),
+  shiftController.simulate,
+);
 
 // 4. POST /api/shifts - Create shift
 router.post(
   "/",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  requireFeature("hasShiftPlanner", "Shift planner"),
   shiftController.create
 );
 
@@ -26,6 +31,7 @@ router.post(
 router.put(
   "/:id",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  requireFeature("hasShiftPlanner", "Shift planner"),
   shiftController.update
 );
 
@@ -33,6 +39,7 @@ router.put(
 router.delete(
   "/:id",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
+  requireFeature("hasShiftPlanner", "Shift planner"),
   shiftController.remove
 );
 
@@ -40,6 +47,7 @@ router.delete(
 router.post(
   "/:id/assign",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  requireFeature("hasShiftPlanner", "Shift planner"),
   shiftController.assign
 );
 

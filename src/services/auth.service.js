@@ -12,6 +12,10 @@ const emailService = require("./email.service");
 const { organizationWithSubscription } = require("../utils/prismaSelects");
 const { resolveAvatarUrl } = require("../utils/avatar");
 
+const { PLAN_CONFIGS, SUBSCRIPTION_PLANS, isPaidPlan, addBillingPeriod } = require("../config/plans");
+const { presentAuthUser } = require("./entitlement.service");
+const auditService = require("./audit.service");
+
 const MIN_PASSWORD_LENGTH = 8;
 
 /**
@@ -28,146 +32,6 @@ const validatePasswordStrength = (password) => {
     return "Password must contain at least one letter and one number.";
   }
   return null;
-};
-
-const SUBSCRIPTION_PLANS = [
-  {
-    id: "FREE_TRIAL",
-    name: "Free Trial",
-    badge: "14-Day Free Trial",
-    priceMonthly: 0,
-    priceAnnual: 0,
-    currency: "INR",
-    maxEmployees: 10,
-    maxBranches: 1,
-    description: "Full access to try WorkPulse with your core team for 14 days.",
-    features: [
-      "Up to 10 Employees",
-      "1 Branch Location",
-      "GPS Geofenced Punching",
-      "Live Attendance Tracking",
-      "Leave Management",
-      "Standard Shift Schedules",
-      "Community Support",
-    ],
-    popular: false,
-  },
-  {
-    id: "STARTER",
-    name: "Starter",
-    badge: "For Growing Teams",
-    priceMonthly: 2499,
-    priceAnnual: 24990,
-    currency: "INR",
-    maxEmployees: 25,
-    maxBranches: 2,
-    description: "Essential attendance, geofencing, and leave management for small businesses.",
-    features: [
-      "Up to 25 Employees",
-      "2 Branch Locations",
-      "GPS Geofencing & Anti-Spoof",
-      "Leave & Holiday Management",
-      "Miss-Punch Regularization",
-      "Basic Payslip Generation",
-      "Email Support",
-    ],
-    popular: false,
-  },
-  {
-    id: "PROFESSIONAL",
-    name: "Professional",
-    badge: "Most Popular",
-    priceMonthly: 6999,
-    priceAnnual: 69990,
-    currency: "INR",
-    maxEmployees: 100,
-    maxBranches: 10,
-    description: "Complete workforce platform with shift overrides, comp-off, overtime, and payroll.",
-    features: [
-      "Up to 100 Employees",
-      "10 Branch Locations",
-      "Shift Scheduling & Day Overrides",
-      "Overtime Approval Gateways",
-      "Comp-Off Balance Ledger",
-      "Full Automated Payroll Engine",
-      "Device Binding & Geofence Bypass Audit",
-      "Priority 24/7 Support",
-    ],
-    popular: true,
-  },
-  {
-    id: "ENTERPRISE",
-    name: "Enterprise",
-    badge: "For Large Organizations",
-    priceMonthly: 16999,
-    priceAnnual: 169990,
-    currency: "INR",
-    maxEmployees: 1000,
-    maxBranches: 50,
-    description: "Unlimited power, dedicated infrastructure, custom policies, and REST API access.",
-    features: [
-      "Unlimited Employees (up to 1,000+)",
-      "Unlimited Branch Locations",
-      "Custom Org Policy Engine",
-      "Biometric Hardware Integration",
-      "Dedicated REST API Access",
-      "Custom RBAC Roles & Permissions",
-      "Dedicated Account Manager",
-      "99.9% Uptime SLA",
-    ],
-    popular: false,
-  },
-];
-
-const PLAN_CONFIGS = {
-  FREE_TRIAL: {
-    plan: "FREE_TRIAL",
-    status: "TRIALING",
-    price: 0,
-    maxEmployees: 10,
-    maxBranches: 1,
-    trialDays: 14,
-    hasGeofence: true,
-    hasPayroll: true,
-    hasShiftPlanner: true,
-    hasApiAccess: false,
-  },
-  STARTER: {
-    plan: "STARTER",
-    status: "ACTIVE",
-    price: 2499,
-    maxEmployees: 25,
-    maxBranches: 2,
-    periodDays: 30,
-    hasGeofence: true,
-    hasPayroll: true,
-    hasShiftPlanner: true,
-    hasApiAccess: false,
-  },
-  PROFESSIONAL: {
-    plan: "PROFESSIONAL",
-    status: "ACTIVE",
-    price: 6999,
-    maxEmployees: 100,
-    maxBranches: 10,
-    periodDays: 30,
-    hasGeofence: true,
-    hasPayroll: true,
-    hasShiftPlanner: true,
-    hasApiAccess: true,
-  },
-  ENTERPRISE: {
-    plan: "ENTERPRISE",
-    status: "ACTIVE",
-    price: 16999,
-    maxEmployees: 1000,
-    maxBranches: 50,
-    periodDays: 30,
-    hasGeofence: true,
-    hasPayroll: true,
-    hasShiftPlanner: true,
-    hasApiAccess: true,
-  },
 };
 
 /**
@@ -199,37 +63,35 @@ const register = async ({
   // Email is unique per organization, not globally. A consultant can belong
   // to more than one workspace with the same address.
 
-  // Determine subscription plan configuration
-  const chosenPlanKey = (subscriptionPlan || "FREE_TRIAL").toUpperCase();
-  const planMeta = PLAN_CONFIGS[chosenPlanKey] || PLAN_CONFIGS.FREE_TRIAL;
+  // Paid selections are remembered for checkout, but the workspace always
+  // starts on a trial. Unlocking a paid entitlement requires a verified order.
+  const requestedPlanKey = (subscriptionPlan || "FREE_TRIAL").toUpperCase();
+  const requestedPaid = isPaidPlan(requestedPlanKey);
+  const planMeta = PLAN_CONFIGS.FREE_TRIAL;
   const cycle = (billingCycle || "MONTHLY").toUpperCase() === "ANNUAL" ? "ANNUAL" : "MONTHLY";
 
   const now = new Date();
-  const trialEndsAt = planMeta.trialDays ? new Date(now.getTime() + planMeta.trialDays * 24 * 60 * 60 * 1000) : null;
-  const periodDays = cycle === "ANNUAL" ? 365 : 30;
-  const currentPeriodEnd = new Date(now.getTime() + periodDays * 24 * 60 * 60 * 1000);
-  const calculatedPrice = cycle === "ANNUAL" ? planMeta.price * 10 : planMeta.price;
+  const trialEndsAt = new Date(now.getTime() + planMeta.trialDays * 24 * 60 * 60 * 1000);
 
   let finalOrgId;
 
   {
-    const isTrial = planMeta.plan === "FREE_TRIAL";
     const org = await prisma.organization.create({
       data: {
         name: organizationName || "Default Organization",
         subscriptionPlan: planMeta.plan,
         subscriptionStatus: planMeta.status,
         trialEndsAt,
-        subscriptionExpiresAt: isTrial ? trialEndsAt : currentPeriodEnd,
+        subscriptionExpiresAt: trialEndsAt,
         maxEmployees: planMeta.maxEmployees,
-        planLocked: false, // New workspaces start unlocked and ready to test
+        planLocked: false,
         planActivatedAt: now,
         subscription: {
           create: {
             plan: planMeta.plan,
             status: planMeta.status,
             billingCycle: cycle,
-            price: calculatedPrice,
+            price: 0,
             maxEmployees: planMeta.maxEmployees,
             maxBranches: planMeta.maxBranches,
             hasGeofence: planMeta.hasGeofence,
@@ -237,7 +99,7 @@ const register = async ({
             hasShiftPlanner: planMeta.hasShiftPlanner,
             hasApiAccess: planMeta.hasApiAccess,
             trialEndsAt,
-            currentPeriodEnd,
+            currentPeriodEnd: trialEndsAt,
           },
         },
       },
@@ -382,16 +244,9 @@ const register = async ({
     accessToken,
     refreshToken,
     token: accessToken,
-    user: {
-      id: user.id,
-      email: user.email,
-      role: user.role,
-      organizationId: user.organizationId,
-      organization: user.organization,
-      employee: user.employee,
-      planLocked: user.organization?.planLocked ?? false,
-      mustChangePassword: false,
-    },
+    requiresCheckout: requestedPaid,
+    selectedPlan: requestedPaid ? requestedPlanKey : "FREE_TRIAL",
+    user: presentAuthUser({ ...user, mustChangePassword: false }),
   };
 };
 
@@ -496,16 +351,7 @@ const login = async (email, password, client = null, employeeCode = null) => {
     accessToken,
     refreshToken,
     token: accessToken,
-    user: {
-      id: user.id,
-      email: user.email,
-      role: user.role,
-      organizationId: user.organizationId,
-      organization: user.organization,
-      employee: user.employee,
-      planLocked: user.organization?.planLocked ?? false,
-      mustChangePassword: user.mustChangePassword ?? false,
-    },
+    user: presentAuthUser(user),
   };
 };
 
@@ -591,16 +437,7 @@ const refreshAccessToken = async (refreshToken) => {
     accessToken: newAccessToken,
     token: newAccessToken,
     refreshToken: newRefreshToken,
-    user: {
-      id: user.id,
-      email: user.email,
-      role: user.role,
-      organizationId: user.organizationId,
-      organization: user.organization,
-      employee: user.employee,
-      planLocked: user.organization?.planLocked ?? false,
-      mustChangePassword: user.mustChangePassword ?? false,
-    },
+    user: presentAuthUser(user),
   };
 };
 
@@ -623,16 +460,7 @@ const getMe = async (userId) => {
     throw new Error("User not found");
   }
 
-  return {
-    id: user.id,
-    email: user.email,
-    role: user.role,
-    organizationId: user.organizationId,
-    organization: user.organization,
-    employee: user.employee,
-    planLocked: user.organization?.planLocked ?? false,
-    mustChangePassword: user.mustChangePassword ?? false,
-  };
+  return presentAuthUser(user);
 };
 
 const logout = async (refreshToken) => {
@@ -696,17 +524,37 @@ const activatePlan = async (organizationId, enteredCode) => {
 };
 
 /**
- * Upgrade or switch organization subscription plan tier.
+ * Direct plan grant. Company admins must use /billing/checkout.
+ * Only a platform SUPER_ADMIN may activate a paid plan without a payment record.
  */
-const upgradePlan = async (organizationId, newPlan, billingCycle = "MONTHLY") => {
+const upgradePlan = async (organizationId, newPlan, billingCycle = "MONTHLY", actor = {}) => {
+  const actorRole = actor.actorRole || actor.role;
   const chosenPlanKey = (newPlan || "PROFESSIONAL").toUpperCase();
-  const planMeta = PLAN_CONFIGS[chosenPlanKey] || PLAN_CONFIGS.PROFESSIONAL;
-  const cycle = (billingCycle || "MONTHLY").toUpperCase() === "ANNUAL" ? "ANNUAL" : "MONTHLY";
+  if (isPaidPlan(chosenPlanKey) && actorRole !== "SUPER_ADMIN") {
+    const err = new Error(
+      "Paid plans are activated only after verified payment. Use POST /billing/checkout.",
+    );
+    err.statusCode = 403;
+    throw err;
+  }
 
+  const planMeta = PLAN_CONFIGS[chosenPlanKey] || PLAN_CONFIGS.FREE_TRIAL;
+  const cycle = (billingCycle || "MONTHLY").toUpperCase() === "ANNUAL" ? "ANNUAL" : "MONTHLY";
   const now = new Date();
-  const periodDays = cycle === "ANNUAL" ? 365 : 30;
-  const currentPeriodEnd = new Date(now.getTime() + periodDays * 24 * 60 * 60 * 1000);
+  const currentPeriodEnd =
+    planMeta.plan === "FREE_TRIAL"
+      ? new Date(now.getTime() + (planMeta.trialDays || 14) * 24 * 60 * 60 * 1000)
+      : addBillingPeriod(now, cycle);
   const calculatedPrice = cycle === "ANNUAL" ? planMeta.price * 10 : planMeta.price;
+
+  await auditService.logAction({
+    organizationId,
+    userId: actor.actorUserId || actor.id || null,
+    action: "GRANT",
+    entity: "SUBSCRIPTION",
+    entityId: organizationId,
+    details: { plan: planMeta.plan, billingCycle: cycle, actorRole },
+  });
 
   const org = await prisma.organization.update({
     where: { id: organizationId },
@@ -1013,16 +861,7 @@ const loginWithGoogle = async (idToken, client = null) => {
     accessToken,
     refreshToken,
     token: accessToken,
-    user: {
-      id: user.id,
-      email: user.email,
-      role: user.role,
-      organizationId: user.organizationId,
-      organization: user.organization,
-      employee: user.employee,
-      planLocked: user.organization?.planLocked ?? false,
-      mustChangePassword: user.mustChangePassword ?? false,
-    },
+    user: presentAuthUser(user),
   };
 };
 
