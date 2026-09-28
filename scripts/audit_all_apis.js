@@ -1,6 +1,20 @@
 const http = require("http");
 
-const BASE_URL = "http://localhost:5000/api";
+const BASE_URL = process.env.API_BASE_URL || "http://localhost:5000/api";
+const credentials = {
+  admin: {
+    email: process.env.AUDIT_ADMIN_EMAIL,
+    password: process.env.AUDIT_ADMIN_PASSWORD,
+  },
+  employee: {
+    email: process.env.AUDIT_EMPLOYEE_EMAIL,
+    password: process.env.AUDIT_EMPLOYEE_PASSWORD,
+  },
+  hr: {
+    email: process.env.AUDIT_HR_EMAIL,
+    password: process.env.AUDIT_HR_PASSWORD,
+  },
+};
 
 async function request(path, options = {}) {
   const url = new URL(`${BASE_URL}${path}`);
@@ -55,6 +69,13 @@ async function runAudit() {
   console.log("      WORKPULSE 360° API SUITE AUDIT & HEALTH CHECK");
   console.log("====================================================\n");
 
+  const missingCredentials = Object.entries(credentials)
+    .filter(([, value]) => !value.email || !value.password)
+    .map(([role]) => `AUDIT_${role.toUpperCase()}_EMAIL and AUDIT_${role.toUpperCase()}_PASSWORD`);
+  if (missingCredentials.length) {
+    throw new Error(`Set audit credentials before running: ${missingCredentials.join(", ")}`);
+  }
+
   let passed = 0;
   let failed = 0;
   const results = [];
@@ -88,7 +109,7 @@ async function runAudit() {
     // 2. Auth Logins
     const adminLogin = await request("/auth/login", {
       method: "POST",
-      body: { email: "admin@workpulse.com", password: "Password@123" },
+      body: credentials.admin,
     });
     const adminToken = adminLogin.data?.data?.accessToken;
     logTest(
@@ -101,7 +122,7 @@ async function runAudit() {
 
     const empLogin = await request("/auth/login", {
       method: "POST",
-      body: { email: "employee@workpulse.com", password: "Password@123" },
+      body: credentials.employee,
     });
     const empToken = empLogin.data?.data?.accessToken;
     logTest(
@@ -114,7 +135,7 @@ async function runAudit() {
 
     const hrLogin = await request("/auth/login", {
       method: "POST",
-      body: { email: "hr@workpulse.com", password: "Password@123" },
+      body: credentials.hr,
     });
     const hrToken = hrLogin.data?.data?.accessToken;
     logTest(

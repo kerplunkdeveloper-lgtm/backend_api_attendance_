@@ -15,6 +15,7 @@ const prisma = mockPrisma({
 
 const authService = require("../src/services/auth.service");
 const { authenticate } = require("../src/middleware/auth.middleware");
+const { schemas } = require("../src/middleware/validate.middleware");
 
 describe("auth", () => {
   it("rejects invalid login credentials", async () => {
@@ -22,6 +23,32 @@ describe("auth", () => {
       () => authService.login("nobody@example.com", "wrong-password"),
       /Invalid email or password/
     );
+  });
+
+  it("accepts an employee code in the email login field", () => {
+    const result = schemas.login.safeParse({
+      email: "WP-EMP-003",
+      password: "Password@123",
+    });
+
+    assert.equal(result.success, true);
+  });
+
+  it("looks up an employee code submitted in the email login field", async () => {
+    let query;
+    prisma.user.findMany = async (input) => {
+      query = input;
+      return [];
+    };
+
+    await assert.rejects(
+      () => authService.login("WP-EMP-003", "wrong-password"),
+      /Invalid email or password/
+    );
+    assert.deepEqual(query.where.employee.employeeCode, {
+      equals: "WP-EMP-003",
+      mode: "insensitive",
+    });
   });
 
   it("rejects unauthorized requests without a bearer token", async () => {

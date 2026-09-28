@@ -8,11 +8,36 @@
   "variable": [
     {
       "key": "baseUrl",
-      "value": "https://backendapiattendance-production.up.railway.app/api",
+      "value": "http://localhost:5000/api",
       "type": "string"
     },
     {
       "key": "authToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "adminEmail",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "accountPassword",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "firstName",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "lastName",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "organizationName",
       "value": "",
       "type": "string"
     }
@@ -39,7 +64,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"email\": \"admin@company.com\",\n  \"password\": \"Password@123\",\n  \"firstName\": \"Alex\",\n  \"lastName\": \"Vance\",\n  \"organizationName\": \"Acme Technologies Ltd\",\n  \"planId\": \"PROFESSIONAL\"\n}"
+              "raw": "{\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"{{accountPassword}}\",\n  \"firstName\": \"{{firstName}}\",\n  \"lastName\": \"{{lastName}}\",\n  \"organizationName\": \"{{organizationName}}\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/auth/register",
@@ -72,7 +97,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"email\": \"admin@company.com\",\n  \"password\": \"Password@123\"\n}"
+              "raw": "{\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"{{accountPassword}}\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/auth/login",

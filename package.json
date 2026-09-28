@@ -13,8 +13,6 @@
     "db:deploy": "prisma migrate deploy",
     "db:local:deploy": "prisma db push",
     "db:local:push": "prisma db push",
-    "db:local:seed": "node scripts/seed_demo_accounts.js",
-    "db:local:setup": "npm run db:local:push && npm run db:local:seed",
     "db:push": "prisma db push",
     "test": "node --test --test-concurrency=1 tests/*.test.js"
   },

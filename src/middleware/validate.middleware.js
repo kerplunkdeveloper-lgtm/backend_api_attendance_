@@ -51,7 +51,12 @@ const schemas = {
 
   login: z
     .object({
-      email: EMAIL.optional(),
+      email: z
+        .union([
+          EMAIL,
+          z.string().trim().min(1).max(40).regex(/^[^@\s]+$/),
+        ])
+        .optional(),
       employeeCode: z.string().trim().min(1).max(40).optional(),
       password: z.string().min(1).max(128),
       client: z.enum(["web", "mobile"]).optional(),

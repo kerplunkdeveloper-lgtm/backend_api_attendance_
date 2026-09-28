@@ -2,8 +2,11 @@ require("dotenv").config();
 const bcrypt = require("bcryptjs");
 const prisma = require("../src/config/database");
 
-const EMAILS = ["vasanth@kerplunkmedia.com", "vasanth@korplunkmedia.com"];
-const PASSWORD = "Password@123";
+const EMAILS = (process.env.KERPLUNK_ADMIN_EMAILS || "")
+  .split(",")
+  .map((email) => email.trim())
+  .filter(Boolean);
+const PASSWORD = process.env.KERPLUNK_ADMIN_PASSWORD;
 
 async function ensureOrg() {
   let org = await prisma.organization.findFirst({
@@ -143,6 +146,10 @@ async function upsertAdmin(email, org, branch, department, shift, passwordHash) 
 }
 
 async function main() {
+  if (!EMAILS.length || !PASSWORD) {
+    throw new Error("Set KERPLUNK_ADMIN_EMAILS and KERPLUNK_ADMIN_PASSWORD before running this script.");
+  }
+
   const passwordHash = await bcrypt.hash(PASSWORD, 10);
 
   const similar = await prisma.user.findMany({

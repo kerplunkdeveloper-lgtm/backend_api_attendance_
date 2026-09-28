@@ -104,17 +104,8 @@ app.use("/billing/webhook", express.raw({ type: "application/json" }), billingWe
 app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true, limit: "5mb" }));
 app.use(morgan(isProduction ? "combined" : "dev"));
-
-// Apply the general limiter before both /api and root aliases so clients that
-// omit the /api prefix cannot skip throttling.
 app.use(apiRateLimiter);
-
-// Records mutating requests once the response is sent. Registered before the
-// routers so it wraps every module, but reads req.user which the per-router
-// `authenticate` middleware populates during the request.
 app.use(auditLogger);
-
-// API Modules
 app.use("/api/auth", authRoutes);
 app.use("/api/departments", departmentRoutes);
 app.use("/api/branches", branchRoutes);
@@ -123,7 +114,6 @@ app.use("/api/shifts", shiftRoutes);
 app.use("/api/attendance/corrections", correctionRoutes);
 app.use("/api/attendance/regularization", correctionRoutes);
 app.use("/api/attendance/regularizations", correctionRoutes);
-// Mobile client posts to /api/corrections/* — the real mount is under attendance.
 app.use("/api/corrections", correctionRoutes);
 app.use("/api/attendance", attendanceRoutes);
 app.use("/api/leaves", leaveRoutes);
@@ -150,8 +140,6 @@ app.use("/api/organization", orgRoutes);
 app.use("/api/loans", loanRoutes);
 app.use("/api/appraisals", appraisalRoutes);
 app.use("/api/api-keys", apikeyRoutes);
-
-// Root route aliases (handles clients calling without /api prefix)
 app.use("/offboarding", offboardingRoutes);
 app.use("/assets", assetRoutes);
 app.use("/auth", authRoutes);
@@ -186,7 +174,6 @@ app.use("/organization", orgRoutes);
 app.use("/loans", loanRoutes);
 app.use("/appraisals", appraisalRoutes);
 app.use("/api-keys", apikeyRoutes);
-
 app.get(["/", "/api"], (req, res) => {
   res.json({
     success: true,
@@ -215,9 +202,6 @@ app.get(["/health", "/api/health"], (req, res) => {
     message: "Attendance API is running",
   });
 });
-
-// Readiness probe. Confirms the database answers without disclosing tenant
-// counts or driver error details to anonymous callers.
 app.get(["/api/db-status", "/api/ready"], async (req, res) => {
   try {
     const prismaInstance = require("./config/database");
@@ -228,16 +212,12 @@ app.get(["/api/db-status", "/api/ready"], async (req, res) => {
     res.status(503).json({ success: false, database: "error" });
   }
 });
-
-// 404 Not Found Handler
 app.use((req, res) => {
   res.status(404).json({
     success: false,
     message: `Cannot ${req.method} ${req.originalUrl}`,
   });
 });
-
-// Global Error Handling Middleware
 app.use((err, req, res, next) => {
   console.error("Unhandled Error:", err);
 
@@ -246,8 +226,6 @@ app.use((err, req, res, next) => {
   }
 
   const statusCode = err.statusCode || 500;
-
-  // Internal failures must not leak driver or stack detail to clients.
   const message =
     statusCode >= 500 && isProduction
       ? "Internal Server Error"

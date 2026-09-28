@@ -230,9 +230,7 @@ const register = async ({
       loginUrl,
     }
   ).catch((err) => console.warn("[Register] Unlock code email failed:", err.message));
-
-  // Echo the unlock code locally so developers can complete the flow without a
-  // working mail provider. Never do this in production — logs are not a secret store.
+ 
   if (process.env.NODE_ENV !== "production") {
     console.log("────────────────────────────────────────────────────────────");
     console.log(`[Register] Organization: ${organizationName || "Default Organization"}`);
@@ -254,8 +252,13 @@ const register = async ({
 const login = async (email, password, client = null, employeeCode = null) => {
   // Mobile clients send employeeCode when the identifier has no '@'. Either
   // form is accepted — the previous implementation only read `email`.
-  const cleanEmail = email ? email.trim().toLowerCase() : "";
-  const cleanCode = employeeCode ? String(employeeCode).trim() : "";
+  const identifier = email ? String(email).trim() : "";
+  const cleanEmail = identifier.includes("@") ? identifier.toLowerCase() : "";
+  const cleanCode = employeeCode
+    ? String(employeeCode).trim()
+    : identifier && !identifier.includes("@")
+      ? identifier
+      : "";
 
   const loginInclude = {
     organization: organizationWithSubscription,

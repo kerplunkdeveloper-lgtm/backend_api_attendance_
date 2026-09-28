@@ -2,10 +2,14 @@ require("dotenv").config();
 const bcrypt = require("bcryptjs");
 const prisma = require("../src/config/database");
 
-const EMAIL = "vasanth@kerplunkmedia.com";
-const PASSWORD = "Password@123";
+const EMAIL = process.env.KERPLUNK_ADMIN_EMAIL;
+const PASSWORD = process.env.KERPLUNK_ADMIN_PASSWORD;
 
 async function main() {
+  if (!EMAIL || !PASSWORD) {
+    throw new Error("Set KERPLUNK_ADMIN_EMAIL and KERPLUNK_ADMIN_PASSWORD before running this script.");
+  }
+
   const passwordHash = await bcrypt.hash(PASSWORD, 10);
 
   let org = await prisma.organization.findFirst({
