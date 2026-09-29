@@ -2,6 +2,19 @@ const prisma = require("../config/database");
 const { evaluateAttendanceAgainstShift, calculateLateMinutes } = require("../utils/shiftCalculator");
 const { getOrgDateOnly, resolveShift } = require("./attendance.service");
 
+const parseRequestedTimestamp = (value, fieldName) => {
+  if (value === undefined || value === null || value === "") return null;
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) {
+    const error = new Error(
+      `${fieldName} must be a complete ISO date-time, for example 2026-09-29T09:30:00.000Z`,
+    );
+    error.statusCode = 400;
+    throw error;
+  }
+  return timestamp;
+};
+
 const assertPayrollMonthUnlocked = async (organizationId, date) => {
   const target = new Date(date);
   const month = target.getUTCMonth() + 1;
@@ -29,11 +42,21 @@ class CorrectionService {
   async createCorrectionRequest(userId, organizationId, data) {
     const { date, requestedCheckIn, requestedCheckOut, reason, attendanceId } = data;
 
-    if (!date || !reason) {
+    if (!date || !String(reason || "").trim()) {
       const error = new Error("Date and reason are required for attendance correction");
       error.statusCode = 400;
       throw error;
     }
+
+    const submittedDate = new Date(date);
+    if (Number.isNaN(submittedDate.getTime())) {
+      const error = new Error("Date must be a valid ISO date");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const checkIn = parseRequestedTimestamp(requestedCheckIn, "requestedCheckIn");
+    const checkOut = parseRequestedTimestamp(requestedCheckOut, "requestedCheckOut");
 
     const employee = await prisma.employee.findFirst({
       where: { userId, organizationId },
@@ -45,7 +68,7 @@ class CorrectionService {
       throw error;
     }
 
-    const targetDate = await getOrgDateOnly(organizationId, new Date(date));
+    const targetDate = await getOrgDateOnly(organizationId, submittedDate);
     await assertPayrollMonthUnlocked(organizationId, targetDate);
 
     // Check if a pending request already exists for this date
@@ -69,9 +92,9 @@ class CorrectionService {
         employeeId: employee.id,
         attendanceId: attendanceId || null,
         date: targetDate,
-        requestedCheckIn: requestedCheckIn ? new Date(requestedCheckIn) : null,
-        requestedCheckOut: requestedCheckOut ? new Date(requestedCheckOut) : null,
-        reason,
+        requestedCheckIn: checkIn,
+        requestedCheckOut: checkOut,
+        reason: String(reason).trim(),
         status: "PENDING",
       },
       include: {

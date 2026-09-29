@@ -231,10 +231,26 @@ app.get(["/health", "/api/health"], (req, res) => {
     services: { storage: cloudinaryConfigured ? "configured" : "not_configured" },
   });
 });
+const databaseHealthcheckTimeoutMs = Math.max(
+  1000,
+  Number(process.env.DB_HEALTHCHECK_TIMEOUT_MS) || 10000,
+);
 app.get(["/api/db-status", "/api/ready"], async (req, res) => {
+  let timeout;
   try {
     const prismaInstance = require("./config/database");
-    await prismaInstance.$queryRaw`SELECT 1`;
+    await Promise.race([
+      prismaInstance.$queryRaw`SELECT 1`,
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => {
+          const error = new Error(
+            `Database readiness check timed out after ${databaseHealthcheckTimeoutMs}ms`,
+          );
+          error.code = "DB_HEALTHCHECK_TIMEOUT";
+          reject(error);
+        }, databaseHealthcheckTimeoutMs);
+      }),
+    ]);
     res.json({
       success: true,
       database: "connected",
@@ -243,6 +259,8 @@ app.get(["/api/db-status", "/api/ready"], async (req, res) => {
   } catch (err) {
     console.error("[readiness] database check failed:", err.message);
     res.status(503).json({ success: false, database: "error" });
+  } finally {
+    clearTimeout(timeout);
   }
 });
 app.use((req, res) => {
