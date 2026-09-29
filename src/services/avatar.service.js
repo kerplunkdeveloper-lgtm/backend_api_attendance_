@@ -25,19 +25,43 @@ const uploadAvatarFile = async (req) => {
 
   if (file) {
     assertSniffedType(file);
-    const result = await uploadBuffer(file.buffer, {
-      folder,
-      resource_type: "image",
-    });
+    let result;
+    try {
+      result = await uploadBuffer(file.buffer, {
+        folder,
+        resource_type: "image",
+      });
+    } catch (cause) {
+      const error = new Error(
+        cause?.statusCode === 503
+          ? "Avatar storage is not configured on the server."
+          : "Avatar storage upload failed. Please try again.",
+      );
+      error.statusCode = cause?.statusCode === 503 ? 503 : 502;
+      error.cause = cause;
+      throw error;
+    }
     return toUrl(result);
   }
 
   const inline = req.body?.image || req.body?.file || req.body?.avatarUrl;
   if (typeof inline === "string" && ACCEPTED_DATA_URI.test(inline)) {
-    const result = await uploadImage(inline, {
-      folder,
-      resource_type: "image",
-    });
+    let result;
+    try {
+      result = await uploadImage(inline, {
+        folder,
+        resource_type: "image",
+      });
+    } catch (cause) {
+      const error = new Error(
+        cause?.statusCode === 503
+          ? "Avatar storage is not configured on the server."
+          : "Avatar storage upload failed. Please try again.",
+      );
+      error.statusCode = cause?.statusCode === 503 ? 503 : 502;
+      error.cause = cause;
+      throw error;
+    }
     return toUrl(result);
   }
 

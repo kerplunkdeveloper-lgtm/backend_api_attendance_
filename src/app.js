@@ -9,6 +9,7 @@ const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const helmet = require("helmet");
 const morgan = require("morgan");
+const { isConfigured: cloudinaryConfigured } = require("./config/cloudinary");
 
 const authRoutes = require("./routes/auth.routes");
 const departmentRoutes = require("./routes/department.routes");
@@ -227,13 +228,18 @@ app.get(["/health", "/api/health"], (req, res) => {
   res.json({
     success: true,
     message: "Attendance API is running",
+    services: { storage: cloudinaryConfigured ? "configured" : "not_configured" },
   });
 });
 app.get(["/api/db-status", "/api/ready"], async (req, res) => {
   try {
     const prismaInstance = require("./config/database");
     await prismaInstance.$queryRaw`SELECT 1`;
-    res.json({ success: true, database: "connected" });
+    res.json({
+      success: true,
+      database: "connected",
+      storage: cloudinaryConfigured ? "configured" : "not_configured",
+    });
   } catch (err) {
     console.error("[readiness] database check failed:", err.message);
     res.status(503).json({ success: false, database: "error" });
