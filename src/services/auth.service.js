@@ -18,6 +18,11 @@ const auditService = require("./audit.service");
 
 const MIN_PASSWORD_LENGTH = 8;
 
+// Refresh tokens are bearer credentials. Persist only a deterministic digest
+// so a database read cannot be turned directly into an authenticated session.
+const hashRefreshToken = (token) =>
+  crypto.createHash("sha256").update(String(token)).digest("hex");
+
 /**
  * Returns an error message when the password is unacceptable, or null when it passes.
  */
@@ -215,7 +220,7 @@ const register = async ({
   // Store refresh token in DB for revocation support
   const regTokenExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
   await prisma.refreshToken.create({
-    data: { userId: user.id, token: refreshToken, expiresAt: regTokenExpiresAt },
+    data: { userId: user.id, token: hashRefreshToken(refreshToken), expiresAt: regTokenExpiresAt },
   });
 
   // Send unlock code to admin email (async — don't block registration)
@@ -339,7 +344,7 @@ const login = async (email, password, client = null, employeeCode = null) => {
   // Store refresh token in DB for revocation support
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
   await prisma.refreshToken.create({
-    data: { userId: user.id, token: refreshToken, expiresAt },
+    data: { userId: user.id, token: hashRefreshToken(refreshToken), expiresAt },
   });
 
   // Update lastLoginAt in background without blocking login response latency
@@ -373,14 +378,14 @@ const refreshAccessToken = async (refreshToken) => {
 
   // Validate token exists in DB (not revoked via logout)
   const storedToken = await prisma.refreshToken.findUnique({
-    where: { token: refreshToken },
+    where: { token: hashRefreshToken(refreshToken) },
   });
   if (!storedToken) throw new Error("Refresh token has been revoked. Please log in again.");
   if (storedToken.userId !== decoded.userId) {
     throw new Error("Refresh token does not belong to this user. Please log in again.");
   }
   if (storedToken.expiresAt < new Date()) {
-    await prisma.refreshToken.delete({ where: { token: refreshToken } });
+    await prisma.refreshToken.delete({ where: { token: hashRefreshToken(refreshToken) } });
     throw new Error("Refresh token has expired. Please log in again.");
   }
 
@@ -430,9 +435,9 @@ const refreshAccessToken = async (refreshToken) => {
   const refreshExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
   const newRefreshToken = generateRefreshToken(tokenPayload);
   await prisma.$transaction([
-    prisma.refreshToken.delete({ where: { token: refreshToken } }),
+    prisma.refreshToken.delete({ where: { token: hashRefreshToken(refreshToken) } }),
     prisma.refreshToken.create({
-      data: { userId: user.id, token: newRefreshToken, expiresAt: refreshExpiresAt },
+      data: { userId: user.id, token: hashRefreshToken(newRefreshToken), expiresAt: refreshExpiresAt },
     }),
   ]);
 
@@ -469,7 +474,7 @@ const getMe = async (userId) => {
 const logout = async (refreshToken) => {
   if (refreshToken) {
     try {
-      await prisma.refreshToken.deleteMany({ where: { token: refreshToken } });
+      await prisma.refreshToken.deleteMany({ where: { token: hashRefreshToken(refreshToken) } });
     } catch (_) { /* ignore if not found */ }
   }
   return { success: true };
@@ -857,7 +862,9 @@ const loginWithGoogle = async (idToken, client = null) => {
   const refreshToken = generateRefreshToken(tokenPayload);
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
   await prisma.$transaction([
-    prisma.refreshToken.create({ data: { userId: user.id, token: refreshToken, expiresAt } }),
+    prisma.refreshToken.create({
+      data: { userId: user.id, token: hashRefreshToken(refreshToken), expiresAt },
+    }),
     prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } }),
   ]);
   return {

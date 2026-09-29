@@ -1,4 +1,5 @@
 const prisma = require("../config/database");
+const { withRedisLock } = require("../config/redis");
 const emailService = require("./email.service");
 const whatsappService = require("./whatsapp.service");
 const { getLocalDateOnly, getLocalMinutesOfDay } = require("../utils/datetime");
@@ -277,7 +278,8 @@ class NotificationService {
    * Called periodically by the backend scheduler
    */
   async evaluateScheduledReminders() {
-    try {
+    return withRedisLock("workpulse:jobs:scheduled-reminders", 55000, async () => {
+      try {
       const now = new Date();
       const hours = getLocalMinutesOfDay(now, FALLBACK_TZ) / 60;
       await this.sendMorningCheckInReminders(null, true);
@@ -286,9 +288,10 @@ class NotificationService {
       if (hours >= 23) {
         await this.markAbsentEmployees();
       }
-    } catch (err) {
-      console.error("[NotificationScheduler] Error evaluating reminders:", err.message);
-    }
+      } catch (err) {
+        console.error("[NotificationScheduler] Error evaluating reminders:", err.message);
+      }
+    });
   }
 
   /**

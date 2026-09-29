@@ -4,9 +4,10 @@ const {
   authenticate,
   authorizeRoles,
 } = require("../middleware/auth.middleware");
-const { authRateLimiter } = require("../middleware/rateLimiter.middleware");
+const { authRateLimiter, sessionRateLimiter } = require("../middleware/rateLimiter.middleware");
 const { validate, schemas } = require("../middleware/validate.middleware");
 const { imageUploader, handleUploadErrors } = require("../middleware/upload.middleware");
+const { protectCookieMutation } = require("../middleware/requestSecurity.middleware");
 
 const router = express.Router();
 const avatarUpload = imageUploader(6);
@@ -30,10 +31,27 @@ router.post(
   validate(schemas.login),
   authController.login,
 );
-router.post("/google", authRateLimiter, authController.loginWithGoogle);
-router.post("/refresh-token", authRateLimiter, authController.refreshToken);
-router.post("/refresh", authRateLimiter, authController.refreshToken);
-router.post("/logout", authController.logout);
+router.post("/google", authRateLimiter, validate(schemas.googleLogin), authController.loginWithGoogle);
+router.post(
+  "/refresh-token",
+  sessionRateLimiter,
+  validate(schemas.sessionMutation),
+  protectCookieMutation,
+  authController.refreshToken,
+);
+router.post(
+  "/refresh",
+  sessionRateLimiter,
+  validate(schemas.sessionMutation),
+  protectCookieMutation,
+  authController.refreshToken,
+);
+router.post(
+  "/logout",
+  validate(schemas.sessionMutation),
+  protectCookieMutation,
+  authController.logout,
+);
 router.post(
   "/forgot-password",
   authRateLimiter,

@@ -52,6 +52,7 @@ const getById = async (req, res) => {
     const employee = await employeeService.getEmployeeById(
       req.user.organizationId,
       id,
+      req.user.role,
     );
 
     return res.json({

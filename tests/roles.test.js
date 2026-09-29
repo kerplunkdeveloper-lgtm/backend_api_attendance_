@@ -94,6 +94,18 @@ describe("role assignment", () => {
     assert.equal(state.roleWritten, null);
   });
 
+  it("prevents managers from changing sensitive payroll identity fields", async () => {
+    await assert.rejects(
+      () => employeeService.updateEmployee(
+        "org-a",
+        "emp-a",
+        { bankAccountNumber: "1234567890", panNumber: "ABCDE1234F" },
+        { actorRole: "MANAGER", actorUserId: "mgr-1" },
+      ),
+      /Managers cannot update: bankAccountNumber, panNumber/,
+    );
+  });
+
   it("lets a company admin assign MANAGER but not SUPER_ADMIN", () => {
     assert.equal(
       assertRoleAssignment({

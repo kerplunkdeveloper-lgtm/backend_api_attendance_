@@ -309,6 +309,27 @@ class OnboardingService {
     documentType = documentType || file?.documentType;
     const cleanType = documentType ? String(documentType).toUpperCase() : "";
 
+    if (!documentType || (!file?.buffer && !fileUrl)) {
+      const error = new Error("documentType and a file (or fileUrl) are required");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const validTypes = [
+      "GOVT_ID",
+      "TAX_ID",
+      "DEGREE_CERTIFICATE",
+      "PREVIOUS_EXPERIENCE",
+      "BANK_PROOF",
+      "PHOTO",
+      "OTHER",
+    ];
+    if (!validTypes.includes(cleanType)) {
+      const error = new Error(`Invalid documentType. Must be one of: ${validTypes.join(", ")}`);
+      error.statusCode = 400;
+      throw error;
+    }
+
     if (file?.buffer) {
       const { assertSniffedType } = require("../middleware/upload.middleware");
       assertSniffedType(file);
@@ -329,22 +350,6 @@ class OnboardingService {
       throw error;
     }
 
-    const validTypes = [
-      "GOVT_ID",
-      "TAX_ID",
-      "DEGREE_CERTIFICATE",
-      "PREVIOUS_EXPERIENCE",
-      "BANK_PROOF",
-      "PHOTO",
-      "OTHER",
-    ];
-
-    if (!validTypes.includes(cleanType)) {
-      const error = new Error(`Invalid documentType. Must be one of: ${validTypes.join(", ")}`);
-      error.statusCode = 400;
-      throw error;
-    }
-
     // Auto-upload to Cloudinary if base64 / data URI
     let finalFileUrl = String(fileUrl).trim();
     if (typeof finalFileUrl === "string" && finalFileUrl.startsWith("data:")) {
@@ -352,6 +357,7 @@ class OnboardingService {
         const uploadRes = await uploadImage(finalFileUrl, {
           folder: `workpulse/onboarding/${candidate.id}`,
           resource_type: "auto",
+          type: isSensitiveDocumentType(cleanType) ? "authenticated" : "upload",
         });
         if (uploadRes && uploadRes.secure_url) {
           finalFileUrl = uploadRes.secure_url;
@@ -363,6 +369,23 @@ class OnboardingService {
       } catch (cloudErr) {
         const error = new Error("Document upload failed. Please retry.");
         error.statusCode = 503;
+        throw error;
+      }
+    } else if (!file?.buffer) {
+      if (isSensitiveDocumentType(cleanType)) {
+        const error = new Error("Sensitive onboarding documents must be uploaded directly.");
+        error.statusCode = 400;
+        throw error;
+      }
+      try {
+        const parsed = new URL(finalFileUrl);
+        if (parsed.protocol !== "https:" || !/(^|\.)cloudinary\.com$/i.test(parsed.hostname)) {
+          throw new Error("untrusted host");
+        }
+        finalFileUrl = parsed.toString();
+      } catch {
+        const error = new Error("Document URLs must use HTTPS Cloudinary storage.");
+        error.statusCode = 400;
         throw error;
       }
     }

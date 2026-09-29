@@ -5,6 +5,32 @@ const { generateTempPassword, resolveAssignableRole, assertRoleAssignment } = re
 const { resolveAvatarUrl } = require("../utils/avatar");
 const { assertSeatAvailable } = require("./entitlement.service");
 
+const SENSITIVE_EMPLOYEE_FIELDS = [
+  "panNumber",
+  "uanNumber",
+  "esiNumber",
+  "bankName",
+  "bankAccountNumber",
+  "bankIfsc",
+  "dateOfBirth",
+  "address",
+  "emergencyContactName",
+  "emergencyContactPhone",
+];
+
+const withoutSensitiveEmployeeFields = (employee) => {
+  if (!employee) return employee;
+  const safe = { ...employee };
+  for (const field of SENSITIVE_EMPLOYEE_FIELDS) delete safe[field];
+  return safe;
+};
+
+const MANAGER_UPDATE_FIELDS = new Set([
+  "firstName", "lastName", "phone", "status", "branchId", "departmentId",
+  "shiftId", "designation", "employmentType", "reportingManagerId", "avatarUrl",
+  "profileImage", "profilePicture", "avatar", "role",
+]);
+
 /**
  * 1. POST /api/employees - Create Employee
  */
@@ -237,13 +263,19 @@ const getEmployees = async (organizationId, query = {}) => {
     prisma.employee.count({ where }),
   ]);
 
-  return { records, total, page, limit: take, totalPages: Math.ceil(total / take) || 1 };
+  return {
+    records: records.map(withoutSensitiveEmployeeFields),
+    total,
+    page,
+    limit: take,
+    totalPages: Math.ceil(total / take) || 1,
+  };
 };
 
 /**
  * 3. GET /api/employees/:id - Get Employee by ID
  */
-const getEmployeeById = async (organizationId, employeeId) => {
+const getEmployeeById = async (organizationId, employeeId, actorRole = "EMPLOYEE") => {
   const employee = await prisma.employee.findFirst({
     where: { id: employeeId, organizationId, deletedAt: null },
     include: {
@@ -264,7 +296,9 @@ const getEmployeeById = async (organizationId, employeeId) => {
     throw new Error("Employee not found");
   }
 
-  return employee;
+  return ["SUPER_ADMIN", "COMPANY_ADMIN"].includes(actorRole)
+    ? employee
+    : withoutSensitiveEmployeeFields(employee);
 };
 
 /**
@@ -273,6 +307,15 @@ const getEmployeeById = async (organizationId, employeeId) => {
 const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
   const actorRole = actor.actorRole || actor.role || "COMPANY_ADMIN";
   const actorUserId = actor.actorUserId || actor.id || null;
+
+  if (actorRole === "MANAGER") {
+    const forbidden = Object.keys(data).filter((key) => !MANAGER_UPDATE_FIELDS.has(key));
+    if (forbidden.length) {
+      const error = new Error(`Managers cannot update: ${forbidden.join(", ")}`);
+      error.statusCode = 403;
+      throw error;
+    }
+  }
 
   const employee = await prisma.employee.findFirst({
     where: { id: employeeId, organizationId },
@@ -343,7 +386,7 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
     )
   );
 
-  return await prisma.$transaction(async (tx) => {
+  const updatedEmployee = await prisma.$transaction(async (tx) => {
     if (employee.userId && (role || avatarToSet !== undefined)) {
       const userUpdates = {};
       if (role) {
@@ -400,6 +443,9 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
       },
     });
   });
+  return actorRole === "MANAGER"
+    ? withoutSensitiveEmployeeFields(updatedEmployee)
+    : updatedEmployee;
 };
 
 /**

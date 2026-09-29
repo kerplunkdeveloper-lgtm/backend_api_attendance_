@@ -4,7 +4,11 @@ const {
   authenticate,
   authorizeRoles,
 } = require("../middleware/auth.middleware");
-const { imageUploader, handleUploadErrors } = require("../middleware/upload.middleware");
+const {
+  documentUploader,
+  imageUploader,
+  handleUploadErrors,
+} = require("../middleware/upload.middleware");
 
 const router = express.Router();
 const avatarUpload = imageUploader(6);
@@ -66,15 +70,9 @@ router.delete(
   employeeController.remove,
 );
 
-const multer = require("multer");
 const employeeDocumentController = require("../controllers/employee-document.controller");
 
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 15 * 1024 * 1024, // 15MB limit
-  },
-});
+const upload = documentUploader(15);
 
 // Invite employee by email — auto-creates account + sends credentials via email
 router.post(
@@ -91,6 +89,7 @@ router.get("/:employeeId/documents", employeeDocumentController.getDocuments);
 router.post(
   "/:employeeId/documents",
   upload.single("file"),
+  handleUploadErrors,
   employeeDocumentController.uploadDocument,
 );
 
@@ -98,6 +97,7 @@ router.post(
 router.put(
   "/:employeeId/documents/:documentId",
   upload.single("file"),
+  handleUploadErrors,
   employeeDocumentController.replaceOrUpdateDocument,
 );
 

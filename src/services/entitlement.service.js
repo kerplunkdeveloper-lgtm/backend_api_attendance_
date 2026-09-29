@@ -4,8 +4,8 @@ const { SEAT_STATUSES, getPlan } = require("../config/plans");
 const GRACE_MS = 3 * 24 * 60 * 60 * 1000;
 
 const periodEndOf = (org) =>
-  org?.subscriptionExpiresAt ||
   org?.subscription?.currentPeriodEnd ||
+  org?.subscriptionExpiresAt ||
   org?.trialEndsAt ||
   null;
 
@@ -29,7 +29,7 @@ const evaluateEntitlement = (org, now = new Date()) => {
   }
 
   const nowMs = now.getTime();
-  const status = String(org.subscriptionStatus || org.subscription?.status || "TRIALING").toUpperCase();
+  const status = String(org.subscription?.status || org.subscriptionStatus || "TRIALING").toUpperCase();
   const expiresAt = periodEndOf(org);
   const expiryMs = expiresAt ? new Date(expiresAt).getTime() : null;
   const trialEnd = org.trialEndsAt || (status === "TRIALING" ? expiresAt : null);
@@ -107,7 +107,7 @@ const isRecoveryPath = (req) => {
 };
 
 const resolveLimits = (org) => {
-  const plan = getPlan(org?.subscriptionPlan || org?.subscription?.plan) || getPlan("FREE_TRIAL");
+  const plan = getPlan(org?.subscription?.plan || org?.subscriptionPlan) || getPlan("FREE_TRIAL");
   return {
     maxEmployees: org?.subscription?.maxEmployees || org?.maxEmployees || plan.maxEmployees,
     maxBranches: org?.subscription?.maxBranches || plan.maxBranches,
@@ -219,7 +219,16 @@ const presentAuthUser = (user) => {
     email: user.email,
     role: user.role,
     organizationId: user.organizationId,
-    organization: org,
+    organization: org
+      ? {
+          ...org,
+          subscriptionPlan: org.subscription?.plan || org.subscriptionPlan,
+          subscriptionStatus: org.subscription?.status || org.subscriptionStatus,
+          subscriptionExpiresAt:
+            org.subscription?.currentPeriodEnd || org.subscriptionExpiresAt,
+          maxEmployees: features.maxEmployees,
+        }
+      : null,
     employee: user.employee || null,
     avatarUrl: user.avatarUrl || user.employee?.avatarUrl || null,
     planLocked: org?.planLocked ?? false,

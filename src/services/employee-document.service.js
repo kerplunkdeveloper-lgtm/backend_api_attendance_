@@ -1,6 +1,28 @@
 const prisma = require("../config/database");
 const { uploadImage, uploadBuffer, signedDeliveryUrl, isSensitiveDocumentType } = require("../config/cloudinary");
 const notificationService = require("./notification.service");
+const { assertSniffedType } = require("../middleware/upload.middleware");
+
+const uploadFailure = (message, cause) => {
+  const error = new Error(message);
+  error.statusCode = 502;
+  error.cause = cause;
+  return error;
+};
+
+const trustedCloudinaryUrl = (value) => {
+  try {
+    const url = new URL(String(value));
+    if (url.protocol !== "https:" || !/(^|\.)cloudinary\.com$/i.test(url.hostname)) {
+      throw new Error("untrusted host");
+    }
+    return url.toString();
+  } catch {
+    const error = new Error("Document URLs must use HTTPS Cloudinary storage.");
+    error.statusCode = 400;
+    throw error;
+  }
+};
 
 const DOCUMENT_DEFINITIONS = [
   { type: "AADHAAR", label: "Aadhaar Card", description: "Government 12-digit Unique Identification document", isMandatory: true, hasExpiry: false },
@@ -167,6 +189,7 @@ class EmployeeDocumentService {
 
     // 1. If a direct fileBuffer was provided via multer
     if (fileBuffer) {
+      assertSniffedType({ buffer: fileBuffer, mimetype: computedMimeType });
       try {
         const uploadRes = await uploadBuffer(fileBuffer, {
           folder: `workpulse/employees/${employeeId}/documents`,
@@ -177,8 +200,9 @@ class EmployeeDocumentService {
           finalFileUrl = uploadRes.secure_url;
           computedFileSize = uploadRes.bytes || computedFileSize;
         }
+        if (!finalFileUrl) throw new Error("Storage provider returned no file URL");
       } catch (err) {
-        console.error("Cloudinary buffer upload error:", err.message);
+        throw uploadFailure("Document storage failed. Please try again.", err);
       }
     }
     // 2. If base64 data URI was passed in payload
@@ -187,14 +211,25 @@ class EmployeeDocumentService {
         const uploadRes = await uploadImage(finalFileUrl, {
           folder: `workpulse/employees/${employeeId}/documents`,
           resource_type: "auto",
+          type: isSensitiveDocumentType(documentType) ? "authenticated" : "upload",
         });
         if (uploadRes && uploadRes.secure_url) {
           finalFileUrl = uploadRes.secure_url;
           computedFileSize = uploadRes.bytes || computedFileSize;
         }
+        if (!finalFileUrl || finalFileUrl.startsWith("data:")) {
+          throw new Error("Storage provider returned no file URL");
+        }
       } catch (err) {
-        console.error("Cloudinary base64 upload error:", err.message);
+        throw uploadFailure("Document storage failed. Please try again.", err);
       }
+    } else if (finalFileUrl && typeof finalFileUrl === "string") {
+      if (isSensitiveDocumentType(documentType)) {
+        const error = new Error("Sensitive documents must be uploaded directly.");
+        error.statusCode = 400;
+        throw error;
+      }
+      finalFileUrl = trustedCloudinaryUrl(finalFileUrl);
     }
 
     if (!finalFileUrl) {
@@ -277,34 +312,45 @@ class EmployeeDocumentService {
 
     // Handle replace file
     if (fileBuffer) {
+      assertSniffedType({ buffer: fileBuffer, mimetype: computedMimeType });
       try {
         const uploadRes = await uploadBuffer(fileBuffer, {
           folder: `workpulse/employees/${employeeId}/documents`,
           resource_type: "auto",
-          type: isSensitiveDocumentType(documentType) ? "authenticated" : "upload",
+          type: isSensitiveDocumentType(existing.documentType) ? "authenticated" : "upload",
         });
         if (uploadRes && uploadRes.secure_url) {
           finalFileUrl = uploadRes.secure_url;
           computedFileSize = uploadRes.bytes || computedFileSize;
         }
+        if (finalFileUrl === existing.fileUrl) throw new Error("Storage provider returned no file URL");
       } catch (err) {
-        console.error("Cloudinary buffer replacement error:", err.message);
+        throw uploadFailure("Document replacement failed. Please try again.", err);
       }
     } else if (rawFileUrl && typeof rawFileUrl === "string" && rawFileUrl.startsWith("data:")) {
       try {
         const uploadRes = await uploadImage(rawFileUrl, {
           folder: `workpulse/employees/${employeeId}/documents`,
           resource_type: "auto",
+          type: isSensitiveDocumentType(existing.documentType) ? "authenticated" : "upload",
         });
         if (uploadRes && uploadRes.secure_url) {
           finalFileUrl = uploadRes.secure_url;
           computedFileSize = uploadRes.bytes || computedFileSize;
         }
+        if (finalFileUrl === existing.fileUrl) throw new Error("Storage provider returned no file URL");
       } catch (err) {
-        console.error("Cloudinary base64 replacement error:", err.message);
+        throw uploadFailure("Document replacement failed. Please try again.", err);
       }
     } else if (rawFileUrl && typeof rawFileUrl === "string") {
-      finalFileUrl = rawFileUrl.trim();
+      if (rawFileUrl.trim() !== existing.fileUrl) {
+        if (isSensitiveDocumentType(existing.documentType)) {
+          const error = new Error("Sensitive documents must be uploaded directly.");
+          error.statusCode = 400;
+          throw error;
+        }
+        finalFileUrl = trustedCloudinaryUrl(rawFileUrl);
+      }
     }
 
     const updateData = {

@@ -3,6 +3,7 @@ require("dotenv").config();
 const app = require("./src/app");
 const prisma = require("./src/config/database");
 const notificationService = require("./src/services/notification.service");
+const { disconnectRedis } = require("./src/config/redis");
 
 /**
  * The reminder / absent-marking scheduler runs on an interval inside this
@@ -79,6 +80,7 @@ const shutdown = async (signal) => {
   server?.close(async () => {
     try {
       await prisma.$disconnect();
+      await disconnectRedis();
     } catch (err) {
       console.error("Error disconnecting Prisma:", err.message);
     }

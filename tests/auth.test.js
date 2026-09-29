@@ -1,11 +1,14 @@
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
+const bcrypt = require("bcryptjs");
 const { mockPrisma } = require("./helpers/mockPrisma");
 
 const prisma = mockPrisma({
   user: {
     findMany: async () => [],
     findUnique: async () => null,
+    update: async () => ({}),
   },
   refreshToken: {
     create: async () => ({}),
@@ -14,8 +17,10 @@ const prisma = mockPrisma({
 });
 
 const authService = require("../src/services/auth.service");
+const authController = require("../src/controllers/auth.controller");
 const { authenticate } = require("../src/middleware/auth.middleware");
 const { schemas } = require("../src/middleware/validate.middleware");
+const { protectCookieMutation } = require("../src/middleware/requestSecurity.middleware");
 
 describe("auth", () => {
   it("rejects invalid login credentials", async () => {
@@ -49,6 +54,93 @@ describe("auth", () => {
       equals: "WP-EMP-003",
       mode: "insensitive",
     });
+  });
+
+  it("stores only a digest of issued refresh tokens", async () => {
+    const password = "Password123";
+    let stored;
+    prisma.user.findMany = async () => [{
+      id: "u-hash",
+      email: "admin@example.com",
+      passwordHash: await bcrypt.hash(password, 4),
+      role: "COMPANY_ADMIN",
+      organizationId: "org-hash",
+      isActive: true,
+      organization: {
+        id: "org-hash",
+        deletedAt: null,
+        subscriptionStatus: "TRIALING",
+        trialEndsAt: new Date(Date.now() + 86400000),
+        subscriptionPlan: "FREE_TRIAL",
+      },
+      employee: null,
+    }];
+    prisma.refreshToken.create = async ({ data }) => {
+      stored = data.token;
+      return data;
+    };
+
+    const result = await authService.login("admin@example.com", password, "web");
+    const expected = crypto.createHash("sha256").update(result.refreshToken).digest("hex");
+
+    assert.equal(stored, expected);
+    assert.notEqual(stored, result.refreshToken);
+    assert.match(stored, /^[a-f0-9]{64}$/);
+  });
+
+  it("keeps browser refresh tokens out of JSON responses", async () => {
+    const originalLogin = authService.login;
+    authService.login = async () => ({
+      accessToken: "access-token",
+      refreshToken: "refresh-token",
+      user: { id: "u1" },
+    });
+    let payload;
+    const req = {
+      body: { email: "admin@example.com", password: "Password123", client: "web" },
+      headers: {},
+    };
+    const res = {
+      cookie() {},
+      json(value) { payload = value; return this; },
+      status() { return this; },
+    };
+
+    try {
+      await authController.login(req, res);
+      assert.equal(payload.data.accessToken, "access-token");
+      assert.equal(Object.hasOwn(payload.data, "refreshToken"), false);
+    } finally {
+      authService.login = originalLogin;
+    }
+  });
+
+  it("rejects cross-origin refresh-cookie mutations without relying on a client marker", () => {
+    const previousFrontendUrl = process.env.FRONTEND_URL;
+    process.env.FRONTEND_URL = "https://app.workpulse.example";
+    const req = {
+      body: {},
+      cookies: { refreshToken: "browser-cookie" },
+      headers: { origin: "https://attacker.example" },
+      requestId: "request-123",
+    };
+    let statusCode;
+    let payload;
+    const res = {
+      status(code) { statusCode = code; return this; },
+      json(value) { payload = value; return this; },
+    };
+
+    try {
+      protectCookieMutation(req, res, () => {
+        throw new Error("next should not be called");
+      });
+      assert.equal(statusCode, 403);
+      assert.equal(payload.message, "Untrusted browser origin.");
+    } finally {
+      if (previousFrontendUrl === undefined) delete process.env.FRONTEND_URL;
+      else process.env.FRONTEND_URL = previousFrontendUrl;
+    }
   });
 
   it("rejects unauthorized requests without a bearer token", async () => {

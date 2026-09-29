@@ -1,4 +1,6 @@
 require("dotenv").config();
+const { validateEnvironment } = require("./config/environment");
+validateEnvironment();
 const express = require("express");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
@@ -39,6 +41,10 @@ const apikeyRoutes = require("./routes/apikey.routes");
 const billingWebhookRoutes = require("./routes/billing.webhook.routes");
 const { apiRateLimiter } = require("./middleware/rateLimiter.middleware");
 const { auditLogger } = require("./middleware/audit.middleware");
+const {
+  rejectUnsafePayload,
+  requestContext,
+} = require("./middleware/requestSecurity.middleware");
 
 const app = express();
 
@@ -54,11 +60,11 @@ if (isProduction) {
 // Extra origins can be supplied as a comma-separated list without a redeploy.
 const configuredOrigins = (process.env.CORS_ALLOWED_ORIGINS || "")
   .split(",")
-  .map((o) => o.trim())
+  .map((o) => o.trim().replace(/\/$/, ""))
   .filter(Boolean);
 
 const allowedOrigins = [
-  process.env.FRONTEND_URL,
+  String(process.env.FRONTEND_URL || "").trim().replace(/\/$/, ""),
   ...configuredOrigins,
 ].filter(Boolean);
 
@@ -73,6 +79,7 @@ if (!isProduction) {
 }
 
 app.use(helmet());
+app.use(requestContext);
 app.use(
   cors({
     origin: (origin, callback) => {
@@ -91,7 +98,9 @@ app.use(
       // page against this API.
       if (!isProduction) return callback(null, true);
 
-      return callback(null, false);
+      const error = new Error("Not allowed by CORS");
+      error.statusCode = 403;
+      return callback(error);
     },
     credentials: true,
     allowedHeaders: ["Content-Type", "Authorization", "x-client-platform", "x-device-id"],
@@ -103,7 +112,21 @@ app.use("/api/billing/webhook", express.raw({ type: "application/json" }), billi
 app.use("/billing/webhook", express.raw({ type: "application/json" }), billingWebhookRoutes);
 app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true, limit: "5mb" }));
-app.use(morgan(isProduction ? "combined" : "dev"));
+app.use(rejectUnsafePayload);
+app.use(
+  morgan((tokens, req, res) =>
+    JSON.stringify({
+      timestamp: new Date().toISOString(),
+      requestId: req.requestId,
+      method: tokens.method(req, res),
+      path: tokens.url(req, res),
+      status: Number(tokens.status(req, res)),
+      responseTimeMs: Number(tokens["response-time"](req, res)),
+      contentLength: Number(tokens.res(req, res, "content-length")) || 0,
+      remoteAddress: tokens["remote-addr"](req, res),
+    }),
+  ),
+);
 app.use(apiRateLimiter);
 app.use(auditLogger);
 app.use("/api/auth", authRoutes);
@@ -234,6 +257,7 @@ app.use((err, req, res, next) => {
   res.status(statusCode).json({
     success: false,
     message,
+    requestId: req.requestId,
     ...(process.env.NODE_ENV === "development" && { stack: err.stack }),
   });
 });

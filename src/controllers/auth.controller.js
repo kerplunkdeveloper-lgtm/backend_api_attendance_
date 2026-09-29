@@ -1,9 +1,19 @@
 const authService = require("../services/auth.service");
 
+const isWebClient = (req) => {
+  const platform = String(
+    req.body?.client || req.headers["x-client-platform"] || "",
+  ).toLowerCase();
+  return Boolean(req.headers.origin) || platform === "web" || platform === "browser";
+};
+
+// Native clients cannot use the browser's HTTP-only cookie jar. Browser clients
+// must never receive refresh credentials in JSON where script can read them.
+const refreshTokenForClient = (req, token) =>
+  isWebClient(req) ? {} : { refreshToken: token };
+
 const getCookieOptions = () => {
-  const isHttps =
-    process.env.NODE_ENV === "production" &&
-    process.env.BACKEND_URL?.startsWith("https://");
+  const isHttps = process.env.NODE_ENV === "production";
   return {
     httpOnly: true,
     secure: isHttps,
@@ -59,7 +69,7 @@ const register = async (req, res) => {
       data: {
         accessToken: result.accessToken,
         token: result.accessToken,
-        refreshToken: result.refreshToken,
+        ...refreshTokenForClient(req, result.refreshToken),
         user: result.user,
         requiresCheckout: result.requiresCheckout,
         selectedPlan: result.selectedPlan,
@@ -85,7 +95,7 @@ const loginWithGoogle = async (req, res) => {
       data: {
         accessToken: result.accessToken,
         token: result.accessToken,
-        refreshToken: result.refreshToken,
+        ...refreshTokenForClient(req, result.refreshToken),
         user: result.user,
       },
     });
@@ -125,7 +135,7 @@ const login = async (req, res) => {
       data: {
         accessToken: result.accessToken,
         token: result.accessToken,
-        refreshToken: result.refreshToken,
+        ...refreshTokenForClient(req, result.refreshToken),
         user: result.user,
       },
     });
@@ -162,7 +172,7 @@ const refreshToken = async (req, res) => {
       data: {
         accessToken: result.accessToken,
         token: result.accessToken,
-        refreshToken: result.refreshToken || token,
+        ...refreshTokenForClient(req, result.refreshToken || token),
         user: result.user,
       },
     });

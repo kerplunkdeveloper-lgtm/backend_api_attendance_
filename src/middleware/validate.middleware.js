@@ -46,6 +46,7 @@ const schemas = {
       employeeCode: z.string().trim().max(40).optional(),
       subscriptionPlan: z.string().trim().max(40).optional(),
       billingCycle: z.enum(["MONTHLY", "ANNUAL"]).optional(),
+      client: z.enum(["web", "mobile"]).optional(),
     })
     .strict(),
 
@@ -64,6 +65,20 @@ const schemas = {
     .refine((v) => Boolean(v.email || v.employeeCode), {
       message: "Email or employeeCode is required",
     }),
+
+  googleLogin: z
+    .object({
+      idToken: z.string().min(20).max(10000),
+      client: z.enum(["web", "mobile"]).optional(),
+    })
+    .strict(),
+
+  sessionMutation: z
+    .object({
+      refreshToken: z.string().min(20).max(4000).optional(),
+      client: z.enum(["web", "mobile"]).optional(),
+    })
+    .strict(),
 
   forgotPassword: z.object({ email: EMAIL }).strict(),
 

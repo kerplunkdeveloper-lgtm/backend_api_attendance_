@@ -3,6 +3,12 @@ const app = require("./src/app");
 const notificationService = require("./src/services/notification.service");
 
 function startBackgroundScheduler() {
+  const flag = process.env.ENABLE_SCHEDULER;
+  const enabled = flag === undefined ? process.env.NODE_ENV !== "production" : flag === "true";
+  if (!enabled) {
+    console.log("[scheduler] disabled (set ENABLE_SCHEDULER=true on one worker to enable)");
+    return;
+  }
   try {
     notificationService.startScheduler();
   } catch (err) {
@@ -24,6 +30,6 @@ if (typeof PhusionPassenger !== "undefined") {
     startBackgroundScheduler();
   });
 }
-
+  
 // Export Express app for Vercel / serverless runtime
 module.exports = app;
