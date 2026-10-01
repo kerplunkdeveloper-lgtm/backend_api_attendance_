@@ -8,6 +8,25 @@ const PLAN_INR = {
   ENTERPRISE: { MONTHLY: 16999, ANNUAL: 169990 },
 };
 
+ 
+const BILLING_OFFERS = {
+  WELCOME20: {
+    code: "WELCOME20",
+    label: "20% off your first paid billing period",
+    type: "PERCENTAGE",
+    value: 20,
+    maxDiscountInr: 2000,
+    firstPaidOrderOnly: true,
+  },
+  ANNUAL20: {
+    code: "ANNUAL20",
+    label: "20% off annual billing",
+    type: "PERCENTAGE",
+    value: 20,
+    eligibleCycles: ["ANNUAL"],
+  },
+};
+
 const PLAN_CONFIGS = {
   FREE_TRIAL: {
     plan: "FREE_TRIAL",
@@ -171,6 +190,7 @@ const addBillingPeriod = (from, billingCycle) => {
 
 module.exports = {
   PLAN_INR,
+  BILLING_OFFERS,
   PLAN_CONFIGS,
   PLAN_LIMITS: Object.fromEntries(
     Object.entries(PLAN_CONFIGS).map(([key, value]) => [

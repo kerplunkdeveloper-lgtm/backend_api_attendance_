@@ -1394,6 +1394,10 @@ model BillingOrder {
   plan               String
   billingCycle       String
   amountInr          Decimal   @db.Decimal(12, 2)
+  baseAmountInr      Decimal   @default(0) @db.Decimal(12, 2)
+  discountAmountInr  Decimal   @default(0) @db.Decimal(12, 2)
+  taxAmountInr       Decimal   @default(0) @db.Decimal(12, 2)
+  couponCode         String?
   razorpayOrderId    String?   @unique
   razorpayPaymentId  String?   @unique
   status             String    @default("CREATED")
@@ -1403,6 +1407,7 @@ model BillingOrder {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([organizationId, status])
+  @@index([organizationId, couponCode])
 }
 
 model ChatThread {

@@ -292,7 +292,10 @@ const login = async (email, password, client = null, employeeCode = null) => {
   }
 
   if (matches.length === 0) {
-    throw new Error("Invalid email or password");
+    const error = new Error("Invalid email or password");
+    error.statusCode = 401;
+    error.code = "INVALID_CREDENTIALS";
+    throw error;
   }
   if (matches.length > 1) {
     const error = new Error(
@@ -319,16 +322,6 @@ const login = async (email, password, client = null, employeeCode = null) => {
   if (user.employee?.deletedAt) {
     const error = new Error("This employee profile has been removed. Contact your administrator.");
     error.statusCode = 403;
-    throw error;
-  }
-
-  // Web access restriction: Only Admins and Managers can use the web app. Employees must use mobile app.
-  if (client === "web" && user.role === "EMPLOYEE") {
-    const error = new Error(
-      "Web application access is reserved for Administrators and Managers. Please sign in via the WorkPulse Mobile App to clock in and manage attendance."
-    );
-    error.statusCode = 403;
-    error.code = "MOBILE_APP_REQUIRED";
     throw error;
   }
 

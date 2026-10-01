@@ -56,6 +56,40 @@ describe("auth", () => {
     });
   });
 
+  it("allows employees to sign in through the web attendance portal", async () => {
+    const password = "Password123";
+    prisma.user.findMany = async () => [{
+      id: "employee-web-user",
+      email: "employee@example.com",
+      passwordHash: await bcrypt.hash(password, 4),
+      role: "EMPLOYEE",
+      organizationId: "org-employee",
+      isActive: true,
+      organization: {
+        id: "org-employee",
+        deletedAt: null,
+        subscriptionStatus: "TRIALING",
+        trialEndsAt: new Date(Date.now() + 86400000),
+        subscriptionPlan: "FREE_TRIAL",
+      },
+      employee: {
+        id: "employee-1",
+        firstName: "Web",
+        lastName: "Employee",
+        deletedAt: null,
+        branch: null,
+        shift: null,
+        department: null,
+      },
+    }];
+    prisma.refreshToken.create = async ({ data }) => data;
+
+    const result = await authService.login("employee@example.com", password, "web");
+
+    assert.equal(result.user.role, "EMPLOYEE");
+    assert.ok(result.accessToken);
+  });
+
   it("stores only a digest of issued refresh tokens", async () => {
     const password = "Password123";
     let stored;

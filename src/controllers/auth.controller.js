@@ -12,6 +12,51 @@ const isWebClient = (req) => {
 const refreshTokenForClient = (req, token) =>
   isWebClient(req) ? {} : { refreshToken: token };
 
+const isInfrastructureError = (error) => {
+  const seen = new Set();
+  const codes = [];
+  const names = [];
+  const visit = (item) => {
+    if (!item || typeof item !== "object" || seen.has(item)) return;
+    seen.add(item);
+    if (item.code) codes.push(String(item.code));
+    if (item.name) names.push(String(item.name));
+    if (Array.isArray(item.errors)) item.errors.forEach(visit);
+    visit(item.cause);
+  };
+  visit(error);
+
+  return names.some((name) => /^PrismaClient/.test(name)) || codes.some(
+    (code) =>
+      code.startsWith("P") ||
+      ["EACCES", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND", "ECONNRESET"].includes(code),
+  );
+};
+
+const loginErrorResponse = (error) => {
+  if (error?.statusCode) {
+    return {
+      status: error.statusCode,
+      code: error.code || (error.statusCode === 401 ? "INVALID_CREDENTIALS" : "AUTH_FAILED"),
+      message: error.message,
+    };
+  }
+  if (isInfrastructureError(error)) {
+    console.error("[Auth] Login infrastructure error:", error);
+    return {
+      status: 503,
+      code: "AUTH_SERVICE_UNAVAILABLE",
+      message: "Login service is temporarily unavailable. Please try again shortly.",
+    };
+  }
+  console.error("[Auth] Login failed unexpectedly:", error);
+  return {
+    status: 500,
+    code: "AUTH_FAILED",
+    message: "Unable to sign in right now. Please try again.",
+  };
+};
+
 const getCookieOptions = () => {
   const isHttps = process.env.NODE_ENV === "production";
   return {
@@ -140,10 +185,11 @@ const login = async (req, res) => {
       },
     });
   } catch (error) {
-    return res.status(error.statusCode || 401).json({
+    const response = loginErrorResponse(error);
+    return res.status(response.status).json({
       success: false,
-      code: error.code || "AUTH_FAILED",
-      message: error.message,
+      code: response.code,
+      message: response.message,
     });
   }
 };

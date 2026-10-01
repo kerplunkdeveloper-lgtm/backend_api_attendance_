@@ -1,4 +1,5 @@
 const { assertBranchAvailable } = require("./entitlement.service");
+const prisma = require("../config/database");
 
 /**
  * 1. POST /api/branches - Create Branch

@@ -10,7 +10,10 @@ const PASSWORD = z
     message: "Password must contain at least one letter and one number",
   });
 
-const COORDINATE = z.coerce.number().finite();
+const LATITUDE = z.coerce.number().finite().min(-90).max(90);
+const LONGITUDE = z.coerce.number().finite().min(-180).max(180);
+const ACCURACY = z.coerce.number().finite().nonnegative().max(100000);
+const ISO_TIMESTAMP = z.string().datetime({ offset: true });
 
 /**
  * Validates one of `body`, `query` or `params` against a Zod schema.
@@ -104,10 +107,10 @@ const schemas = {
 
   checkIn: z
     .object({
-      latitude: COORDINATE.optional(),
-      longitude: COORDINATE.optional(),
-      accuracy: COORDINATE.optional(),
-      timestamp: z.string().min(10).max(40).optional(),
+      latitude: LATITUDE.optional(),
+      longitude: LONGITUDE.optional(),
+      accuracy: ACCURACY.optional(),
+      timestamp: ISO_TIMESTAMP.optional(),
       employeeId: UUID.optional(),
       workMode: z.string().trim().max(40).optional(),
       note: z.string().trim().max(500).optional(),

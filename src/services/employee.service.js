@@ -240,6 +240,7 @@ const getEmployees = async (organizationId, query = {}) => {
         { firstName: { contains: q, mode: "insensitive" } },
         { lastName: { contains: q, mode: "insensitive" } },
         { employeeCode: { contains: q, mode: "insensitive" } },
+        { designation: { contains: q, mode: "insensitive" } },
         { user: { email: { contains: q, mode: "insensitive" } } },
       ];
     }

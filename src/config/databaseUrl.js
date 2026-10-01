@@ -23,13 +23,18 @@ function neonEndpointIdentity(hostname) {
 }
 
 /**
- * Runtime traffic normally uses DATABASE_URL (the pooled Neon endpoint), while
- * Prisma migrations use DATABASE_URL_UNPOOLED. If those variables reference
- * different Neon endpoints, continuing with DATABASE_URL would make the app
- * read a different database from the one that migrations update. Prefer the
- * direct URL in that broken configuration and make the problem visible.
+ * Runtime traffic uses DATABASE_URL (the pooled Neon endpoint). Prisma
+ * migrations use DATABASE_URL_UNPOOLED in prisma.config.ts. They may be
+ * different endpoint hostnames while still belonging to the same database;
+ * never silently switch application traffic to the migration URL.
  */
 function resolveRuntimeDatabaseUrl(env = process.env, warn = console.warn) {
+  const explicitRuntime = parsePostgresUrl(
+    "RUNTIME_DATABASE_URL",
+    env.RUNTIME_DATABASE_URL,
+  );
+  if (explicitRuntime) return explicitRuntime.connectionString;
+
   const pooled = parsePostgresUrl("DATABASE_URL", env.DATABASE_URL);
   const direct = parsePostgresUrl("DATABASE_URL_UNPOOLED", env.DATABASE_URL_UNPOOLED);
 
@@ -47,9 +52,9 @@ function resolveRuntimeDatabaseUrl(env = process.env, warn = console.warn) {
   if (pooledIdentity && directIdentity && pooledIdentity !== directIdentity) {
     warn(
       "[database] DATABASE_URL and DATABASE_URL_UNPOOLED reference different Neon endpoints; " +
-        "using DATABASE_URL_UNPOOLED to keep runtime traffic on the migrated database.",
+        "runtime will use DATABASE_URL and migrations will use DATABASE_URL_UNPOOLED. " +
+        "Verify both URLs belong to the same Neon project and branch.",
     );
-    return direct.connectionString;
   }
 
   return pooled.connectionString;

@@ -17,7 +17,7 @@ describe("database URL selection", () => {
     );
   });
 
-  it("uses the direct URL when Neon runtime and migration endpoints differ", () => {
+  it("keeps runtime traffic on the pooled URL when migration endpoints differ", () => {
     const warnings = [];
     const pooled = "postgresql://user:pass@ep-old-pooler.c-1.us-east-1.aws.neon.tech/db";
     const direct = "postgresql://user:pass@ep-current.c-2.us-east-2.aws.neon.tech/db";
@@ -27,10 +27,24 @@ describe("database URL selection", () => {
         { DATABASE_URL: pooled, DATABASE_URL_UNPOOLED: direct },
         (message) => warnings.push(message),
       ),
-      direct,
+      pooled,
     );
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], /different Neon endpoints/);
+  });
+
+  it("allows an explicit runtime URL override", () => {
+    const runtime = "postgresql://user:pass@ep-runtime.c-1.us-east-1.aws.neon.tech/db";
+    assert.equal(
+      resolveRuntimeDatabaseUrl(
+        {
+          RUNTIME_DATABASE_URL: runtime,
+          DATABASE_URL: "postgresql://invalid",
+        },
+        () => assert.fail("an explicit runtime URL must not warn"),
+      ),
+      runtime,
+    );
   });
 
   it("accepts the direct URL when no pooled URL is configured", () => {

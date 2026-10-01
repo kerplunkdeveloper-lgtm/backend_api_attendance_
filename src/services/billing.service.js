@@ -1,6 +1,6 @@
 const crypto = require("crypto");
 const prisma = require("../config/database");
-const { PLAN_INR, getPlan, addBillingPeriod, isPaidPlan } = require("../config/plans");
+const { PLAN_INR, BILLING_OFFERS, getPlan, addBillingPeriod, isPaidPlan } = require("../config/plans");
 
 function requireKeys() {
   const key = process.env.RAZORPAY_KEY_ID;
@@ -41,7 +41,11 @@ function verifySignature(orderId, paymentId, signature) {
   return expected === signature;
 }
 
-async function createCheckout(organizationId, { plan, billingCycle }) {
+function roundMoney(value) {
+  return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+}
+
+async function calculateCheckout(organizationId, { plan, billingCycle, couponCode }) {
   const p = String(plan || "").toUpperCase();
   const cycle = String(billingCycle || "MONTHLY").toUpperCase() === "ANNUAL" ? "ANNUAL" : "MONTHLY";
   if (!isPaidPlan(p) || !PLAN_INR[p]) {
@@ -49,11 +53,60 @@ async function createCheckout(organizationId, { plan, billingCycle }) {
     err.statusCode = 400;
     throw err;
   }
-  const amountInr = PLAN_INR[p][cycle];
+  const baseAmountInr = roundMoney(PLAN_INR[p][cycle]);
+  const normalizedCoupon = String(couponCode || "").trim().toUpperCase() || null;
+  let discountAmountInr = 0;
+  let offer = null;
+
+  if (normalizedCoupon) {
+    offer = BILLING_OFFERS[normalizedCoupon];
+    if (!offer) {
+      const err = new Error("This offer code is invalid or expired");
+      err.statusCode = 400;
+      throw err;
+    }
+    if (offer.eligibleCycles && !offer.eligibleCycles.includes(cycle)) {
+      const err = new Error(`Offer ${normalizedCoupon} is available only for annual billing`);
+      err.statusCode = 400;
+      throw err;
+    }
+    if (offer.eligiblePlans && !offer.eligiblePlans.includes(p)) {
+      const err = new Error(`Offer ${normalizedCoupon} is not valid for this plan`);
+      err.statusCode = 400;
+      throw err;
+    }
+    if (offer.firstPaidOrderOnly) {
+      const previousPaidOrder = await prisma.billingOrder.findFirst({
+        where: { organizationId, status: "PAID" },
+        select: { id: true },
+      });
+      if (previousPaidOrder) {
+        const err = new Error("This offer is available only on your first paid order");
+        err.statusCode = 400;
+        throw err;
+      }
+    }
+    discountAmountInr = offer.type === "FIXED"
+      ? Number(offer.value)
+      : baseAmountInr * (Number(offer.value) / 100);
+    if (offer.maxDiscountInr) discountAmountInr = Math.min(discountAmountInr, Number(offer.maxDiscountInr));
+  }
+
+  discountAmountInr = roundMoney(Math.min(baseAmountInr, Math.max(0, discountAmountInr)));
+  const taxableAmountInr = roundMoney(baseAmountInr - discountAmountInr);
+  const taxRate = Math.max(0, Number(process.env.BILLING_TAX_RATE || 0));
+  const taxAmountInr = roundMoney(taxableAmountInr * (taxRate / 100));
+  const amountInr = roundMoney(taxableAmountInr + taxAmountInr);
+  return { plan: p, billingCycle: cycle, couponCode: normalizedCoupon, offer, baseAmountInr, discountAmountInr, taxAmountInr, amountInr, taxRate };
+}
+
+async function createCheckout(organizationId, payload = {}) {
+  const pricing = await calculateCheckout(organizationId, payload);
+  const { plan: p, billingCycle: cycle, couponCode, baseAmountInr, discountAmountInr, taxAmountInr, amountInr } = pricing;
   const rzp = await razorpayRequest("/orders", {
     amount: Math.round(amountInr * 100),
     currency: "INR",
-    notes: { organizationId, plan: p, billingCycle: cycle },
+    notes: { organizationId, plan: p, billingCycle: cycle, couponCode: couponCode || "" },
   });
   const order = await prisma.billingOrder.create({
     data: {
@@ -61,6 +114,10 @@ async function createCheckout(organizationId, { plan, billingCycle }) {
       plan: p,
       billingCycle: cycle,
       amountInr,
+      baseAmountInr,
+      discountAmountInr,
+      taxAmountInr,
+      couponCode,
       razorpayOrderId: rzp.id,
       status: "CREATED",
     },
@@ -73,6 +130,11 @@ async function createCheckout(organizationId, { plan, billingCycle }) {
     keyId: process.env.RAZORPAY_KEY_ID,
     plan: p,
     billingCycle: cycle,
+    baseAmountInr,
+    discountAmountInr,
+    taxAmountInr,
+    couponCode,
+    taxRate: pricing.taxRate,
   };
 }
 
@@ -301,6 +363,7 @@ module.exports = {
   listOrders,
   cancelSubscription,
   handleWebhook,
+  calculateCheckout,
   applyPaidPlan,
   PLAN_INR,
 };

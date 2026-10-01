@@ -1,7 +1,6 @@
 require('dotenv').config();
 const prisma = require('../src/config/database');
 const onboardingService = require('../src/services/onboarding.service');
-
 async function testUserRequestedOnboardingFlow() {
   console.log('===============================================================');
   console.log('Testing User-Requested Workflow:');
@@ -31,7 +30,7 @@ async function testUserRequestedOnboardingFlow() {
   const token1 = joiner1.candidate.token;
   console.log('✔ Joiner 1 created. Token:', token1, 'Status:', joiner1.candidate.status);
 
-  // Candidate fills profile & uploads doc
+ 
   await onboardingService.updateCandidateProfile(token1, {
     dateOfBirth: '1992-04-10',
     gender: 'Male',

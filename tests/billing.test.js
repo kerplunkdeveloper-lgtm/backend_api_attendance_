@@ -77,6 +77,19 @@ const sign = (orderId, paymentId) =>
   crypto.createHmac("sha256", "test_secret").update(`${orderId}|${paymentId}`).digest("hex");
 
 describe("billing activation", () => {
+  it("calculates server-owned offer pricing", async () => {
+    const pricing = await billingService.calculateCheckout("org-a", {
+      plan: "STARTER",
+      billingCycle: "MONTHLY",
+      couponCode: "WELCOME20",
+    });
+
+    assert.equal(pricing.baseAmountInr, 2499);
+    assert.equal(pricing.discountAmountInr, 499.8);
+    assert.equal(pricing.amountInr, 1999.2);
+    assert.equal(pricing.couponCode, "WELCOME20");
+  });
+
   it("activates a paid order only once when verification is replayed", async () => {
     orders.set("ord-1", {
       id: "ord-1",
