@@ -322,14 +322,18 @@ async function cancelSubscription(organizationId) {
 }
 
 async function handleWebhook(rawBody, signature) {
-  const secret = process.env.RAZORPAY_WEBHOOK_SECRET || process.env.RAZORPAY_KEY_SECRET;
+  const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
   if (!secret) {
     const err = new Error("Razorpay webhook secret is not configured");
     err.statusCode = 503;
     throw err;
   }
   const expected = crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
-  if (expected !== signature) {
+  const received = String(signature || "");
+  const validSignature =
+    received.length === expected.length &&
+    crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(received));
+  if (!validSignature) {
     const err = new Error("Invalid webhook signature");
     err.statusCode = 400;
     throw err;
