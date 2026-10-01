@@ -24,7 +24,7 @@ const validateEnvironment = () => {
   process.env.FRONTEND_URL ||= DEFAULT_PRODUCTION_FRONTEND_URL;
   validateUrl("FRONTEND_URL");
   requiredOneOf(["ACCESS_TOKEN_SECRET", "JWT_SECRET"]);
-  requiredOneOf(["REFRESH_TOKEN_SECRET", "JWT_REFRESH_SECRET"]);
+  requiredOneOf(["REFRESH_TOKEN_SECRET", "JWT_REFRESH_SECRET", "JWT_SECRET"]);
   requiredOneOf(["RESET_PASSWORD_SECRET", "JWT_SECRET"]);
 };
 

@@ -81,8 +81,9 @@ const createRateLimiter = ({
 // ── Preset limiters ────────────────────────────────────────────────────────────
 
 /**
- * Auth limiter: 10 attempts per 15 minutes per IP
- * Protects login/register from brute force
+ * Auth limiter for registration and password-recovery endpoints.
+ * Login intentionally does not use this limiter so a temporary database or
+ * network error cannot lock a legitimate user out for 15 minutes.
  */
 const authRateLimiter = createRateLimiter({
   namespace: "auth",

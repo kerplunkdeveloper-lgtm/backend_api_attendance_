@@ -32,7 +32,9 @@ const getAccessSecret = () =>
   requireSecret("access", "ACCESS_TOKEN_SECRET", "JWT_SECRET");
 
 const getRefreshSecret = () =>
-  requireSecret("refresh", "REFRESH_TOKEN_SECRET", "JWT_REFRESH_SECRET");
+  // Keep existing deployments that only configured JWT_SECRET working. New
+  // production deployments should still provide a dedicated refresh secret.
+  requireSecret("refresh", "REFRESH_TOKEN_SECRET", "JWT_REFRESH_SECRET", "JWT_SECRET");
 
 const generateAccessToken = (payload) => {
   return jwt.sign(payload, getAccessSecret(), {

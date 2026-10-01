@@ -27,7 +27,6 @@ router.post(
 );
 router.post(
   "/login",
-  authRateLimiter,
   validate(schemas.login),
   authController.login,
 );
