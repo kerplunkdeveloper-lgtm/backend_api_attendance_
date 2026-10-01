@@ -3,9 +3,20 @@ import { defineConfig } from "prisma/config";
 
 // Prisma migrations require a direct Postgres session. Keep DATABASE_URL for
 // pooled application traffic and prefer the direct Neon endpoint here.
-const dbUrl = (
-  process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL || ""
-).trim();
+const normalizeDatabaseUrl = (value: string) => {
+  let url = value.trim().replace(/^psql\s+/i, "").trim();
+  if (
+    (url.startsWith("'") && url.endsWith("'")) ||
+    (url.startsWith('"') && url.endsWith('"'))
+  ) {
+    url = url.slice(1, -1).trim();
+  }
+  return url;
+};
+
+const dbUrl = normalizeDatabaseUrl(
+  process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL || "",
+);
 
 if (!dbUrl) {
   throw new Error(

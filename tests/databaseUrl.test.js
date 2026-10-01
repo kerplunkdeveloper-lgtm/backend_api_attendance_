@@ -55,6 +55,12 @@ describe("database URL selection", () => {
     );
   });
 
+  it("normalizes common Railway database URL wrappers", () => {
+    const direct = "postgresql://user:pass@localhost:5432/workpulse";
+    assert.equal(resolveRuntimeDatabaseUrl({ DATABASE_URL: `psql '${direct}'` }), direct);
+    assert.equal(resolveRuntimeDatabaseUrl({ DATABASE_URL: `\"${direct}\"` }), direct);
+  });
+
   it("rejects malformed and non-PostgreSQL URLs", () => {
     assert.throws(
       () => resolveRuntimeDatabaseUrl({ DATABASE_URL: "not a URL" }),

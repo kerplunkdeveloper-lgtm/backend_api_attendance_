@@ -1,5 +1,14 @@
 function parsePostgresUrl(name, value) {
-  const connectionString = String(value || "").trim();
+  let connectionString = String(value || "").trim();
+  // Railway variables are sometimes pasted as `psql 'postgresql://...'` or
+  // with literal surrounding quotes. Accept those harmless wrappers.
+  connectionString = connectionString.replace(/^psql\s+/i, "").trim();
+  if (
+    (connectionString.startsWith("'") && connectionString.endsWith("'")) ||
+    (connectionString.startsWith('"') && connectionString.endsWith('"'))
+  ) {
+    connectionString = connectionString.slice(1, -1).trim();
+  }
   if (!connectionString) return null;
 
   let url;
