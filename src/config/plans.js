@@ -2,10 +2,26 @@
  * Single source of plan metadata. Auth, billing and quota checks must all
  * read from here so ENTERPRISE limits cannot drift between modules.
  */
+const configuredPrice = (name, fallback) => {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value >= 0 ? Math.round(value) : fallback;
+};
+
+// Server-owned prices. Update these Railway variables and restart the API to
+// change pricing; checkout never trusts an amount sent by the browser.
 const PLAN_INR = {
-  STARTER: { MONTHLY: 2499, ANNUAL: 24990 },
-  PROFESSIONAL: { MONTHLY: 6999, ANNUAL: 69990 },
-  ENTERPRISE: { MONTHLY: 16999, ANNUAL: 169990 },
+  STARTER: {
+    MONTHLY: configuredPrice("PLAN_STARTER_MONTHLY_INR", 2499),
+    ANNUAL: configuredPrice("PLAN_STARTER_ANNUAL_INR", 24990),
+  },
+  PROFESSIONAL: {
+    MONTHLY: configuredPrice("PLAN_PROFESSIONAL_MONTHLY_INR", 6999),
+    ANNUAL: configuredPrice("PLAN_PROFESSIONAL_ANNUAL_INR", 69990),
+  },
+  ENTERPRISE: {
+    MONTHLY: configuredPrice("PLAN_ENTERPRISE_MONTHLY_INR", 16999),
+    ANNUAL: configuredPrice("PLAN_ENTERPRISE_ANNUAL_INR", 169990),
+  },
 };
 
  
