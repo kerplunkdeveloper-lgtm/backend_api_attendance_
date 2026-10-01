@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const { resolveRuntimeDatabaseUrl } = require("../src/config/databaseUrl");
 
 describe("database URL selection", () => {
-  it("keeps the pooled URL when it matches the direct Neon endpoint", () => {
+  it("uses the canonical database URL", () => {
     const pooled = "postgresql://user:pass@ep-same-pooler.c-1.us-east-1.aws.neon.tech/db";
     const direct = "postgresql://user:pass@ep-same.c-1.us-east-1.aws.neon.tech/db";
 
@@ -17,20 +17,17 @@ describe("database URL selection", () => {
     );
   });
 
-  it("uses the migrated direct URL when Neon endpoints differ", () => {
-    const warnings = [];
+  it("does not select a secondary database URL", () => {
     const pooled = "postgresql://user:pass@ep-old-pooler.c-1.us-east-1.aws.neon.tech/db";
     const direct = "postgresql://user:pass@ep-current.c-2.us-east-2.aws.neon.tech/db";
 
     assert.equal(
       resolveRuntimeDatabaseUrl(
         { DATABASE_URL: pooled, DATABASE_URL_UNPOOLED: direct },
-        (message) => warnings.push(message),
+        () => assert.fail("secondary URL must not be inspected"),
       ),
-      direct,
+      pooled,
     );
-    assert.equal(warnings.length, 1);
-    assert.match(warnings[0], /different Neon endpoints/);
   });
 
   it("allows an explicit runtime URL override", () => {
@@ -47,11 +44,10 @@ describe("database URL selection", () => {
     );
   });
 
-  it("accepts the direct URL when no pooled URL is configured", () => {
-    const direct = "postgresql://user:pass@localhost:5432/workpulse";
-    assert.equal(
-      resolveRuntimeDatabaseUrl({ DATABASE_URL_UNPOOLED: direct }),
-      direct,
+  it("requires the canonical database URL", () => {
+    assert.throws(
+      () => resolveRuntimeDatabaseUrl({ DATABASE_URL_UNPOOLED: "postgresql://user:pass@localhost:5432/workpulse" }),
+      /DATABASE_URL is not set/,
     );
   });
 

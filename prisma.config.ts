@@ -1,8 +1,9 @@
 import "dotenv/config";
 import { defineConfig } from "prisma/config";
 
-// Prisma migrations require a direct Postgres session. Keep DATABASE_URL for
-// pooled application traffic and prefer the direct Neon endpoint here.
+// Production uses one canonical database URL for both runtime traffic and
+// migrations. This avoids deployments accidentally selecting a stale or
+// malformed secondary URL.
 const normalizeDatabaseUrl = (value: string) => {
   let url = value.trim().replace(/^psql\s+/i, "").trim();
   if (
@@ -15,12 +16,12 @@ const normalizeDatabaseUrl = (value: string) => {
 };
 
 const dbUrl = normalizeDatabaseUrl(
-  process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL || "",
+  process.env.DATABASE_URL || "",
 );
 
 if (!dbUrl) {
   throw new Error(
-    "DATABASE_URL_UNPOOLED or DATABASE_URL is required before running Prisma commands."
+    "DATABASE_URL is required before running Prisma commands."
   );
 }
 

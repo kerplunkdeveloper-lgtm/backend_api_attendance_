@@ -44,26 +44,11 @@ function resolveRuntimeDatabaseUrl(env = process.env, warn = console.warn) {
   if (explicitRuntime) return explicitRuntime.connectionString;
 
   const pooled = parsePostgresUrl("DATABASE_URL", env.DATABASE_URL);
-  const direct = parsePostgresUrl("DATABASE_URL_UNPOOLED", env.DATABASE_URL_UNPOOLED);
 
-  if (!pooled && !direct) {
+  if (!pooled) {
     throw new Error(
       "DATABASE_URL is not set. Copy .env.example to .env and provide a PostgreSQL connection string.",
     );
-  }
-
-  if (!pooled) return direct.connectionString;
-  if (!direct) return pooled.connectionString;
-
-  const pooledIdentity = neonEndpointIdentity(pooled.url.hostname);
-  const directIdentity = neonEndpointIdentity(direct.url.hostname);
-  if (pooledIdentity && directIdentity && pooledIdentity !== directIdentity) {
-    warn(
-      "[database] DATABASE_URL and DATABASE_URL_UNPOOLED reference different Neon endpoints; " +
-        "using DATABASE_URL_UNPOOLED for runtime traffic. Update both variables " +
-        "to the same Neon project and branch when possible.",
-    );
-    return direct.connectionString;
   }
 
   return pooled.connectionString;
