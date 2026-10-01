@@ -17,7 +17,7 @@ describe("database URL selection", () => {
     );
   });
 
-  it("keeps runtime traffic on the pooled URL when migration endpoints differ", () => {
+  it("uses the migrated direct URL when Neon endpoints differ", () => {
     const warnings = [];
     const pooled = "postgresql://user:pass@ep-old-pooler.c-1.us-east-1.aws.neon.tech/db";
     const direct = "postgresql://user:pass@ep-current.c-2.us-east-2.aws.neon.tech/db";
@@ -27,7 +27,7 @@ describe("database URL selection", () => {
         { DATABASE_URL: pooled, DATABASE_URL_UNPOOLED: direct },
         (message) => warnings.push(message),
       ),
-      pooled,
+      direct,
     );
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], /different Neon endpoints/);
