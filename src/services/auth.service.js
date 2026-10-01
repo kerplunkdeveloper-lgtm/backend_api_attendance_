@@ -215,13 +215,6 @@ const register = async ({
   };
 
   const accessToken = generateAccessToken(tokenPayload);
-  const refreshToken = generateRefreshToken(tokenPayload);
-
-  // Store refresh token in DB for revocation support
-  const regTokenExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-  await prisma.refreshToken.create({
-    data: { userId: user.id, token: hashRefreshToken(refreshToken), expiresAt: regTokenExpiresAt },
-  });
 
   // Send unlock code to admin email (async — don't block registration)
   const loginUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/login`;
@@ -245,7 +238,6 @@ const register = async ({
 
   return {
     accessToken,
-    refreshToken,
     token: accessToken,
     requiresCheckout: requestedPaid,
     selectedPlan: requestedPaid ? requestedPlanKey : "FREE_TRIAL",
@@ -332,13 +324,6 @@ const login = async (email, password, client = null, employeeCode = null) => {
   };
 
   const accessToken = generateAccessToken(tokenPayload);
-  const refreshToken = generateRefreshToken(tokenPayload);
-
-  // Store refresh token in DB for revocation support
-  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-  await prisma.refreshToken.create({
-    data: { userId: user.id, token: hashRefreshToken(refreshToken), expiresAt },
-  });
 
   // Update lastLoginAt in background without blocking login response latency
   prisma.user
@@ -350,7 +335,6 @@ const login = async (email, password, client = null, employeeCode = null) => {
 
   return {
     accessToken,
-    refreshToken,
     token: accessToken,
     user: presentAuthUser(user),
   };
@@ -852,17 +836,9 @@ const loginWithGoogle = async (idToken, client = null) => {
   }
   const tokenPayload = { userId: user.id, organizationId: user.organizationId, role: user.role };
   const accessToken = generateAccessToken(tokenPayload);
-  const refreshToken = generateRefreshToken(tokenPayload);
-  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-  await prisma.$transaction([
-    prisma.refreshToken.create({
-      data: { userId: user.id, token: hashRefreshToken(refreshToken), expiresAt },
-    }),
-    prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } }),
-  ]);
+  await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
   return {
     accessToken,
-    refreshToken,
     token: accessToken,
     user: presentAuthUser(user),
   };

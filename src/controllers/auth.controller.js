@@ -105,16 +105,12 @@ const register = async (req, res) => {
       billingCycle,
     });
 
-    // Store Refresh Token securely in HTTP-only Cookie
-    res.cookie("refreshToken", result.refreshToken, getCookieOptions());
-
     return res.status(201).json({
       success: true,
       message: "Registration successful",
       data: {
         accessToken: result.accessToken,
         token: result.accessToken,
-        ...refreshTokenForClient(req, result.refreshToken),
         user: result.user,
         requiresCheckout: result.requiresCheckout,
         selectedPlan: result.selectedPlan,
@@ -133,14 +129,12 @@ const loginWithGoogle = async (req, res) => {
     const { idToken, client } = req.body;
     const clientPlatform = client || req.headers["x-client-platform"] || null;
     const result = await authService.loginWithGoogle(idToken, clientPlatform);
-    res.cookie("refreshToken", result.refreshToken, getCookieOptions());
     return res.json({
       success: true,
       message: "Google sign-in successful",
       data: {
         accessToken: result.accessToken,
         token: result.accessToken,
-        ...refreshTokenForClient(req, result.refreshToken),
         user: result.user,
       },
     });
@@ -171,16 +165,12 @@ const login = async (req, res) => {
       employeeCode,
     );
 
-    // Store Refresh Token securely in HTTP-only Cookie
-    res.cookie("refreshToken", result.refreshToken, getCookieOptions());
-
     return res.json({
       success: true,
       message: "Login successful",
       data: {
         accessToken: result.accessToken,
         token: result.accessToken,
-        ...refreshTokenForClient(req, result.refreshToken),
         user: result.user,
       },
     });

@@ -90,9 +90,9 @@ describe("auth", () => {
     assert.ok(result.accessToken);
   });
 
-  it("stores only a digest of issued refresh tokens", async () => {
+  it("uses only an access JWT during login", async () => {
     const password = "Password123";
-    let stored;
+    let refreshTokenWrites = 0;
     prisma.user.findMany = async () => [{
       id: "u-hash",
       email: "admin@example.com",
@@ -109,17 +109,17 @@ describe("auth", () => {
       },
       employee: null,
     }];
-    prisma.refreshToken.create = async ({ data }) => {
-      stored = data.token;
-      return data;
+    prisma.refreshToken.create = async () => {
+      refreshTokenWrites += 1;
+      return {};
     };
 
     const result = await authService.login("admin@example.com", password, "web");
-    const expected = crypto.createHash("sha256").update(result.refreshToken).digest("hex");
 
-    assert.equal(stored, expected);
-    assert.notEqual(stored, result.refreshToken);
-    assert.match(stored, /^[a-f0-9]{64}$/);
+    assert.ok(result.accessToken);
+    assert.equal(result.token, result.accessToken);
+    assert.equal(result.refreshToken, undefined);
+    assert.equal(refreshTokenWrites, 0);
   });
 
   it("keeps browser refresh tokens out of JSON responses", async () => {
