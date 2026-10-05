@@ -33,5 +33,10 @@ jobs:
       - run: npm ci
       - run: npx prisma generate
       - run: npx prisma validate
-      - run: npx prisma migrate deploy
+      # CI uses a brand-new disposable database. The repository retains a
+      # historical no-op baseline plus incremental migrations that assume an
+      # older full schema already exists, so replaying that history from empty
+      # is not a valid smoke test. Build the current schema directly here;
+      # deployed Alpha/production databases continue using migrate deploy.
+      - run: npx prisma db push --accept-data-loss
       - run: npm test
