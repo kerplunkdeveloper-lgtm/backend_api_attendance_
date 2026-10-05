@@ -2,6 +2,7 @@ const prisma = require("../config/database");
 const { SEAT_STATUSES, getPlan } = require("../config/plans");
 
 const GRACE_MS = 3 * 24 * 60 * 60 * 1000;
+const TRIAL_GRACE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days grace after trial ends
 
 const periodEndOf = (org) =>
   org?.subscription?.currentPeriodEnd ||
@@ -36,7 +37,15 @@ const evaluateEntitlement = (org, now = new Date()) => {
   const trialMs = trialEnd ? new Date(trialEnd).getTime() : null;
 
   if (status === "TRIALING") {
-    if (trialMs && nowMs > trialMs) {
+    // If no trial end date is set, org is always in trial — allow access
+    if (!trialMs) {
+      return { state: "TRIAL", allowApp: true, code: "TRIALING" };
+    }
+    if (nowMs > trialMs) {
+      // 7-day grace window after trial expires before hard-blocking
+      if (nowMs <= trialMs + TRIAL_GRACE_MS) {
+        return { state: "TRIAL_GRACE", allowApp: true, code: "TRIAL_GRACE" };
+      }
       return {
         state: "EXPIRED",
         allowApp: false,
@@ -95,6 +104,7 @@ const evaluateEntitlement = (org, now = new Date()) => {
     };
   }
 
+  // Unknown/unrecognized status — allow access by default
   return { state: status, allowApp: true, code: status };
 };
 

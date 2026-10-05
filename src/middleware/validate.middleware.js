@@ -105,6 +105,62 @@ const schemas = {
     })
     .strict(),
 
+  billingCheckout: z
+    .object({
+      plan: z.enum(["STARTER", "PROFESSIONAL", "ENTERPRISE"]),
+      billingCycle: z.enum(["MONTHLY", "ANNUAL"]).default("MONTHLY"),
+      couponCode: z.string().trim().max(40).optional(),
+      idempotencyKey: z.string().trim().min(8).max(120).regex(/^[a-zA-Z0-9._:-]+$/).optional(),
+    })
+    .strict(),
+
+  billingVerify: z
+    .object({
+      razorpay_order_id: z.string().trim().min(5).max(100),
+      razorpay_payment_id: z.string().trim().min(5).max(100),
+      razorpay_signature: z.string().trim().length(64).regex(/^[a-f0-9]+$/i),
+    })
+    .strict(),
+
+  billingPlanPrice: z
+    .object({
+      priceInr: z.coerce.number().int().min(0).max(100000000),
+      isActive: z.boolean().optional(),
+    })
+    .strict(),
+
+  billingOfferCreate: z
+    .object({
+      code: z.string().trim().min(3).max(40).regex(/^[a-zA-Z0-9_-]+$/),
+      label: z.string().trim().min(1).max(160),
+      type: z.enum(["PERCENTAGE", "FIXED"]),
+      value: z.coerce.number().nonnegative(),
+      maxDiscountInr: z.coerce.number().nonnegative().nullable().optional(),
+      eligiblePlans: z.array(z.enum(["STARTER", "PROFESSIONAL", "ENTERPRISE"])).optional(),
+      eligibleCycles: z.array(z.enum(["MONTHLY", "ANNUAL"])).optional(),
+      firstPaidOrderOnly: z.boolean().optional(),
+      isActive: z.boolean().optional(),
+      startsAt: z.string().datetime({ offset: true }).nullable().optional(),
+      expiresAt: z.string().datetime({ offset: true }).nullable().optional(),
+    })
+    .strict(),
+
+  billingOfferUpdate: z
+    .object({
+      code: z.string().trim().min(3).max(40).regex(/^[a-zA-Z0-9_-]+$/).optional(),
+      label: z.string().trim().min(1).max(160).optional(),
+      type: z.enum(["PERCENTAGE", "FIXED"]).optional(),
+      value: z.coerce.number().nonnegative().optional(),
+      maxDiscountInr: z.coerce.number().nonnegative().nullable().optional(),
+      eligiblePlans: z.array(z.enum(["STARTER", "PROFESSIONAL", "ENTERPRISE"])).optional(),
+      eligibleCycles: z.array(z.enum(["MONTHLY", "ANNUAL"])).optional(),
+      firstPaidOrderOnly: z.boolean().optional(),
+      isActive: z.boolean().optional(),
+      startsAt: z.string().datetime({ offset: true }).nullable().optional(),
+      expiresAt: z.string().datetime({ offset: true }).nullable().optional(),
+    })
+    .strict(),
+
   checkIn: z
     .object({
       latitude: LATITUDE.optional(),

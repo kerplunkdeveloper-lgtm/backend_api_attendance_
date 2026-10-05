@@ -16,6 +16,7 @@
     "db:local:deploy": "prisma db push",
     "db:local:push": "prisma db push",
     "db:push": "prisma db push",
+    "fix:access": "node scripts/fix_all_access.js",
     "test": "node --test --test-concurrency=1 tests/*.test.js"
   },
   "keywords": [],

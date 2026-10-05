@@ -15,6 +15,7 @@ const { resolveAvatarUrl } = require("../utils/avatar");
 const { PLAN_CONFIGS, SUBSCRIPTION_PLANS, isPaidPlan, addBillingPeriod } = require("../config/plans");
 const { presentAuthUser } = require("./entitlement.service");
 const auditService = require("./audit.service");
+const billingService = require("./billing.service");
 
 const MIN_PASSWORD_LENGTH = 8;
 
@@ -457,7 +458,7 @@ const logout = async (refreshToken) => {
   return { success: true };
 };
 
-const getSubscriptionPlans = () => SUBSCRIPTION_PLANS;
+const getSubscriptionPlans = () => billingService.getPlanCatalog();
 
 /**
  * Activate a plan by verifying the unlock code entered by the admin.

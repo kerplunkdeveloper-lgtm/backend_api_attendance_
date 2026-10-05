@@ -20,7 +20,21 @@ let orgState = {
 const prisma = {
   billingOrder: {
     findFirst: async ({ where }) =>
-      [...orders.values()].find((o) => o.razorpayOrderId === where.razorpayOrderId && (!where.organizationId || o.organizationId === where.organizationId)) || null,
+      [...orders.values()].find((o) =>
+        (!where.razorpayOrderId || o.razorpayOrderId === where.razorpayOrderId) &&
+        (!where.idempotencyKey || o.idempotencyKey === where.idempotencyKey) &&
+        (!where.organizationId || o.organizationId === where.organizationId)
+      ) || null,
+    create: async ({ data }) => {
+      const order = { id: `ord-${orders.size + 1}`, ...data };
+      if (data.idempotencyKey && [...orders.values()].some((o) => o.organizationId === data.organizationId && o.idempotencyKey === data.idempotencyKey)) {
+        const err = new Error("duplicate idempotency key");
+        err.code = "P2002";
+        throw err;
+      }
+      orders.set(order.id, order);
+      return order;
+    },
     findUnique: async ({ where }) => orders.get(where.id) || null,
     updateMany: async ({ where, data }) => {
       const order = orders.get(where.id);
@@ -65,9 +79,11 @@ const prisma = {
 mockPrisma(prisma);
 
 const originalFetch = global.fetch;
-global.fetch = async () => ({
+global.fetch = async (url) => ({
   ok: true,
-  json: async () => ({ amount: 249900, currency: "INR", status: "captured" }),
+  json: async () => String(url).includes("/orders")
+    ? { id: "order_created" }
+    : { amount: 249900, currency: "INR", status: "captured" },
 });
 
 const billingService = require("../src/services/billing.service");
@@ -127,6 +143,46 @@ describe("billing activation", () => {
         }),
       /verified payment/,
     );
+  });
+
+  it("does not activate a plan when Razorpay payment lookup fails", async () => {
+    orders.set("ord-provider-error", {
+      id: "ord-provider-error",
+      organizationId: "org-a",
+      plan: "STARTER",
+      billingCycle: "MONTHLY",
+      amountInr: 2499,
+      razorpayOrderId: "order_provider_error",
+      status: "CREATED",
+      paidAt: null,
+    });
+    const previousFetch = global.fetch;
+    global.fetch = async () => { throw new Error("Razorpay unavailable"); };
+    await assert.rejects(
+      () => billingService.verifyPayment("org-a", {
+        razorpay_order_id: "order_provider_error",
+        razorpay_payment_id: "pay_provider_error",
+        razorpay_signature: sign("order_provider_error", "pay_provider_error"),
+      }),
+      /Razorpay unavailable/,
+    );
+    assert.equal(orders.get("ord-provider-error").status, "CREATED");
+    global.fetch = previousFetch;
+  });
+
+  it("reuses an existing order for the same checkout idempotency key", async () => {
+    const first = await billingService.createCheckout("org-a", {
+      plan: "STARTER",
+      billingCycle: "MONTHLY",
+      idempotencyKey: "checkout-retry-001",
+    });
+    const second = await billingService.createCheckout("org-a", {
+      plan: "STARTER",
+      billingCycle: "MONTHLY",
+      idempotencyKey: "checkout-retry-001",
+    });
+    assert.equal(first.razorpayOrderId, second.razorpayOrderId);
+    assert.equal(second.reused, true);
   });
 });
 

@@ -308,9 +308,9 @@ const uploadAvatar = async (req, res) => {
   }
 };
 
-const getPlans = (req, res) => {
+const getPlans = async (req, res) => {
   try {
-    const plans = authService.getSubscriptionPlans();
+    const plans = await authService.getSubscriptionPlans();
     return res.json({
       success: true,
       plans,

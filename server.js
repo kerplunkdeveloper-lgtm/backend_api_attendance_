@@ -1,4 +1,5 @@
 require("dotenv").config();
+require("dotenv").config({ path: ".env.local", override: true });
 
 const app = require("./src/app");
 const prisma = require("./src/config/database");

@@ -17,6 +17,7 @@ const validateUrl = (name) => {
 };
 
 const validateEnvironment = () => {
+  requiredOneOf(["DATABASE_URL"]);
   if (process.env.NODE_ENV !== "production") return;
   // Railway currently has no FRONTEND_URL variable. Keep the canonical app
   // origin as a secure default so CORS and cookie-CSRF checks remain exact,

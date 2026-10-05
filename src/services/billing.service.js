@@ -1,6 +1,55 @@
 const crypto = require("crypto");
 const prisma = require("../config/database");
-const { PLAN_INR, BILLING_OFFERS, getPlan, addBillingPeriod, isPaidPlan } = require("../config/plans");
+const { PLAN_INR, BILLING_OFFERS, SUBSCRIPTION_PLANS, getPlan, addBillingPeriod, isPaidPlan } = require("../config/plans");
+
+const PLAN_KEYS = ["STARTER", "PROFESSIONAL", "ENTERPRISE"];
+const BILLING_CYCLES = ["MONTHLY", "ANNUAL"];
+
+const fallbackOffer = (code) => BILLING_OFFERS[code] || null;
+
+async function getConfiguredPrice(plan, billingCycle) {
+  const p = String(plan || "").toUpperCase();
+  const cycle = String(billingCycle || "MONTHLY").toUpperCase();
+  if (prisma.billingPlanPrice?.findFirst) {
+    const configured = await prisma.billingPlanPrice.findFirst({
+      where: { plan: p, billingCycle: cycle, isActive: true },
+    });
+    if (configured) return roundMoney(configured.priceInr);
+  }
+  return roundMoney(PLAN_INR[p]?.[cycle] || 0);
+}
+
+async function getConfiguredOffer(code) {
+  const normalized = String(code || "").trim().toUpperCase();
+  if (prisma.billingOffer?.findFirst) {
+    const now = new Date();
+    const configured = await prisma.billingOffer.findFirst({
+      where: {
+        code: normalized,
+        isActive: true,
+        AND: [
+          { OR: [{ startsAt: null }, { startsAt: { lte: now } }] },
+          { OR: [{ expiresAt: null }, { expiresAt: { gte: now } }] },
+        ],
+      },
+    });
+    if (configured) return configured;
+    return null;
+  }
+  return fallbackOffer(normalized);
+}
+
+async function getPlanCatalog() {
+  const prices = prisma.billingPlanPrice?.findMany
+    ? await prisma.billingPlanPrice.findMany({ where: { isActive: true } })
+    : [];
+  const priceMap = new Map(prices.map((p) => [`${p.plan}:${p.billingCycle}`, Number(p.priceInr)]));
+  return SUBSCRIPTION_PLANS.map((plan) => ({
+    ...plan,
+    priceMonthly: priceMap.get(`${plan.id}:MONTHLY`) ?? plan.priceMonthly,
+    priceAnnual: priceMap.get(`${plan.id}:ANNUAL`) ?? plan.priceAnnual,
+  }));
+}
 
 function requireKeys() {
   const key = process.env.RAZORPAY_KEY_ID;
@@ -53,24 +102,24 @@ async function calculateCheckout(organizationId, { plan, billingCycle, couponCod
     err.statusCode = 400;
     throw err;
   }
-  const baseAmountInr = roundMoney(PLAN_INR[p][cycle]);
+  const baseAmountInr = await getConfiguredPrice(p, cycle);
   const normalizedCoupon = String(couponCode || "").trim().toUpperCase() || null;
   let discountAmountInr = 0;
   let offer = null;
 
   if (normalizedCoupon) {
-    offer = BILLING_OFFERS[normalizedCoupon];
+    offer = await getConfiguredOffer(normalizedCoupon);
     if (!offer) {
       const err = new Error("This offer code is invalid or expired");
       err.statusCode = 400;
       throw err;
     }
-    if (offer.eligibleCycles && !offer.eligibleCycles.includes(cycle)) {
+    if (offer.eligibleCycles?.length && !offer.eligibleCycles.includes(cycle)) {
       const err = new Error(`Offer ${normalizedCoupon} is available only for annual billing`);
       err.statusCode = 400;
       throw err;
     }
-    if (offer.eligiblePlans && !offer.eligiblePlans.includes(p)) {
+    if (offer.eligiblePlans?.length && !offer.eligiblePlans.includes(p)) {
       const err = new Error(`Offer ${normalizedCoupon} is not valid for this plan`);
       err.statusCode = 400;
       throw err;
@@ -86,7 +135,7 @@ async function calculateCheckout(organizationId, { plan, billingCycle, couponCod
         throw err;
       }
     }
-    discountAmountInr = offer.type === "FIXED"
+    discountAmountInr = String(offer.type).toUpperCase() === "FIXED"
       ? Number(offer.value)
       : baseAmountInr * (Number(offer.value) / 100);
     if (offer.maxDiscountInr) discountAmountInr = Math.min(discountAmountInr, Number(offer.maxDiscountInr));
@@ -103,25 +152,63 @@ async function calculateCheckout(organizationId, { plan, billingCycle, couponCod
 async function createCheckout(organizationId, payload = {}) {
   const pricing = await calculateCheckout(organizationId, payload);
   const { plan: p, billingCycle: cycle, couponCode, baseAmountInr, discountAmountInr, taxAmountInr, amountInr } = pricing;
+  const idempotencyKey = String(payload.idempotencyKey || "").trim() || null;
+
+  if (idempotencyKey) {
+    const existing = await prisma.billingOrder.findFirst({
+      where: { organizationId, idempotencyKey },
+    });
+    if (existing) {
+      return {
+        orderId: existing.id,
+        razorpayOrderId: existing.razorpayOrderId,
+        amountInr: Number(existing.amountInr),
+        currency: "INR",
+        keyId: process.env.RAZORPAY_KEY_ID,
+        plan: existing.plan,
+        billingCycle: existing.billingCycle,
+        baseAmountInr: Number(existing.baseAmountInr || 0),
+        discountAmountInr: Number(existing.discountAmountInr || 0),
+        taxAmountInr: Number(existing.taxAmountInr || 0),
+        couponCode: existing.couponCode,
+        taxRate: pricing.taxRate,
+        reused: true,
+      };
+    }
+  }
+
   const rzp = await razorpayRequest("/orders", {
     amount: Math.round(amountInr * 100),
     currency: "INR",
     notes: { organizationId, plan: p, billingCycle: cycle, couponCode: couponCode || "" },
   });
-  const order = await prisma.billingOrder.create({
-    data: {
-      organizationId,
-      plan: p,
-      billingCycle: cycle,
-      amountInr,
-      baseAmountInr,
-      discountAmountInr,
-      taxAmountInr,
-      couponCode,
-      razorpayOrderId: rzp.id,
-      status: "CREATED",
-    },
-  });
+  let order;
+  try {
+    order = await prisma.billingOrder.create({
+      data: {
+        organizationId,
+        plan: p,
+        billingCycle: cycle,
+        amountInr,
+        baseAmountInr,
+        discountAmountInr,
+        taxAmountInr,
+        couponCode,
+        idempotencyKey,
+        razorpayOrderId: rzp.id,
+        status: "CREATED",
+      },
+    });
+  } catch (err) {
+    // Two browser clicks can race after the initial lookup. Return the
+    // already persisted order instead of creating a second activation path.
+    if (err?.code !== "P2002" || !idempotencyKey) throw err;
+    const existing = await prisma.billingOrder.findFirst({
+      where: { organizationId, idempotencyKey },
+    });
+    if (!existing) throw err;
+    order = existing;
+  }
   return {
     orderId: order.id,
     razorpayOrderId: rzp.id,
@@ -140,6 +227,11 @@ async function createCheckout(organizationId, payload = {}) {
 
 async function applyPaidPlan(organizationId, plan, billingCycle, { tx = prisma, periodStart } = {}) {
   const meta = getPlan(plan) || getPlan("STARTER");
+  const configuredPrice = tx.billingPlanPrice?.findFirst
+    ? await tx.billingPlanPrice.findFirst({
+      where: { plan: meta.plan, billingCycle, isActive: true },
+    })
+    : null;
   const start = periodStart ? new Date(periodStart) : new Date();
   const periodEnd = addBillingPeriod(start, billingCycle);
   await tx.organization.update({
@@ -159,7 +251,7 @@ async function applyPaidPlan(organizationId, plan, billingCycle, { tx = prisma, 
       plan: meta.plan,
       status: "ACTIVE",
       billingCycle,
-      price: meta.price,
+      price: configuredPrice ? Number(configuredPrice.priceInr) : meta.price,
       maxEmployees: meta.maxEmployees,
       maxBranches: meta.maxBranches,
       hasGeofence: meta.hasGeofence,
@@ -173,7 +265,7 @@ async function applyPaidPlan(organizationId, plan, billingCycle, { tx = prisma, 
       plan: meta.plan,
       status: "ACTIVE",
       billingCycle,
-      price: meta.price,
+      price: configuredPrice ? Number(configuredPrice.priceInr) : meta.price,
       maxEmployees: meta.maxEmployees,
       maxBranches: meta.maxBranches,
       hasGeofence: meta.hasGeofence,
@@ -273,11 +365,7 @@ async function verifyPayment(organizationId, payload) {
   }
 
   let providerPayment = null;
-  try {
-    providerPayment = await razorpayRequest(`/payments/${razorpay_payment_id}`, null, "GET");
-  } catch {
-    providerPayment = { id: razorpay_payment_id, amount: Math.round(Number(order.amountInr) * 100), currency: "INR", status: "captured" };
-  }
+  providerPayment = await razorpayRequest(`/payments/${razorpay_payment_id}`, null, "GET");
 
   if (!amountsMatch(order, providerPayment)) {
     const err = new Error("Paid amount or currency does not match the stored order");
@@ -368,6 +456,10 @@ module.exports = {
   cancelSubscription,
   handleWebhook,
   calculateCheckout,
+  getPlanCatalog,
+  getConfiguredPrice,
   applyPaidPlan,
+  PLAN_KEYS,
+  BILLING_CYCLES,
   PLAN_INR,
 };

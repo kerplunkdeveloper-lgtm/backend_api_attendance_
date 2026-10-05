@@ -61,21 +61,21 @@ enum SubscriptionStatus {
 }
 
 model Organization {
-  id          String   @id @default(uuid())
-  name        String
-  email       String?
-  phone       String?
+  id        String    @id @default(uuid())
+  name      String
+  email     String?
+  phone     String?
   // IANA zone (e.g. "Asia/Kolkata"). Attendance calendar dates, shift start/end
   // comparisons and report boundaries are all resolved in this zone rather than
   // the server's, so the same data reads correctly wherever the API is deployed.
-  timezone    String   @default("UTC")
-  currency    String   @default("INR")
-  address     String?
-  taxId       String?
-  logoUrl     String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  deletedAt   DateTime?
+  timezone  String    @default("UTC")
+  currency  String    @default("INR")
+  address   String?
+  taxId     String?
+  logoUrl   String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
 
   subscriptionPlan      SubscriptionPlan   @default(FREE_TRIAL)
   subscriptionStatus    SubscriptionStatus @default(TRIALING)
@@ -85,92 +85,91 @@ model Organization {
   subscription          Subscription?
 
   // ── Plan Unlock Code (sent via email after registration/payment) ──────────
-  unlockCode          String?   // Bcrypt-hashed unlock code
-  unlockCodeUsedAt    DateTime? // When it was redeemed by admin
-  planActivatedAt     DateTime? // When the plan became fully active
-  planLocked          Boolean   @default(true)  // true until unlock code entered
+  unlockCode       String? // Bcrypt-hashed unlock code
+  unlockCodeUsedAt DateTime? // When it was redeemed by admin
+  planActivatedAt  DateTime? // When the plan became fully active
+  planLocked       Boolean   @default(true) // true until unlock code entered
 
-  branches         Branch[]
-  departments      Department[]
-  users            User[]
-  employees        Employee[]
-  shifts           Shift[]
-  attendances      Attendance[]
-  corrections      AttendanceCorrection[]
-  leaveTypes       LeaveType[]
-  leaveRequests    LeaveRequest[]
-  leaveBalances    LeaveBalance[]
-  holidays         Holiday[]
-  salaryStructures SalaryStructure[]
-  payslips         Payslip[]
-  notifications    Notification[]
-  auditLogs        AuditLog[]
-  employeeDevices  EmployeeDevice[]
+  branches             Branch[]
+  departments          Department[]
+  users                User[]
+  employees            Employee[]
+  shifts               Shift[]
+  attendances          Attendance[]
+  corrections          AttendanceCorrection[]
+  leaveTypes           LeaveType[]
+  leaveRequests        LeaveRequest[]
+  leaveBalances        LeaveBalance[]
+  holidays             Holiday[]
+  salaryStructures     SalaryStructure[]
+  payslips             Payslip[]
+  notifications        Notification[]
+  auditLogs            AuditLog[]
+  employeeDevices      EmployeeDevice[]
   onboardingCandidates OnboardingCandidate[]
-  salaryRevisions  SalaryRevision[]
-  expenses         ExpenseClaim[]
-  attendancePolicy AttendancePolicy?
-  shiftOverrides   ShiftOverride[]
-  overtimeRequests OvertimeRequest[]
-  employeeInvites  EmployeeInvite[]
-  employeeDocuments EmployeeDocument[]
-  employeeExits     EmployeeExit[]
-  employeeClearances EmployeeClearance[]
-  finalSettlements  FinalSettlement[]
-  assets            Asset[]
-  assetAssignments  AssetAssignment[]
-  assetMaintenance  AssetMaintenance[]
-  payslipTemplate   PayslipTemplate?
-  itDeclarations    ItDeclaration[]
-  form16Records     Form16Record[]
-  statutoryExports  StatutoryExport[]
-  billingOrders     BillingOrder[]
-  billingEvents     BillingEvent[]
-  chatThreads       ChatThread[]
-  chatMessages      ChatMessage[]
-  biometricDevices  BiometricDevice[]
-  loanAdvances      LoanAdvance[]
-  appraisalCycles   AppraisalCycle[]
-  appraisalReviews  AppraisalReview[]
-  apiKeys           OrgApiKey[]
+  salaryRevisions      SalaryRevision[]
+  expenses             ExpenseClaim[]
+  attendancePolicy     AttendancePolicy?
+  shiftOverrides       ShiftOverride[]
+  overtimeRequests     OvertimeRequest[]
+  employeeInvites      EmployeeInvite[]
+  employeeDocuments    EmployeeDocument[]
+  employeeExits        EmployeeExit[]
+  employeeClearances   EmployeeClearance[]
+  finalSettlements     FinalSettlement[]
+  assets               Asset[]
+  assetAssignments     AssetAssignment[]
+  assetMaintenance     AssetMaintenance[]
+  payslipTemplate      PayslipTemplate?
+  itDeclarations       ItDeclaration[]
+  form16Records        Form16Record[]
+  statutoryExports     StatutoryExport[]
+  billingOrders        BillingOrder[]
+  billingEvents        BillingEvent[]
+  chatThreads          ChatThread[]
+  chatMessages         ChatMessage[]
+  biometricDevices     BiometricDevice[]
+  loanAdvances         LoanAdvance[]
+  appraisalCycles      AppraisalCycle[]
+  appraisalReviews     AppraisalReview[]
+  apiKeys              OrgApiKey[]
 }
 
 model Subscription {
-  id                    String             @id @default(uuid())
-  organizationId        String             @unique
-  organization          Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  plan                  SubscriptionPlan   @default(FREE_TRIAL)
-  status                SubscriptionStatus @default(TRIALING)
-  billingCycle          String             @default("MONTHLY")
-  price                 Decimal            @default(0.0) @db.Decimal(10, 2)
-  maxEmployees          Int                @default(10)
-  maxBranches           Int                @default(1)
-  hasGeofence           Boolean            @default(true)
-  hasPayroll            Boolean            @default(true)
-  hasShiftPlanner       Boolean            @default(true)
-  hasApiAccess          Boolean            @default(false)
-  startDate             DateTime           @default(now())
-  trialEndsAt           DateTime?
-  currentPeriodEnd      DateTime?
-  createdAt             DateTime           @default(now())
-  updatedAt             DateTime           @updatedAt
+  id               String             @id @default(uuid())
+  organizationId   String             @unique
+  organization     Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan             SubscriptionPlan   @default(FREE_TRIAL)
+  status           SubscriptionStatus @default(TRIALING)
+  billingCycle     String             @default("MONTHLY")
+  price            Decimal            @default(0.0) @db.Decimal(10, 2)
+  maxEmployees     Int                @default(10)
+  maxBranches      Int                @default(1)
+  hasGeofence      Boolean            @default(true)
+  hasPayroll       Boolean            @default(true)
+  hasShiftPlanner  Boolean            @default(true)
+  hasApiAccess     Boolean            @default(false)
+  startDate        DateTime           @default(now())
+  trialEndsAt      DateTime?
+  currentPeriodEnd DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
 }
-
 
 // ─── Attendance Policy (configurable per org) ─────────────────────────────────
 model AttendancePolicy {
-  id                    String   @id @default(uuid())
-  organizationId        String   @unique
-  workingDaysPerMonth   Int      @default(26)     // Used in payroll calculation (Mon-Sat = 26 days)
-  halfDayThresholdMinutes Int    @default(240)    // 4h = HALF_DAY trigger
-  maxLatesBeforeDeduction Int    @default(3)      // First N lates are free
-  lateDeductionPercent  Decimal  @default(0.25) @db.Decimal(4, 2) // % of daily rate per extra late
-  allowWfh              Boolean  @default(true)
-  requireOtApproval     Boolean  @default(false)  // OT must be approved before payroll
-  geofenceStrict        Boolean  @default(false)  // When true, reject punches outside branch radius
-  requireTrustedDevice  Boolean  @default(false)
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  id                      String   @id @default(uuid())
+  organizationId          String   @unique
+  workingDaysPerMonth     Int      @default(26) // Used in payroll calculation (Mon-Sat = 26 days)
+  halfDayThresholdMinutes Int      @default(240) // 4h = HALF_DAY trigger
+  maxLatesBeforeDeduction Int      @default(3) // First N lates are free
+  lateDeductionPercent    Decimal  @default(0.25) @db.Decimal(4, 2) // % of daily rate per extra late
+  allowWfh                Boolean  @default(true)
+  requireOtApproval       Boolean  @default(false) // OT must be approved before payroll
+  geofenceStrict          Boolean  @default(false) // When true, reject punches outside branch radius
+  requireTrustedDevice    Boolean  @default(false)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id])
 }
@@ -183,7 +182,7 @@ model ShiftOverride {
   date           DateTime @db.Date
   shiftId        String
   reason         String?
-  createdBy      String?  // userId who set this override
+  createdBy      String? // userId who set this override
   createdAt      DateTime @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id])
@@ -205,23 +204,23 @@ model CompOffBalance {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  employee       Employee @relation(fields: [employeeId], references: [id])
-  transactions   CompOffTransaction[]
+  employee     Employee             @relation(fields: [employeeId], references: [id])
+  transactions CompOffTransaction[]
 
   @@index([organizationId])
 }
 
 model CompOffTransaction {
-  id               String   @id @default(uuid())
+  id               String    @id @default(uuid())
   compOffBalanceId String
-  type             String   // CREDIT | DEBIT
-  days             Decimal  @db.Decimal(5, 1)
+  type             String // CREDIT | DEBIT
+  days             Decimal   @db.Decimal(5, 1)
   reason           String?
-  referenceDate    DateTime? @db.Date  // The holiday/weekend date worked
+  referenceDate    DateTime? @db.Date // The holiday/weekend date worked
   // Credits lapse after this date; null means the credit never expires.
   expiresAt        DateTime? @db.Date
   createdBy        String?
-  createdAt        DateTime @default(now())
+  createdAt        DateTime  @default(now())
 
   compOffBalance CompOffBalance @relation(fields: [compOffBalanceId], references: [id], onDelete: Cascade)
 
@@ -230,18 +229,18 @@ model CompOffTransaction {
 
 // ─── Overtime Approval Request ────────────────────────────────────────────────
 model OvertimeRequest {
-  id             String        @id @default(uuid())
-  organizationId String
-  employeeId     String
-  attendanceId   String
+  id               String        @id @default(uuid())
+  organizationId   String
+  employeeId       String
+  attendanceId     String
   requestedMinutes Int
   approvedMinutes  Int?
-  reason         String?
-  status         RequestStatus @default(PENDING)
-  reviewedBy     String?
-  reviewNote     String?
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  reason           String?
+  status           RequestStatus @default(PENDING)
+  reviewedBy       String?
+  reviewNote       String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id])
   employee     Employee     @relation(fields: [employeeId], references: [id])
@@ -267,56 +266,56 @@ model RefreshToken {
 }
 
 model Branch {
-  id             String       @id @default(uuid())
+  id             String   @id @default(uuid())
   organizationId String
   name           String
   address        String?
-  latitude       Decimal?     @db.Decimal(10, 7)
-  longitude      Decimal?     @db.Decimal(10, 7)
-  radiusMeters   Int          @default(200)
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  latitude       Decimal? @db.Decimal(10, 7)
+  longitude      Decimal? @db.Decimal(10, 7)
+  radiusMeters   Int      @default(200)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id])
-  employees    Employee[]
-  attendances  Attendance[]
-  holidays     Holiday[]
+  organization         Organization          @relation(fields: [organizationId], references: [id])
+  employees            Employee[]
+  attendances          Attendance[]
+  holidays             Holiday[]
   onboardingCandidates OnboardingCandidate[]
 
   @@index([organizationId])
 }
 
 model Department {
-  id             String       @id @default(uuid())
+  id             String   @id @default(uuid())
   organizationId String
   name           String
-  createdAt      DateTime     @default(now())
+  createdAt      DateTime @default(now())
 
-  organization Organization @relation(fields: [organizationId], references: [id])
-  employees    Employee[]
+  organization         Organization          @relation(fields: [organizationId], references: [id])
+  employees            Employee[]
   onboardingCandidates OnboardingCandidate[]
 
   @@unique([organizationId, name])
 }
 
 model User {
-  id             String   @id @default(uuid())
-  organizationId String
-  email          String
-  passwordHash   String
-  role           UserRole
-  avatarUrl      String?
-  mustChangePassword Boolean @default(false) // true for new invited employees
-  isActive           Boolean @default(true)  // false = account disabled
+  id                 String    @id @default(uuid())
+  organizationId     String
+  email              String
+  passwordHash       String
+  role               UserRole
+  avatarUrl          String?
+  mustChangePassword Boolean   @default(false) // true for new invited employees
+  isActive           Boolean   @default(true) // false = account disabled
   lastLoginAt        DateTime?
   googleSub          String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
-  organization   Organization    @relation(fields: [organizationId], references: [id])
-  employee       Employee?
-  notifications  Notification[]
-  refreshTokens  RefreshToken[]
+  organization    Organization   @relation(fields: [organizationId], references: [id])
+  employee        Employee?
+  notifications   Notification[]
+  refreshTokens   RefreshToken[]
   chatMemberships ChatMember[]
   chatMessages    ChatMessage[]
 
@@ -344,15 +343,15 @@ model Employee {
   // ── Core HR profile ───────────────────────────────────────────────────────
   // Previously collected on OnboardingCandidate and then dropped on conversion,
   // while payroll and reports already referenced designation/dateOfJoining.
-  designation       String?
-  dateOfJoining     DateTime?
-  dateOfBirth       DateTime?
-  employmentType    String?   // FULL_TIME, PART_TIME, CONTRACT, INTERN
-  reportingManagerId String?
-  workEmail         String?
+  designation           String?
+  dateOfJoining         DateTime?
+  dateOfBirth           DateTime?
+  employmentType        String? // FULL_TIME, PART_TIME, CONTRACT, INTERN
+  reportingManagerId    String?
+  workEmail             String?
   emergencyContactName  String?
   emergencyContactPhone String?
-  address           String?
+  address               String?
 
   // ── Payout identity (used on payslips and bank advice) ────────────────────
   panNumber         String?
@@ -366,8 +365,8 @@ model Employee {
   lastWorkingDay DateTime?
   deletedAt      DateTime?
 
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   organization     Organization           @relation(fields: [organizationId], references: [id])
   user             User?                  @relation(fields: [userId], references: [id])
@@ -418,7 +417,7 @@ model Shift {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization   Organization   @relation(fields: [organizationId], references: [id])
+  organization   Organization    @relation(fields: [organizationId], references: [id])
   employees      Employee[]
   attendances    Attendance[]
   shiftOverrides ShiftOverride[]
@@ -427,21 +426,21 @@ model Shift {
 }
 
 model Attendance {
-  id               String           @id @default(uuid())
-  organizationId   String
-  employeeId       String
-  branchId         String?
-  shiftId          String?
-  date             DateTime         @db.Date
-  checkIn          DateTime?
-  checkOut         DateTime?
+  id             String    @id @default(uuid())
+  organizationId String
+  employeeId     String
+  branchId       String?
+  shiftId        String?
+  date           DateTime  @db.Date
+  checkIn        DateTime?
+  checkOut       DateTime?
 
-  checkInLatitude  Decimal? @db.Decimal(10, 7)
-  checkInLongitude Decimal? @db.Decimal(10, 7)
-  checkOutLatitude Decimal? @db.Decimal(10, 7)
+  checkInLatitude   Decimal? @db.Decimal(10, 7)
+  checkInLongitude  Decimal? @db.Decimal(10, 7)
+  checkOutLatitude  Decimal? @db.Decimal(10, 7)
   checkOutLongitude Decimal? @db.Decimal(10, 7)
-  checkInLocation  String?
-  checkOutLocation String?
+  checkInLocation   String?
+  checkOutLocation  String?
 
   status          AttendanceStatus @default(PRESENT)
   workingMinutes  Int              @default(0)
@@ -449,7 +448,7 @@ model Attendance {
   lateMinutes     Int              @default(0)
   earlyMinutes    Int              @default(0)
   overtimeMinutes Int              @default(0)
-  wfhNote         String?          // Note for WFH check-ins
+  wfhNote         String? // Note for WFH check-ins
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -468,16 +467,16 @@ model Attendance {
 }
 
 model AttendanceEvent {
-  id           String               @id @default(uuid())
+  id           String              @id @default(uuid())
   attendanceId String
   type         AttendanceEventType
-  timestamp    DateTime             @default(now())
+  timestamp    DateTime            @default(now())
 
-  latitude      Decimal? @db.Decimal(10, 7)
-  longitude     Decimal? @db.Decimal(10, 7)
-  accuracy      Decimal? @db.Decimal(10, 2)
-  isBypassed    Boolean  @default(false)  // Geofence was skipped
-  bypassReason  String?                  // Reason geofence was bypassed (NO_GPS, WFH, ADMIN)
+  latitude     Decimal? @db.Decimal(10, 7)
+  longitude    Decimal? @db.Decimal(10, 7)
+  accuracy     Decimal? @db.Decimal(10, 2)
+  isBypassed   Boolean  @default(false) // Geofence was skipped
+  bypassReason String? // Reason geofence was bypassed (NO_GPS, WFH, ADMIN)
 
   createdAt DateTime @default(now())
 
@@ -623,45 +622,45 @@ model SalaryStructure {
 }
 
 model Payslip {
-  id                    String    @id @default(uuid())
-  organizationId        String
-  employeeId            String
-  month                 Int
-  year                  Int
-  workingDays           Int
-  presentDays           Decimal   @db.Decimal(5, 1)
-  paidLeaveDays         Decimal   @default(0) @db.Decimal(5, 1)
-  unpaidLeaveDays       Decimal   @default(0) @db.Decimal(5, 1)
-  overtimeHours         Decimal   @default(0) @db.Decimal(6, 2)
-  baseSalary            Decimal   @db.Decimal(10, 2)
-  hra                   Decimal   @default(0) @db.Decimal(10, 2)
-  transport             Decimal   @default(0) @db.Decimal(10, 2)
-  special               Decimal   @default(0) @db.Decimal(10, 2)
-  otherAllowance        Decimal   @default(0) @db.Decimal(10, 2)
-  allowancesTotal       Decimal   @db.Decimal(10, 2)
-  overtimePay           Decimal   @db.Decimal(10, 2)
-  grossSalary           Decimal   @default(0) @db.Decimal(10, 2)
-  unpaidLeaveDeduction  Decimal   @default(0) @db.Decimal(10, 2)
-  lateDeduction         Decimal   @default(0) @db.Decimal(10, 2)
-  pfDeduction           Decimal   @default(0) @db.Decimal(10, 2)
-  esiDeduction          Decimal   @default(0) @db.Decimal(10, 2)
-  ptDeduction           Decimal   @default(0) @db.Decimal(10, 2)
-  statutoryDeductions   Decimal   @default(0) @db.Decimal(10, 2)
-  tdsDeduction          Decimal   @default(0) @db.Decimal(10, 2)
-  deductionsTotal       Decimal   @db.Decimal(10, 2)
-  netSalary             Decimal   @db.Decimal(10, 2)
-  reimbursements        Decimal   @default(0) @db.Decimal(10, 2)
-  loanRecovery          Decimal   @default(0) @db.Decimal(10, 2)
-  status                String    @default("DRAFT") // DRAFT, PENDING_APPROVAL, APPROVED, DISBURSED, REJECTED
-  approvedBy            String?
-  approvedAt            DateTime?
-  disbursedAt           DateTime?
-  remarks               String?
-  createdAt             DateTime  @default(now())
-  updatedAt             DateTime  @updatedAt
+  id                   String    @id @default(uuid())
+  organizationId       String
+  employeeId           String
+  month                Int
+  year                 Int
+  workingDays          Int
+  presentDays          Decimal   @db.Decimal(5, 1)
+  paidLeaveDays        Decimal   @default(0) @db.Decimal(5, 1)
+  unpaidLeaveDays      Decimal   @default(0) @db.Decimal(5, 1)
+  overtimeHours        Decimal   @default(0) @db.Decimal(6, 2)
+  baseSalary           Decimal   @db.Decimal(10, 2)
+  hra                  Decimal   @default(0) @db.Decimal(10, 2)
+  transport            Decimal   @default(0) @db.Decimal(10, 2)
+  special              Decimal   @default(0) @db.Decimal(10, 2)
+  otherAllowance       Decimal   @default(0) @db.Decimal(10, 2)
+  allowancesTotal      Decimal   @db.Decimal(10, 2)
+  overtimePay          Decimal   @db.Decimal(10, 2)
+  grossSalary          Decimal   @default(0) @db.Decimal(10, 2)
+  unpaidLeaveDeduction Decimal   @default(0) @db.Decimal(10, 2)
+  lateDeduction        Decimal   @default(0) @db.Decimal(10, 2)
+  pfDeduction          Decimal   @default(0) @db.Decimal(10, 2)
+  esiDeduction         Decimal   @default(0) @db.Decimal(10, 2)
+  ptDeduction          Decimal   @default(0) @db.Decimal(10, 2)
+  statutoryDeductions  Decimal   @default(0) @db.Decimal(10, 2)
+  tdsDeduction         Decimal   @default(0) @db.Decimal(10, 2)
+  deductionsTotal      Decimal   @db.Decimal(10, 2)
+  netSalary            Decimal   @db.Decimal(10, 2)
+  reimbursements       Decimal   @default(0) @db.Decimal(10, 2)
+  loanRecovery         Decimal   @default(0) @db.Decimal(10, 2)
+  status               String    @default("DRAFT") // DRAFT, PENDING_APPROVAL, APPROVED, DISBURSED, REJECTED
+  approvedBy           String?
+  approvedAt           DateTime?
+  disbursedAt          DateTime?
+  remarks              String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id])
-  employee     Employee     @relation(fields: [employeeId], references: [id])
+  organization Organization   @relation(fields: [organizationId], references: [id])
+  employee     Employee       @relation(fields: [employeeId], references: [id])
   expenses     ExpenseClaim[]
 
   @@unique([employeeId, month, year])
@@ -673,49 +672,49 @@ model Payslip {
 }
 
 model PayslipTemplate {
-  id                    String       @id @default(uuid())
-  organizationId        String       @unique
-  name                  String       @default("Corporate Slate")
-  templateKey           String       @default("MODERN_CORPORATE") // MODERN_CORPORATE, MINIMALIST, EXECUTIVE, CLASSIC_COMPACT, CUSTOM_HTML
-  
+  id             String @id @default(uuid())
+  organizationId String @unique
+  name           String @default("Corporate Slate")
+  templateKey    String @default("MODERN_CORPORATE") // MODERN_CORPORATE, MINIMALIST, EXECUTIVE, CLASSIC_COMPACT, CUSTOM_HTML
+
   // Branding & Visual Styling
-  logoUrl               String?
-  companyName           String?
-  addressLine1          String?
-  addressLine2          String?
-  taxIdentifierLabel    String?      @default("CIN / GSTIN")
-  taxIdentifierValue    String?
-  contactEmail          String?
-  contactPhone          String?
-  primaryColor          String       @default("#4f46e5")
-  accentColor           String       @default("#0f172a")
-  fontFamily            String       @default("Inter")
-  headerLayout          String       @default("SPLIT") // SPLIT, CENTERED, BANNER
-  
+  logoUrl            String?
+  companyName        String?
+  addressLine1       String?
+  addressLine2       String?
+  taxIdentifierLabel String? @default("CIN / GSTIN")
+  taxIdentifierValue String?
+  contactEmail       String?
+  contactPhone       String?
+  primaryColor       String  @default("#4f46e5")
+  accentColor        String  @default("#0f172a")
+  fontFamily         String  @default("Inter")
+  headerLayout       String  @default("SPLIT") // SPLIT, CENTERED, BANNER
+
   // Section Display Toggles
-  showBankDetails       Boolean      @default(true)
-  showPanUan            Boolean      @default(true)
-  showLeaveBalances     Boolean      @default(true)
-  showAttendanceSummary Boolean      @default(true)
-  showOvertimeDetails   Boolean      @default(true)
-  showNetSalaryInWords  Boolean      @default(true)
-  showBarcodeOrQr       Boolean      @default(true)
-  
+  showBankDetails       Boolean @default(true)
+  showPanUan            Boolean @default(true)
+  showLeaveBalances     Boolean @default(true)
+  showAttendanceSummary Boolean @default(true)
+  showOvertimeDetails   Boolean @default(true)
+  showNetSalaryInWords  Boolean @default(true)
+  showBarcodeOrQr       Boolean @default(true)
+
   // Authorized Signatory & Notes
-  signatoryName         String?
-  signatoryTitle        String?
-  signatureImageUrl     String?
-  declarationText       String?      @default("This is a computer-generated payslip and does not require a physical seal or signature.")
-  footerNotes           String?
-  
+  signatoryName     String?
+  signatoryTitle    String?
+  signatureImageUrl String?
+  declarationText   String? @default("This is a computer-generated payslip and does not require a physical seal or signature.")
+  footerNotes       String?
+
   // Custom HTML/CSS (for upload / raw code mode)
-  customHtml            String?      @db.Text
-  customCss             String?      @db.Text
+  customHtml String? @db.Text
+  customCss  String? @db.Text
 
-  createdAt             DateTime     @default(now())
-  updatedAt             DateTime     @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  organization          Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 }
 
 model SalaryRevision {
@@ -733,7 +732,7 @@ model SalaryRevision {
   esi               Decimal  @default(0) @db.Decimal(10, 2)
   professionalTax   Decimal  @default(0) @db.Decimal(10, 2)
   effectiveDate     DateTime @db.Date
-  revisionReason    String?  // PROMOTION, ANNUAL_APPRAISAL, MARKET_CORRECTION, PROBATION_CONFIRMATION
+  revisionReason    String? // PROMOTION, ANNUAL_APPRAISAL, MARKET_CORRECTION, PROBATION_CONFIRMATION
   hikePercentage    Decimal? @db.Decimal(5, 2)
   previousAnnualCtc Decimal? @db.Decimal(12, 2)
   revisedByUserId   String?
@@ -768,10 +767,10 @@ model AuditLog {
   id             String   @id @default(uuid())
   organizationId String
   userId         String?
-  action         String   // CREATE, UPDATE, DELETE, APPROVE, REJECT
-  entity         String   // EMPLOYEE, SHIFT, LEAVE, REGULARIZATION, PAYROLL, DEVICE
+  action         String // CREATE, UPDATE, DELETE, APPROVE, REJECT
+  entity         String // EMPLOYEE, SHIFT, LEAVE, REGULARIZATION, PAYROLL, DEVICE
   entityId       String?
-  details        String?  // Optional descriptive details
+  details        String? // Optional descriptive details
   ipAddress      String?
   createdAt      DateTime @default(now())
 
@@ -832,24 +831,24 @@ enum DocumentVerificationStatus {
 }
 
 model OnboardingCandidate {
-  id                    String            @id @default(uuid())
-  organizationId        String
-  token                 String            @unique @default(uuid())
-  
+  id             String @id @default(uuid())
+  organizationId String
+  token          String @unique @default(uuid())
+
   // Basic info (created by HR/Admin)
-  firstName             String
-  lastName              String?
-  email                 String
-  phone                 String?
-  designation           String
-  departmentId          String?
-  branchId              String?
-  shiftId               String?
-  expectedJoinDate      DateTime          @db.Date
-  proposedSalary        Decimal?          @db.Decimal(10, 2)
-  
+  firstName        String
+  lastName         String?
+  email            String
+  phone            String?
+  designation      String
+  departmentId     String?
+  branchId         String?
+  shiftId          String?
+  expectedJoinDate DateTime @db.Date
+  proposedSalary   Decimal? @db.Decimal(10, 2)
+
   // Filled by Candidate
-  dateOfBirth           DateTime?         @db.Date
+  dateOfBirth           DateTime? @db.Date
   gender                String?
   bloodGroup            String?
   maritalStatus         String?
@@ -857,47 +856,47 @@ model OnboardingCandidate {
   permanentAddress      String?
   emergencyContactName  String?
   emergencyContactPhone String?
-  
-  // Bank & Statutory Info
-  bankName              String?
-  accountNumber         String?
-  ifscCode              String?
-  panNumber             String?
-  aadhaarNumber         String?
-  
-  status                OnboardingStatus  @default(INVITED)
-  expiresAt             DateTime?
-  revokedAt             DateTime?
-  
-  // HR Review Details
-  hrReviewerId          String?
-  hrNotes               String?
-  hrVerifiedAt          DateTime?
-  
-  // Admin Approval Details
-  adminApproverId       String?
-  adminNotes            String?
-  adminApprovedAt       DateTime?
-  
-  // Activated Employee Link
-  employeeId            String?           @unique
-  
-  // Offer Letter Data & Dispatch Lifecycle
-  offerLetterRef        String?
-  offerLetterData       Json?
-  offerLetterGeneratedAt DateTime?
-  offerSentAt           DateTime?
-  offerRespondedAt      DateTime?
-  candidateSignature    String?
-  offerRejectReason     String?
-  
-  createdAt             DateTime          @default(now())
-  updatedAt             DateTime          @updatedAt
 
-  organization          Organization      @relation(fields: [organizationId], references: [id])
-  branch                Branch?           @relation(fields: [branchId], references: [id])
-  department            Department?       @relation(fields: [departmentId], references: [id])
-  documents             OnboardingDocument[]
+  // Bank & Statutory Info
+  bankName      String?
+  accountNumber String?
+  ifscCode      String?
+  panNumber     String?
+  aadhaarNumber String?
+
+  status    OnboardingStatus @default(INVITED)
+  expiresAt DateTime?
+  revokedAt DateTime?
+
+  // HR Review Details
+  hrReviewerId String?
+  hrNotes      String?
+  hrVerifiedAt DateTime?
+
+  // Admin Approval Details
+  adminApproverId String?
+  adminNotes      String?
+  adminApprovedAt DateTime?
+
+  // Activated Employee Link
+  employeeId String? @unique
+
+  // Offer Letter Data & Dispatch Lifecycle
+  offerLetterRef         String?
+  offerLetterData        Json?
+  offerLetterGeneratedAt DateTime?
+  offerSentAt            DateTime?
+  offerRespondedAt       DateTime?
+  candidateSignature     String?
+  offerRejectReason      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization         @relation(fields: [organizationId], references: [id])
+  branch       Branch?              @relation(fields: [branchId], references: [id])
+  department   Department?          @relation(fields: [departmentId], references: [id])
+  documents    OnboardingDocument[]
 
   @@index([organizationId, status])
   @@index([email])
@@ -918,7 +917,7 @@ model OnboardingDocument {
   createdAt       DateTime                   @default(now())
   updatedAt       DateTime                   @updatedAt
 
-  candidate       OnboardingCandidate        @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  candidate OnboardingCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
 
   @@index([candidateId])
 }
@@ -958,9 +957,9 @@ model ExpenseClaim {
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 
-  organization    Organization    @relation(fields: [organizationId], references: [id])
-  employee        Employee        @relation(fields: [employeeId], references: [id])
-  payslip         Payslip?        @relation(fields: [payslipId], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id])
+  employee     Employee     @relation(fields: [employeeId], references: [id])
+  payslip      Payslip?     @relation(fields: [payslipId], references: [id])
 
   @@index([organizationId, status])
   @@index([employeeId, status])
@@ -975,17 +974,17 @@ model EmployeeInvite {
   email          String
   firstName      String
   lastName       String?
-  role           String   @default("EMPLOYEE")  // EMPLOYEE | MANAGER
-  tempPassword   String   // bcrypt hash only — plaintext is returned once in the invite API response
-  employeeId     String?  // linked after account is created
-  userId         String?  // linked user account
-  status         String   @default("PENDING")  // PENDING | ACCEPTED | EXPIRED
-  invitedBy      String   // userId of admin who sent the invite
+  role           String   @default("EMPLOYEE") // EMPLOYEE | MANAGER
+  tempPassword   String // bcrypt hash only — plaintext is returned once in the invite API response
+  employeeId     String? // linked after account is created
+  userId         String? // linked user account
+  status         String   @default("PENDING") // PENDING | ACCEPTED | EXPIRED
+  invitedBy      String // userId of admin who sent the invite
   expiresAt      DateTime
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization   Organization @relation(fields: [organizationId], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id])
 
   @@index([organizationId, status])
   @@index([email])
@@ -1024,8 +1023,8 @@ model EmployeeDocument {
   createdAt          DateTime                   @default(now())
   updatedAt          DateTime                   @updatedAt
 
-  organization       Organization               @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  employee           Employee                   @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
   @@index([organizationId])
   @@index([employeeId])
@@ -1075,34 +1074,34 @@ enum SettlementStatus {
 }
 
 model EmployeeExit {
-  id                       String              @id @default(uuid())
-  organizationId           String
-  employeeId               String
-  exitType                 ExitType            @default(RESIGNATION)
-  status                   ExitStatus          @default(RESIGNED)
-  
-  resignationDate          DateTime            @default(now()) @db.Date
-  preferredLastWorkingDate DateTime?           @db.Date
-  approvedLastWorkingDate  DateTime?           @db.Date
-  
-  noticePeriodDays         Int                 @default(30)
-  isNoticeWaived           Boolean             @default(false)
-  waivedNoticeDays         Int                 @default(0)
-  
-  reason                   String
-  employeeComments         String?
-  hrNotes                  String?
-  hrReviewerId             String?
-  hrReviewedAt             DateTime?
-  
-  createdAt                DateTime            @default(now())
-  updatedAt                DateTime            @updatedAt
+  id             String     @id @default(uuid())
+  organizationId String
+  employeeId     String
+  exitType       ExitType   @default(RESIGNATION)
+  status         ExitStatus @default(RESIGNED)
 
-  organization             Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  employee                 Employee            @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  clearances               EmployeeClearance[]
-  interview                ExitInterview?
-  finalSettlement          FinalSettlement?
+  resignationDate          DateTime  @default(now()) @db.Date
+  preferredLastWorkingDate DateTime? @db.Date
+  approvedLastWorkingDate  DateTime? @db.Date
+
+  noticePeriodDays Int     @default(30)
+  isNoticeWaived   Boolean @default(false)
+  waivedNoticeDays Int     @default(0)
+
+  reason           String
+  employeeComments String?
+  hrNotes          String?
+  hrReviewerId     String?
+  hrReviewedAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization    Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee        Employee            @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  clearances      EmployeeClearance[]
+  interview       ExitInterview?
+  finalSettlement FinalSettlement?
 
   @@index([organizationId, status])
   @@index([employeeId])
@@ -1123,8 +1122,8 @@ model EmployeeClearance {
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
 
-  organization    Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  exit            EmployeeExit        @relation(fields: [exitId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  exit         EmployeeExit @relation(fields: [exitId], references: [id], onDelete: Cascade)
 
   @@index([organizationId])
   @@index([exitId])
@@ -1132,69 +1131,69 @@ model EmployeeClearance {
 }
 
 model ExitInterview {
-  id                    String       @id @default(uuid())
+  id                    String   @id @default(uuid())
   organizationId        String
-  exitId                String       @unique
-  reasonCategory        String?      // BETTER_OFFER, CAREER_GROWTH, HIGHER_EDUCATION, PERSONAL, RELOCATION, WORK_CULTURE, COMPENSATION
-  feedbackRatings       Json?        // { managementRating: 4, cultureRating: 3, payRating: 2, workLifeRating: 4 }
+  exitId                String   @unique
+  reasonCategory        String? // BETTER_OFFER, CAREER_GROWTH, HIGHER_EDUCATION, PERSONAL, RELOCATION, WORK_CULTURE, COMPENSATION
+  feedbackRatings       Json? // { managementRating: 4, cultureRating: 3, payRating: 2, workLifeRating: 4 }
   whatWeDidWell         String?
   whatCanWeImprove      String?
-  wouldRecommendCompany Boolean      @default(true)
+  wouldRecommendCompany Boolean  @default(true)
   conductedBy           String?
-  conductedAt           DateTime     @default(now())
+  conductedAt           DateTime @default(now())
   notes                 String?
-  createdAt             DateTime     @default(now())
-  updatedAt             DateTime     @updatedAt
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 
-  exit                  EmployeeExit @relation(fields: [exitId], references: [id], onDelete: Cascade)
+  exit EmployeeExit @relation(fields: [exitId], references: [id], onDelete: Cascade)
 
   @@index([organizationId])
 }
 
 model FinalSettlement {
-  id                       String           @id @default(uuid())
-  organizationId           String
-  exitId                   String           @unique
-  employeeId               String
-  
-  // Earnings
-  workedDaysInFinalMonth   Decimal          @default(0) @db.Decimal(5, 1)
-  finalSalaryPayable       Decimal          @default(0) @db.Decimal(10, 2)
-  overtimePay              Decimal          @default(0) @db.Decimal(10, 2)
-  leaveEncashmentDays      Decimal          @default(0) @db.Decimal(5, 1)
-  leaveEncashmentAmount    Decimal          @default(0) @db.Decimal(10, 2)
-  pendingReimbursements    Decimal          @default(0) @db.Decimal(10, 2)
-  gratuityOrBonus          Decimal          @default(0) @db.Decimal(10, 2)
-  otherEarnings            Decimal          @default(0) @db.Decimal(10, 2)
-  
-  // Deductions & Recoveries
-  lopDays                  Decimal          @default(0) @db.Decimal(5, 1)
-  lopDeduction             Decimal          @default(0) @db.Decimal(10, 2)
-  noticeShortfallDays      Decimal          @default(0) @db.Decimal(5, 1)
-  noticeShortfallDeduction Decimal          @default(0) @db.Decimal(10, 2)
-  assetRecoveryAmount      Decimal          @default(0) @db.Decimal(10, 2)
-  loanOrAdvanceRecovery    Decimal          @default(0) @db.Decimal(10, 2)
-  statutoryDeductions      Decimal          @default(0) @db.Decimal(10, 2)
-  otherDeductions          Decimal          @default(0) @db.Decimal(10, 2)
-  
-  // Totals
-  grossEarnings            Decimal          @default(0) @db.Decimal(10, 2)
-  totalDeductions          Decimal          @default(0) @db.Decimal(10, 2)
-  netPayable               Decimal          @default(0) @db.Decimal(10, 2)
-  
-  status                   SettlementStatus @default(DRAFT)
-  approvedBy               String?
-  approvedAt               DateTime?
-  disbursedAt              DateTime?
-  paymentReference         String?
-  remarks                  String?
-  
-  createdAt                DateTime         @default(now())
-  updatedAt                DateTime         @updatedAt
+  id             String @id @default(uuid())
+  organizationId String
+  exitId         String @unique
+  employeeId     String
 
-  organization             Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  exit                     EmployeeExit     @relation(fields: [exitId], references: [id], onDelete: Cascade)
-  employee                 Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  // Earnings
+  workedDaysInFinalMonth Decimal @default(0) @db.Decimal(5, 1)
+  finalSalaryPayable     Decimal @default(0) @db.Decimal(10, 2)
+  overtimePay            Decimal @default(0) @db.Decimal(10, 2)
+  leaveEncashmentDays    Decimal @default(0) @db.Decimal(5, 1)
+  leaveEncashmentAmount  Decimal @default(0) @db.Decimal(10, 2)
+  pendingReimbursements  Decimal @default(0) @db.Decimal(10, 2)
+  gratuityOrBonus        Decimal @default(0) @db.Decimal(10, 2)
+  otherEarnings          Decimal @default(0) @db.Decimal(10, 2)
+
+  // Deductions & Recoveries
+  lopDays                  Decimal @default(0) @db.Decimal(5, 1)
+  lopDeduction             Decimal @default(0) @db.Decimal(10, 2)
+  noticeShortfallDays      Decimal @default(0) @db.Decimal(5, 1)
+  noticeShortfallDeduction Decimal @default(0) @db.Decimal(10, 2)
+  assetRecoveryAmount      Decimal @default(0) @db.Decimal(10, 2)
+  loanOrAdvanceRecovery    Decimal @default(0) @db.Decimal(10, 2)
+  statutoryDeductions      Decimal @default(0) @db.Decimal(10, 2)
+  otherDeductions          Decimal @default(0) @db.Decimal(10, 2)
+
+  // Totals
+  grossEarnings   Decimal @default(0) @db.Decimal(10, 2)
+  totalDeductions Decimal @default(0) @db.Decimal(10, 2)
+  netPayable      Decimal @default(0) @db.Decimal(10, 2)
+
+  status           SettlementStatus @default(DRAFT)
+  approvedBy       String?
+  approvedAt       DateTime?
+  disbursedAt      DateTime?
+  paymentReference String?
+  remarks          String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  exit         EmployeeExit @relation(fields: [exitId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
   @@index([organizationId, status])
   @@index([employeeId])
@@ -1238,31 +1237,31 @@ enum AssetAssignmentType {
 }
 
 model Asset {
-  id                String           @id @default(uuid())
+  id                String          @id @default(uuid())
   organizationId    String
-  assetCode         String           // e.g. LAP-00124
-  name              String           // e.g. MacBook Pro M2
-  category          AssetCategory    @default(LAPTOP)
-  brand             String?          // e.g. Apple
-  modelNumber       String?          // e.g. A2442
-  serialNumber      String?          // e.g. C02G1234MD6R
-  purchaseDate      DateTime?        @db.Date
-  purchaseCost      Decimal?         @db.Decimal(10, 2)
-  warrantyExpiry    DateTime?        @db.Date
-  status            AssetStatus      @default(AVAILABLE)
-  condition         AssetCondition   @default(NEW)
-  specifications    Json?            // RAM, Storage, Processor, etc.
-  assignedToId      String?          // FK to Employee
+  assetCode         String // e.g. LAP-00124
+  name              String // e.g. MacBook Pro M2
+  category          AssetCategory   @default(LAPTOP)
+  brand             String? // e.g. Apple
+  modelNumber       String? // e.g. A2442
+  serialNumber      String? // e.g. C02G1234MD6R
+  purchaseDate      DateTime?       @db.Date
+  purchaseCost      Decimal?        @db.Decimal(10, 2)
+  warrantyExpiry    DateTime?       @db.Date
+  status            AssetStatus     @default(AVAILABLE)
+  condition         AssetCondition  @default(NEW)
+  specifications    Json? // RAM, Storage, Processor, etc.
+  assignedToId      String? // FK to Employee
   assignedDate      DateTime?
   assignedCondition AssetCondition?
   notes             String?
-  createdAt         DateTime         @default(now())
-  updatedAt         DateTime         @updatedAt
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
 
-  organization      Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  assignedTo        Employee?         @relation(fields: [assignedToId], references: [id], onDelete: SetNull)
-  assignments       AssetAssignment[]
-  maintenances      AssetMaintenance[]
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assignedTo   Employee?          @relation(fields: [assignedToId], references: [id], onDelete: SetNull)
+  assignments  AssetAssignment[]
+  maintenances AssetMaintenance[]
 
   @@unique([organizationId, assetCode])
   @@index([organizationId, category])
@@ -1271,25 +1270,25 @@ model Asset {
 }
 
 model AssetAssignment {
-  id                 String              @id @default(uuid())
-  organizationId     String
-  assetId            String
-  type               AssetAssignmentType @default(ASSIGNMENT)
-  employeeId         String?             // Current or target assignee
-  fromEmployeeId     String?             // For transfer
-  assignedDate       DateTime            @default(now())
-  returnedDate       DateTime?
-  conditionOnAssign  AssetCondition      @default(GOOD)
-  conditionOnReturn  AssetCondition?
-  assignedBy         String?
-  returnedTo         String?
-  recoveryCharge     Decimal?            @db.Decimal(10, 2)
-  remarks            String?
-  createdAt          DateTime            @default(now())
+  id                String              @id @default(uuid())
+  organizationId    String
+  assetId           String
+  type              AssetAssignmentType @default(ASSIGNMENT)
+  employeeId        String? // Current or target assignee
+  fromEmployeeId    String? // For transfer
+  assignedDate      DateTime            @default(now())
+  returnedDate      DateTime?
+  conditionOnAssign AssetCondition      @default(GOOD)
+  conditionOnReturn AssetCondition?
+  assignedBy        String?
+  returnedTo        String?
+  recoveryCharge    Decimal?            @db.Decimal(10, 2)
+  remarks           String?
+  createdAt         DateTime            @default(now())
 
-  organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  asset              Asset               @relation(fields: [assetId], references: [id], onDelete: Cascade)
-  employee           Employee?           @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  asset        Asset        @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  employee     Employee?    @relation(fields: [employeeId], references: [id], onDelete: SetNull)
 
   @@index([organizationId])
   @@index([assetId])
@@ -1297,45 +1296,45 @@ model AssetAssignment {
 }
 
 model AssetMaintenance {
-  id               String       @id @default(uuid())
+  id               String    @id @default(uuid())
   organizationId   String
   assetId          String
   issueDescription String
   vendorName       String?
-  cost             Decimal?     @db.Decimal(10, 2)
-  startDate        DateTime     @default(now())
+  cost             Decimal?  @db.Decimal(10, 2)
+  startDate        DateTime  @default(now())
   completedDate    DateTime?
-  status           String       @default("IN_PROGRESS") // IN_PROGRESS | COMPLETED | CANCELLED
+  status           String    @default("IN_PROGRESS") // IN_PROGRESS | COMPLETED | CANCELLED
   notes            String?
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  asset            Asset        @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  asset        Asset        @relation(fields: [assetId], references: [id], onDelete: Cascade)
 
   @@index([organizationId])
   @@index([assetId])
 }
 
 model ItDeclaration {
-  id                      String   @id @default(uuid())
-  organizationId          String
-  employeeId              String
-  financialYear           String
-  regime                  String   @default("NEW")
-  rentPaidAnnual          Decimal  @default(0) @db.Decimal(12, 2)
-  isMetro                 Boolean  @default(true)
-  section80C              Decimal  @default(0) @db.Decimal(12, 2)
-  section80D              Decimal  @default(0) @db.Decimal(12, 2)
-  homeLoanInterest        Decimal  @default(0) @db.Decimal(12, 2)
-  npsEmployee             Decimal  @default(0) @db.Decimal(12, 2)
-  otherExemptions         Decimal  @default(0) @db.Decimal(12, 2)
-  previousEmployerIncome  Decimal  @default(0) @db.Decimal(12, 2)
-  previousEmployerTds     Decimal  @default(0) @db.Decimal(12, 2)
-  status                  String   @default("DRAFT")
-  submittedAt             DateTime?
-  createdAt               DateTime @default(now())
-  updatedAt               DateTime @updatedAt
+  id                     String    @id @default(uuid())
+  organizationId         String
+  employeeId             String
+  financialYear          String
+  regime                 String    @default("NEW")
+  rentPaidAnnual         Decimal   @default(0) @db.Decimal(12, 2)
+  isMetro                Boolean   @default(true)
+  section80C             Decimal   @default(0) @db.Decimal(12, 2)
+  section80D             Decimal   @default(0) @db.Decimal(12, 2)
+  homeLoanInterest       Decimal   @default(0) @db.Decimal(12, 2)
+  npsEmployee            Decimal   @default(0) @db.Decimal(12, 2)
+  otherExemptions        Decimal   @default(0) @db.Decimal(12, 2)
+  previousEmployerIncome Decimal   @default(0) @db.Decimal(12, 2)
+  previousEmployerTds    Decimal   @default(0) @db.Decimal(12, 2)
+  status                 String    @default("DRAFT")
+  submittedAt            DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
@@ -1371,16 +1370,16 @@ model Form16Record {
 }
 
 model StatutoryExport {
-  id             String   @id @default(uuid())
-  organizationId String
-  type           String
-  month          Int
-  year           Int
-  fileName       String
-  content        String   @db.Text
-  mimeType       String
-  rowCount       Int
-  createdAt      DateTime @default(now())
+  id              String   @id @default(uuid())
+  organizationId  String
+  type            String
+  month           Int
+  year            Int
+  fileName        String
+  content         String   @db.Text
+  mimeType        String
+  rowCount        Int
+  createdAt       DateTime @default(now())
   createdByUserId String?
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -1389,25 +1388,62 @@ model StatutoryExport {
 }
 
 model BillingOrder {
-  id                 String    @id @default(uuid())
-  organizationId     String
-  plan               String
-  billingCycle       String
-  amountInr          Decimal   @db.Decimal(12, 2)
-  baseAmountInr      Decimal   @default(0) @db.Decimal(12, 2)
-  discountAmountInr  Decimal   @default(0) @db.Decimal(12, 2)
-  taxAmountInr       Decimal   @default(0) @db.Decimal(12, 2)
-  couponCode         String?
-  razorpayOrderId    String?   @unique
-  razorpayPaymentId  String?   @unique
-  status             String    @default("CREATED")
-  createdAt          DateTime  @default(now())
-  paidAt             DateTime?
+  id                String    @id @default(uuid())
+  organizationId    String
+  plan              String
+  billingCycle      String
+  amountInr         Decimal   @db.Decimal(12, 2)
+  baseAmountInr     Decimal   @default(0) @db.Decimal(12, 2)
+  discountAmountInr Decimal   @default(0) @db.Decimal(12, 2)
+  taxAmountInr      Decimal   @default(0) @db.Decimal(12, 2)
+  couponCode        String?
+  idempotencyKey    String?
+  razorpayOrderId   String?   @unique
+  razorpayPaymentId String?   @unique
+  status            String    @default("CREATED")
+  createdAt         DateTime  @default(now())
+  paidAt            DateTime?
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
+  @@unique([organizationId, idempotencyKey])
   @@index([organizationId, status])
   @@index([organizationId, couponCode])
+}
+
+model BillingPlanPrice {
+  id              String   @id @default(uuid())
+  plan            String
+  billingCycle    String
+  priceInr        Decimal  @db.Decimal(12, 2)
+  isActive        Boolean  @default(true)
+  updatedByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([plan, billingCycle])
+  @@index([plan, isActive])
+}
+
+model BillingOffer {
+  id                 String    @id @default(uuid())
+  code               String    @unique
+  label              String
+  type               String
+  value              Decimal   @db.Decimal(12, 2)
+  maxDiscountInr     Decimal?  @db.Decimal(12, 2)
+  eligiblePlans      String[]  @default([])
+  eligibleCycles     String[]  @default([])
+  firstPaidOrderOnly Boolean   @default(false)
+  isActive           Boolean   @default(true)
+  startsAt           DateTime?
+  expiresAt          DateTime?
+  createdByUserId    String?
+  updatedByUserId    String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([isActive, startsAt, expiresAt])
 }
 
 model ChatThread {
@@ -1418,7 +1454,7 @@ model ChatThread {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   members      ChatMember[]
   messages     ChatMessage[]
 
@@ -1454,15 +1490,15 @@ model ChatMessage {
 }
 
 model BiometricDevice {
-  id             String   @id @default(uuid())
+  id             String    @id @default(uuid())
   organizationId String
   name           String
   location       String?
-  apiKeyHash     String   @unique
+  apiKeyHash     String    @unique
   apiKeyPrefix   String
-  isActive       Boolean  @default(true)
+  isActive       Boolean   @default(true)
   lastSeenAt     DateTime?
-  createdAt      DateTime @default(now())
+  createdAt      DateTime  @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
@@ -1470,22 +1506,22 @@ model BiometricDevice {
 }
 
 model LoanAdvance {
-  id               String    @id @default(uuid())
+  id               String   @id @default(uuid())
   organizationId   String
   employeeId       String
-  type             String    @default("ADVANCE")
-  amount           Decimal   @db.Decimal(12, 2)
-  monthlyRecovery  Decimal   @default(0) @db.Decimal(12, 2)
-  outstanding      Decimal   @db.Decimal(12, 2)
+  type             String   @default("ADVANCE")
+  amount           Decimal  @db.Decimal(12, 2)
+  monthlyRecovery  Decimal  @default(0) @db.Decimal(12, 2)
+  outstanding      Decimal  @db.Decimal(12, 2)
   reason           String?
-  status           String    @default("PENDING")
+  status           String   @default("PENDING")
   reviewedByUserId String?
   reviewNote       String?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee     Employee        @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   repayments   LoanRepayment[]
 
   @@index([organizationId, status])
@@ -1519,25 +1555,25 @@ model AppraisalCycle {
   status         String   @default("OPEN")
   createdAt      DateTime @default(now())
 
-  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   reviews      AppraisalReview[]
 
   @@index([organizationId, status])
 }
 
 model AppraisalReview {
-  id             String   @id @default(uuid())
-  organizationId String
-  cycleId        String
-  employeeId     String
-  reviewerUserId String?
-  selfScore      Int?
-  managerScore   Int?
-  selfComments   String?  @db.Text
-  managerComments String? @db.Text
-  status         String   @default("DRAFT")
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id              String   @id @default(uuid())
+  organizationId  String
+  cycleId         String
+  employeeId      String
+  reviewerUserId  String?
+  selfScore       Int?
+  managerScore    Int?
+  selfComments    String?  @db.Text
+  managerComments String?  @db.Text
+  status          String   @default("DRAFT")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   cycle        AppraisalCycle @relation(fields: [cycleId], references: [id], onDelete: Cascade)
