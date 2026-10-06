@@ -15,17 +15,17 @@ router.get("/", branchController.list);
 // 2. GET /api/branches/:id - Get branch by ID
 router.get("/:id", branchController.getById);
 
-// 3. POST /api/branches - Create branch
+// 3. POST /api/branches - Create branch (company admin only)
 router.post(
   "/",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
   branchController.create,
 );
 
-// 4. PUT /api/branches/:id - Update branch
+// 4. PUT /api/branches/:id - Update branch (company admin only)
 router.put(
   "/:id",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
   branchController.update,
 );
 

@@ -17,6 +17,11 @@ const pool = new Pool({
 });
 
 const adapter = new PrismaPg(pool);
-const prisma = new PrismaClient({ adapter });
+// Remote Neon round-trips make the 5s default too tight for multi-step
+// transactions (payroll runs, imports); allow more headroom before aborting.
+const prisma = new PrismaClient({
+  adapter,
+  transactionOptions: { maxWait: 10000, timeout: 20000 },
+});
 
 module.exports = prisma;

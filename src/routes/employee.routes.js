@@ -42,6 +42,20 @@ router.get(
 );
 
 // Create employee
+// Bulk import employees from Excel / CSV
+router.post(
+  "/bulk-import",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  employeeController.bulkImport,
+);
+
+// Deactivate / reactivate several employees' logins at once
+router.post(
+  "/bulk-access",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
+  employeeController.bulkSetAccess,
+);
+
 router.post(
   "/",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),

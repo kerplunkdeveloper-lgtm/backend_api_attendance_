@@ -91,6 +91,29 @@ const update = async (req, res) => {
   }
 };
 
+const bulkSetAccess = async (req, res) => {
+  try {
+    const action = String(req.body?.action || "").toUpperCase();
+    const result = await employeeService.setEmployeesAccess(
+      req.user.organizationId,
+      req.body?.ids,
+      action,
+      { userId: req.user.id, role: req.user.role },
+    );
+    const verb = action === "ACTIVATE" ? "Reactivated" : "Deactivated";
+    const message =
+      result.failedCount > 0
+        ? `${verb} ${result.changedCount} employee(s). ${result.failedCount} could not be updated.`
+        : `${verb} ${result.changedCount} employee(s).`;
+    return res.json({ success: true, message, data: result });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 const remove = async (req, res) => {
   try {
     const { id } = req.params;
@@ -197,7 +220,40 @@ const uploadEmployeeAvatar = async (req, res) => {
   }
 };
 
+
+const bulkImport = async (req, res) => {
+  try {
+    const employees = Array.isArray(req.body.employees)
+      ? req.body.employees
+      : Array.isArray(req.body)
+      ? req.body
+      : [];
+
+    if (!employees || employees.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No employee records found in request body",
+      });
+    }
+
+    const result = await employeeService.bulkImportEmployees(
+      req.user.organizationId,
+      employees,
+      req.user.role,
+    );
+
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Failed to process bulk import",
+    });
+  }
+};
+
 module.exports = {
+  bulkImport,
+  bulkSetAccess,
   create,
   list,
   getById,

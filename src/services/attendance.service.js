@@ -442,7 +442,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
     return { ...record, event };
   });
 
-  let checkInMessage = status === "LATE" ? `Checked in late by ${lateMinutes} minutes` : "Checked in successfully on time";
+  let checkInMessage = status === "LATE" ? `Checked in late by ${formatMinutes(lateMinutes)}` : "Checked in successfully on time";
   if (isOvertimeShift) {
     const reason = isOffDay ? "Weekend / Rest Day" : holiday ? `Holiday (${holiday.name})` : "Approved Leave Day";
     checkInMessage = `Checked in on ${reason} — all hours worked will be logged as Overtime (OT).`;
@@ -562,7 +562,7 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
     return record;
   });
 
-  let wfhMessage = lateMinutes > 0 ? `WFH check-in recorded. Late by ${lateMinutes} minutes.` : "WFH check-in recorded successfully.";
+  let wfhMessage = lateMinutes > 0 ? `WFH check-in recorded. Late by ${formatMinutes(lateMinutes)}.` : "WFH check-in recorded successfully.";
   if (isOvertimeShift) {
     const reason = isOffDay ? "Weekend / Rest Day" : holiday ? `Holiday (${holiday.name})` : "Approved Leave Day";
     wfhMessage = `WFH check-in recorded on ${reason} — all hours worked will be logged as Overtime (OT).`;
@@ -1004,7 +1004,7 @@ const endBreak = async ({ userId, employeeId, organizationId, latitude, longitud
 
   return {
     success: true,
-    message: `Break ended. Duration: ${durationMinutes} minutes`,
+    message: `Break ended. Duration: ${formatMinutes(durationMinutes)}`,
     durationMinutes,
     totalBreakMinutes: updatedAttendance.breakMinutes,
     attendance: updatedAttendance,
@@ -1360,6 +1360,7 @@ const getAllAttendance = async (organizationId, query = {}) => {
             lastName: true,
             employeeCode: true,
             designation: true,
+            avatarUrl: true,
             department: { select: { id: true, name: true } },
             user: { select: { email: true, role: true } },
           },

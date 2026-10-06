@@ -1,3 +1,4 @@
+const { assertCanReview, visibleToReviewer } = require("../utils/approvalChain");
 const prisma = require("../config/database");
 const { getTodayDateOnly, getOrgDateOnly } = require("./attendance.service");
 const holidayService = require("./holiday.service");
@@ -398,9 +399,9 @@ class LeaveService {
   /**
    * 6. Get All Leave Requests (Manager & Admin)
    */
-  async getAllLeaveRequests(organizationId, query = {}) {
+  async getAllLeaveRequests(organizationId, query = {}, reviewerRole = "COMPANY_ADMIN") {
     const { status, employeeId, page = 1, limit = 50 } = query;
-    const where = { organizationId };
+    const where = { organizationId, ...visibleToReviewer(reviewerRole) };
 
     if (status && status !== "ALL") {
       where.status = status;
@@ -440,7 +441,7 @@ class LeaveService {
   /**
    * 7. Review Leave Request (Approve or Reject)
    */
-  async reviewLeaveRequest(requestId, organizationId, reviewerUserId, { status, reviewNote }) {
+  async reviewLeaveRequest(requestId, organizationId, reviewerUserId, { status, reviewNote }, reviewerRole = "COMPANY_ADMIN") {
     if (!["APPROVED", "REJECTED"].includes(status)) {
       const error = new Error("Status must be APPROVED or REJECTED");
       error.statusCode = 400;
@@ -453,7 +454,7 @@ class LeaveService {
         leaveType: true,
         employee: {
           include: {
-            user: { select: { email: true } },
+            user: { select: { email: true, role: true } },
           },
         },
       },
@@ -470,6 +471,8 @@ class LeaveService {
       error.statusCode = 400;
       throw error;
     }
+
+    assertCanReview(request.employee?.user?.role, reviewerRole);
 
     // Approving your own request defeats the point of an approval workflow.
     if (request.employee?.userId && request.employee.userId === reviewerUserId) {

@@ -90,6 +90,10 @@ model Organization {
   planActivatedAt  DateTime? // When the plan became fully active
   planLocked       Boolean   @default(true) // true until unlock code entered
 
+  // Set by the platform owner to block a workspace without touching its data.
+  suspendedAt   DateTime?
+  suspendReason String?
+
   branches             Branch[]
   departments          Department[]
   users                User[]

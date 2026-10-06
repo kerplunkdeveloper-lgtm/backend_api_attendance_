@@ -19,6 +19,10 @@ const dbUrl = normalizeDatabaseUrl(
   process.env.DATABASE_URL || "",
 );
 
+const directUrl = process.env.DIRECT_URL
+  ? normalizeDatabaseUrl(process.env.DIRECT_URL)
+  : dbUrl;
+
 if (!dbUrl) {
   throw new Error(
     "DATABASE_URL is required before running Prisma commands."
@@ -33,6 +37,7 @@ export default defineConfig({
   },
 
   datasource: {
-    url: dbUrl,
+    // Migrations should use the direct (non-pooled) Neon endpoint when set.
+    url: directUrl,
   },
 });

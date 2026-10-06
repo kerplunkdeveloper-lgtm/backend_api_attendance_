@@ -69,21 +69,23 @@ async function getMessages(organizationId, userId, threadId, query = {}) {
     err.statusCode = 403;
     throw err;
   }
-  const { page, limit, skip } = parsePagination(query, { defaultLimit: 200 });
+  // Page 1 is the NEWEST page; higher pages are older history. Each page is
+  // returned oldest-first so the client can render it as-is or prepend it.
+  const { page, limit, skip } = parsePagination(query, { defaultLimit: 50, maxLimit: 200 });
   const where = { threadId, organizationId };
-  const [messages, total] = await Promise.all([
+  const [newestFirst, total] = await Promise.all([
     prisma.chatMessage.findMany({
       where,
       skip,
       take: limit,
-      orderBy: { createdAt: "asc" },
+      orderBy: { createdAt: "desc" },
       include: {
         sender: { select: { id: true, email: true, employee: { select: { firstName: true, lastName: true } } } },
       },
     }),
     prisma.chatMessage.count({ where }),
   ]);
-  return { records: messages, ...paginationMeta(total, page, limit) };
+  return { records: newestFirst.reverse(), ...paginationMeta(total, page, limit) };
 }
 
 async function sendMessage(organizationId, userId, threadId, body) {
@@ -131,6 +133,29 @@ async function createGroup(organizationId, userId, { title, userIds }) {
     err.statusCode = 400;
     throw err;
   }
+
+  // Prevent duplicate groups with identical title in the same organization
+  const existingGroup = await prisma.chatThread.findFirst({
+    where: {
+      organizationId,
+      isDirect: false,
+      title: { equals: name, mode: "insensitive" },
+      members: { some: { userId } },
+    },
+    include: { members: { include: { user: { select: { id: true, email: true } } } } },
+  });
+
+  if (existingGroup) {
+    const existingMemberIds = new Set(existingGroup.members.map((m) => m.userId));
+    const missingMembers = members.filter((m) => !existingMemberIds.has(m.id));
+    if (missingMembers.length > 0) {
+      await prisma.chatMember.createMany({
+        data: missingMembers.map((m) => ({ threadId: existingGroup.id, userId: m.id })),
+      });
+    }
+    return existingGroup;
+  }
+
   return prisma.chatThread.create({
     data: {
       organizationId,
@@ -143,13 +168,23 @@ async function createGroup(organizationId, userId, { title, userIds }) {
 }
 
 async function listTeammates(organizationId, userId, query = {}) {
-  const { page, limit, skip } = parsePagination(query, { defaultLimit: 100 });
+  const { page, limit, skip } = parsePagination(query, { defaultLimit: 30, maxLimit: 100 });
   const where = { organizationId, isActive: true, id: { not: userId } };
+  const term = typeof query.search === "string" ? query.search.trim().slice(0, 80) : "";
+  if (term) {
+    where.OR = [
+      { email: { contains: term, mode: "insensitive" } },
+      { employee: { firstName: { contains: term, mode: "insensitive" } } },
+      { employee: { lastName: { contains: term, mode: "insensitive" } } },
+      { employee: { employeeCode: { contains: term, mode: "insensitive" } } },
+    ];
+  }
   const [users, total] = await Promise.all([
     prisma.user.findMany({
       where,
       skip,
       take: limit,
+      orderBy: [{ employee: { firstName: "asc" } }, { email: "asc" }],
       select: {
         id: true,
         email: true,

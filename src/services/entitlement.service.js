@@ -29,6 +29,15 @@ const evaluateEntitlement = (org, now = new Date()) => {
     };
   }
 
+  if (org.suspendedAt) {
+    return {
+      state: "SUSPENDED",
+      allowApp: false,
+      code: "ACCOUNT_SUSPENDED",
+      message: "This workspace has been suspended. Please contact WorkPulse support.",
+    };
+  }
+
   const nowMs = now.getTime();
   const status = String(org.subscription?.status || org.subscriptionStatus || "TRIALING").toUpperCase();
   const expiresAt = periodEndOf(org);

@@ -376,6 +376,11 @@ class EmailService {
    * Contains their auto-generated login credentials.
    */
   async sendEmployeeWelcomeEmail(to, firstName, { organizationName, tempPassword, loginUrl, role }) {
+    const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+    firstName = esc(firstName);
+    const rawOrganizationName = organizationName;
+    organizationName = esc(organizationName);
+    role = esc({ MANAGER: "HR", COMPANY_ADMIN: "Company admin", EMPLOYEE: "Employee" }[role] || role);
     const contentHtml = `
       <p class="text">Hello <strong>${firstName}</strong>,</p>
       <p class="text">
@@ -413,7 +418,7 @@ class EmailService {
 
     return await this.sendEmail({
       to,
-      subject: `[WorkPulse] Your login credentials for ${organizationName}`,
+      subject: `[WorkPulse] Your login credentials for ${rawOrganizationName}`,
       html,
     });
   }

@@ -8,12 +8,16 @@ let limiterSequence = 0;
  * @param {number} options.max          - Max requests per window per key
  * @param {string} options.keyBy        - "ip" (default) | "user" (uses req.user.id if authenticated)
  * @param {string} options.message      - Custom error message
+ * @param {function} options.keyFn      - Optional (req) => string appended to the key subject
+ * @param {boolean} options.failuresOnly - Refund the hit when the response succeeds (status < 400)
  */
 const createRateLimiter = ({
   windowMs = 15 * 60 * 1000,
   max = 100,
   keyBy = "ip",
   message,
+  keyFn,
+  failuresOnly = false,
   namespace = `limiter-${++limiterSequence}`,
 }) => {
   const applyResult = (req, res, next, count, resetAt) => {
@@ -57,7 +61,24 @@ const createRateLimiter = ({
       // clients evade the limiter by inventing a new address per request.
       subject = `ip:${req.ip || req.socket?.remoteAddress || "unknown"}`;
     }
-    const key = `${namespace}:${subject}`;
+    const extra = keyFn ? keyFn(req) : "";
+    const key = `${namespace}:${subject}${extra ? `:${extra}` : ""}`;
+
+    if (failuresOnly) {
+      // Successful responses do not count against the budget, so shared
+      // office NATs cannot lock out legitimate users who sign in correctly.
+      res.on("finish", () => {
+        if (res.statusCode >= 400) return;
+        const entry = rateStore.get(key);
+        if (entry && entry.count > 0) entry.count -= 1;
+        if (process.env.REDIS_URL) {
+          getRedis()
+            .then((redis) => redis?.decr(`workpulse:rate:${key}`))
+            .catch(logRedisError);
+        }
+      });
+    }
+
     if (!process.env.REDIS_URL) return enforceLocal(req, res, next, key);
 
     return getRedis()
@@ -91,6 +112,21 @@ const authRateLimiter = createRateLimiter({
   max: 10,
   keyBy: "ip",
   message: "Too many authentication attempts. Please try again in 15 minutes.",
+});
+
+/**
+ * Login brute-force limiter: 10 FAILED attempts per 15 minutes per IP + email
+ * pair. Successful sign-ins are refunded, and keying on the email stops one
+ * attacker from locking out an entire office that shares an IP.
+ */
+const loginRateLimiter = createRateLimiter({
+  namespace: "login",
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  keyBy: "ip",
+  failuresOnly: true,
+  keyFn: (req) => String(req.body?.email || "").trim().toLowerCase().slice(0, 254),
+  message: "Too many failed login attempts. Please try again in 15 minutes.",
 });
 
 // Session restoration happens on page loads and should not consume the much
@@ -142,6 +178,7 @@ cleanupTimer.unref?.();
 module.exports = {
   createRateLimiter,
   authRateLimiter,
+  loginRateLimiter,
   sessionRateLimiter,
   apiRateLimiter,
   strictRateLimiter,

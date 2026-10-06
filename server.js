@@ -1,5 +1,4 @@
 require("dotenv").config();
-require("dotenv").config({ path: ".env.local", override: true });
 
 const app = require("./src/app");
 const prisma = require("./src/config/database");
@@ -94,4 +93,11 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 
 process.on("unhandledRejection", (reason) => {
   console.error("Unhandled promise rejection:", reason);
+});
+
+// State after an uncaught exception is undefined: log, drain, and exit so the
+// platform supervisor restarts a clean process instead of serving from a bad one.
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err);
+  shutdown("uncaughtException");
 });

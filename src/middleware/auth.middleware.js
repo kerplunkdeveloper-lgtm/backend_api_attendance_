@@ -48,9 +48,16 @@ const resolveOrgApiKey = async (raw) => {
   return null;
 };
 
+const sessionPathRe = /^\/(api\/)?auth\/(me|login|logout|refresh|refresh-token)(\/|$)/;
+
 const denyIfLocked = (req, res, org) => {
-  if (isRecoveryPath(req)) return null;
   const entitlement = evaluateEntitlement(org);
+  if (entitlement.code === "ACCOUNT_SUSPENDED") {
+    const path = String(req?.originalUrl || req?.path || "").split("?")[0];
+    if (sessionPathRe.test(path)) return null;
+    return res.status(403).json({ success: false, code: entitlement.code, message: entitlement.message });
+  }
+  if (isRecoveryPath(req)) return null;
   if (!entitlement.allowApp) {
     return res.status(402).json({
       success: false,

@@ -1,3 +1,4 @@
+const { assertCanReview, visibleToReviewer } = require("../utils/approvalChain");
 const prisma = require("../config/database");
 const { evaluateAttendanceAgainstShift, calculateLateMinutes } = require("../utils/shiftCalculator");
 const { getOrgDateOnly, resolveShift } = require("./attendance.service");
@@ -129,9 +130,9 @@ class CorrectionService {
   /**
    * Get all organization correction requests (Managers & Admins)
    */
-  async getAllRequests(organizationId, query = {}) {
+  async getAllRequests(organizationId, query = {}, reviewerRole = "COMPANY_ADMIN") {
     const { status, employeeId, page = 1, limit = 50 } = query;
-    const where = { organizationId };
+    const where = { organizationId, ...visibleToReviewer(reviewerRole) };
 
     if (status && status !== "ALL") {
       where.status = status;
@@ -171,7 +172,7 @@ class CorrectionService {
   /**
    * Manager / Admin Review (Approve or Reject)
    */
-  async reviewRequest(requestId, organizationId, reviewerUserId, { status, reviewNote }) {
+  async reviewRequest(requestId, organizationId, reviewerUserId, { status, reviewNote }, reviewerRole = "COMPANY_ADMIN") {
     if (!["APPROVED", "REJECTED"].includes(status)) {
       const error = new Error("Invalid status. Must be APPROVED or REJECTED");
       error.statusCode = 400;
@@ -182,7 +183,7 @@ class CorrectionService {
       where: { id: requestId, organizationId },
       include: {
         employee: {
-          include: { branch: true, shift: true },
+          include: { branch: true, shift: true, user: { select: { role: true } } },
         },
       },
     });
@@ -204,6 +205,8 @@ class CorrectionService {
       error.statusCode = 403;
       throw error;
     }
+
+    assertCanReview(correction.employee?.user?.role, reviewerRole);
 
     if (status === "APPROVED") {
       await assertPayrollMonthUnlocked(organizationId, correction.date);

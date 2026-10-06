@@ -245,15 +245,16 @@ const evaluateAttendanceAgainstShift = (
 };
 
 /**
- * Formats minutes into human-readable format like "9h 10m", "45m", "8h".
+ * Formats minutes into readable text like "9 hr 10 min", "45 min", "8 hr".
  */
 const formatMinutes = (minutes) => {
-  if (!minutes || minutes <= 0) return "0m";
-  const hours = Math.floor(minutes / 60);
-  const mins = minutes % 60;
-  if (hours > 0 && mins > 0) return `${hours}h ${mins}m`;
-  if (hours > 0) return `${hours}h`;
-  return `${mins}m`;
+  const total = Math.round(Number(minutes) || 0);
+  if (total <= 0) return "0 min";
+  const hours = Math.floor(total / 60);
+  const mins = total % 60;
+  if (hours > 0 && mins > 0) return `${hours} hr ${mins} min`;
+  if (hours > 0) return `${hours} hr`;
+  return `${mins} min`;
 };
 
 module.exports = {

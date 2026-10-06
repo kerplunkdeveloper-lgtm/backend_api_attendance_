@@ -18,6 +18,7 @@ const organizationSelect = {
   unlockCodeUsedAt: true,
   planActivatedAt: true,
   planLocked: true,
+  suspendedAt: true,
   subscription: true,
 };
 

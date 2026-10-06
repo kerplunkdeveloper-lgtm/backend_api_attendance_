@@ -4,7 +4,7 @@ const {
   authenticate,
   authorizeRoles,
 } = require("../middleware/auth.middleware");
-const { authRateLimiter, sessionRateLimiter } = require("../middleware/rateLimiter.middleware");
+const { authRateLimiter, sessionRateLimiter, loginRateLimiter } = require("../middleware/rateLimiter.middleware");
 const { validate, schemas } = require("../middleware/validate.middleware");
 const { imageUploader, handleUploadErrors } = require("../middleware/upload.middleware");
 const { protectCookieMutation } = require("../middleware/requestSecurity.middleware");
@@ -27,6 +27,7 @@ router.post(
 );
 router.post(
   "/login",
+  loginRateLimiter,
   validate(schemas.login),
   authController.login,
 );

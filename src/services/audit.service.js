@@ -28,10 +28,10 @@ class AuditService {
    */
   async getAuditLogs(organizationId, query = {}) {
     const { action, entity, userId, page = 1, limit = 50 } = query;
-    const where = { organizationId };
+    const where = { organizationId, entity: { not: "PLATFORM" } };
 
     if (action) where.action = action;
-    if (entity) where.entity = entity;
+    if (entity && entity !== "PLATFORM") where.entity = entity;
     if (userId) where.userId = userId;
 
     const take = parseInt(limit) || 50;

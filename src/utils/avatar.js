@@ -4,7 +4,7 @@
 
 const generateDefaultAvatar = (firstName = "", lastName = "", code = "") => {
   const name = `${firstName || ""} ${lastName || ""}`.trim() || code || "Employee";
-  return `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=random&color=fff&size=256&bold=true`;
+  return `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=4f46e5&color=fff&size=256&bold=true`;
 };
 
 const resolveAvatarUrl = (data = {}) => {

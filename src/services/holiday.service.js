@@ -74,6 +74,12 @@ class HolidayService {
       throw error;
     }
 
+    if (holidaysList.length > 1000) {
+      const error = new Error("Bulk holiday import is limited to 1000 rows per request");
+      error.statusCode = 400;
+      throw error;
+    }
+
     const validTypes = ["GOVERNMENT", "COMPANY", "OPTIONAL"];
     const results = {
       created: 0,
@@ -92,80 +98,89 @@ class HolidayService {
       branchMap.set(b.name.toLowerCase(), b.id);
     });
 
-    await prisma.$transaction(async (tx) => {
-      for (const item of holidaysList) {
-        try {
-          const rawName = item.name || item.holidayName || item["Holiday Name"] || item["holiday_name"] || item.holiday;
-          const rawDate = item.date || item.Date || item["Holiday Date"] || item["date"];
-          const rawType = item.type || item.Type || item["Holiday Type"] || "GOVERNMENT";
-          const rawBranch = item.branch || item.Branch || item.branchName || item.branchId;
-          const rawDesc = item.description || item.Description || item.desc || item.note;
+    // Validate and normalise every row in memory first. The previous version
+    // ran two queries per row inside one interactive transaction, which over a
+    // remote database exceeded Prisma's 5s transaction timeout on normal lists.
+    const candidates = [];
+    for (const item of holidaysList) {
+      const rawName = item.name || item.holidayName || item["Holiday Name"] || item["holiday_name"] || item.holiday;
+      const rawDate = item.date || item.Date || item["Holiday Date"] || item["date"];
+      const rawType = item.type || item.Type || item["Holiday Type"] || "GOVERNMENT";
+      const rawBranch = item.branch || item.Branch || item.branchName || item.branchId;
+      const rawDesc = item.description || item.Description || item.desc || item.note;
 
-          if (!rawName || !rawDate) {
-            results.skipped++;
-            results.errors.push(`Missing name or date for item: ${JSON.stringify(item)}`);
-            continue;
-          }
-
-          const name = String(rawName).trim();
-          const date = rawDate;
-          const type = rawType;
-          const branchName = typeof rawBranch === "string" ? rawBranch.trim() : null;
-          const branchId = typeof rawBranch === "string" && rawBranch.length > 20 ? rawBranch : null;
-          const description = rawDesc;
-
-          let resolvedBranchId = null;
-          if (branchId && branchMap.has(branchId)) {
-            resolvedBranchId = branchMap.get(branchId);
-          } else if (branchName && branchMap.has(branchName.toLowerCase())) {
-            resolvedBranchId = branchMap.get(branchName.toLowerCase());
-          }
-
-          const holidayType = validTypes.includes(String(type).toUpperCase())
-            ? String(type).toUpperCase()
-            : "GOVERNMENT";
-
-          const dateOnly = getMidnightDate(date);
-          if (!dateOnly || isNaN(dateOnly.getTime())) {
-            results.skipped++;
-            results.errors.push(`Invalid date format for '${name}': ${date}`);
-            continue;
-          }
-
-          // Check duplicate
-          const existing = await tx.holiday.findFirst({
-            where: {
-              organizationId,
-              date: dateOnly,
-              branchId: resolvedBranchId,
-              name: name.trim(),
-            },
-          });
-
-          if (existing) {
-            results.skipped++;
-            continue;
-          }
-
-          await tx.holiday.create({
-            data: {
-              organizationId,
-              name: name.trim(),
-              date: dateOnly,
-              type: holidayType,
-              branchId: resolvedBranchId,
-              description: description ? String(description).trim() : null,
-              isOptional: holidayType === "OPTIONAL",
-            },
-          });
-
-          results.created++;
-        } catch (err) {
-          results.skipped++;
-          results.errors.push(err.message);
-        }
+      if (!rawName || !rawDate) {
+        results.skipped++;
+        results.errors.push(`Missing name or date for item: ${JSON.stringify(item)}`);
+        continue;
       }
-    });
+
+      const name = String(rawName).trim();
+      const branchName = typeof rawBranch === "string" ? rawBranch.trim() : null;
+      const branchId = typeof rawBranch === "string" && rawBranch.length > 20 ? rawBranch : null;
+
+      let resolvedBranchId = null;
+      if (branchId && branchMap.has(branchId)) {
+        resolvedBranchId = branchMap.get(branchId);
+      } else if (branchName && branchMap.has(branchName.toLowerCase())) {
+        resolvedBranchId = branchMap.get(branchName.toLowerCase());
+      }
+
+      const holidayType = validTypes.includes(String(rawType).toUpperCase())
+        ? String(rawType).toUpperCase()
+        : "GOVERNMENT";
+
+      const dateOnly = getMidnightDate(rawDate);
+      if (!dateOnly || isNaN(dateOnly.getTime())) {
+        results.skipped++;
+        results.errors.push(`Invalid date format for '${name}': ${rawDate}`);
+        continue;
+      }
+
+      candidates.push({
+        organizationId,
+        name,
+        date: dateOnly,
+        type: holidayType,
+        branchId: resolvedBranchId,
+        description: rawDesc ? String(rawDesc).trim() : null,
+        isOptional: holidayType === "OPTIONAL",
+      });
+    }
+
+    if (candidates.length > 0) {
+      // One read for existing rows. De-duplication is done here (not by the
+      // unique index) because branchId is NULL for org-wide holidays and
+      // Postgres treats NULLs as distinct in unique constraints.
+      const times = candidates.map((c) => c.date.getTime());
+      const existing = await prisma.holiday.findMany({
+        where: {
+          organizationId,
+          date: { gte: new Date(Math.min(...times)), lte: new Date(Math.max(...times)) },
+        },
+        select: { date: true, branchId: true, name: true },
+      });
+      const keyOf = (h) => `${h.date.getTime()}|${h.branchId || ""}|${h.name.toLowerCase()}`;
+      const seen = new Set(existing.map(keyOf));
+
+      const toCreate = [];
+      for (const candidate of candidates) {
+        const key = keyOf(candidate);
+        if (seen.has(key)) {
+          results.skipped++;
+          continue;
+        }
+        seen.add(key);
+        toCreate.push(candidate);
+      }
+
+      if (toCreate.length > 0) {
+        // A single statement is atomic, so no interactive transaction is needed.
+        const inserted = await prisma.holiday.createMany({ data: toCreate, skipDuplicates: true });
+        results.created += inserted.count;
+        results.skipped += toCreate.length - inserted.count;
+      }
+    }
 
     return results;
   }

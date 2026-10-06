@@ -85,6 +85,7 @@ class LeaveController {
       const result = await leaveService.getAllLeaveRequests(
         req.user.organizationId,
         req.query,
+        req.user.role,
       );
       // `leaveRequests` is the key the approvals inbox reads.
       return paginated(res, result, { leaveRequests: result.records ?? [] });
@@ -101,6 +102,7 @@ class LeaveController {
         req.user.organizationId,
         req.user.id,
         req.body,
+        req.user.role,
       );
       return res
         .status(200)

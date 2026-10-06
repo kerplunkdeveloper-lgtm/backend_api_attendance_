@@ -45,6 +45,7 @@ class CorrectionController {
       const result = await correctionService.getAllRequests(
         req.user.organizationId,
         req.pendingOnly ? { ...req.query, status: "PENDING" } : req.query,
+        req.user.role,
       );
       // `corrections` is the key the approvals inbox reads.
       return paginated(res, result, { corrections: result.records ?? [] });
@@ -61,6 +62,7 @@ class CorrectionController {
         req.user.organizationId,
         req.user.id,
         req.body,
+        req.user.role,
       );
       return res.status(200).json({
         success: true,
