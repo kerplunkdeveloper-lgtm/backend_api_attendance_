@@ -1,6 +1,10 @@
 const nodemailer = require("nodemailer");
 const birdService = require("./bird.service");
 
+/** Escapes text placed into email HTML so names or notes cannot inject markup or links. */
+const escapeHtml = (value) =>
+  String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
 class EmailService {
   constructor() {
     this.isConfigured = false;
@@ -166,6 +170,10 @@ class EmailService {
    * 1. Leave Request Status Email (Approved or Rejected)
    */
   async sendLeaveStatusEmail(to, employeeName, { status, leaveType, startDate, endDate, totalDays, reviewNote, reviewerName }) {
+    employeeName = escapeHtml(employeeName);
+    leaveType = escapeHtml(leaveType);
+    reviewNote = reviewNote ? escapeHtml(reviewNote) : reviewNote;
+    reviewerName = reviewerName ? escapeHtml(reviewerName) : reviewerName;
     const isApproved = status === "APPROVED";
     const badgeColor = isApproved ? "#10b981" : "#ef4444";
     const statusText = isApproved ? "Approved" : "Rejected";
@@ -210,6 +218,7 @@ class EmailService {
    * 2. Monthly Payslip Disbursed Notification Email
    */
   async sendPayslipDisbursedEmail(to, employeeName, { month, year, netSalary, grossSalary, deductionsTotal, workingDays, presentDays }) {
+    employeeName = escapeHtml(employeeName);
     const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
     const monthName = monthNames[(parseInt(month) || 1) - 1];
 
@@ -253,6 +262,8 @@ class EmailService {
    * 3. Morning Shift Check-in Reminder Email
    */
   async sendShiftReminderEmail(to, employeeName, { shiftName, shiftTime, punchUrl }) {
+    employeeName = escapeHtml(employeeName);
+    shiftName = escapeHtml(shiftName);
     const contentHtml = `
       <p class="text">Good morning <strong>${employeeName}</strong> 👋,</p>
       <p class="text">
@@ -288,6 +299,10 @@ class EmailService {
    * 4. Candidate Offer Letter Notification Email
    */
   async sendOfferLetterEmail(to, candidateName, { designation, department, expectedJoinDate, salary, offerUrl }) {
+    candidateName = escapeHtml(candidateName);
+    department = escapeHtml(department);
+    const rawDesignation = designation;
+    designation = escapeHtml(designation);
     const joinDateStr = expectedJoinDate
       ? new Date(expectedJoinDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
       : "To be confirmed";
@@ -319,7 +334,7 @@ class EmailService {
 
     return await this.sendEmail({
       to,
-      subject: `[WorkPulse] Job Offer: ${designation} at WorkPulse`,
+      subject: `[WorkPulse] Job Offer: ${rawDesignation} at WorkPulse`,
       html,
     });
   }
@@ -329,6 +344,8 @@ class EmailService {
    * Contains the code they must enter in the dashboard to activate their plan.
    */
   async sendUnlockCodeEmail(to, adminName, { organizationName, unlockCode, plan, loginUrl }) {
+    adminName = escapeHtml(adminName);
+    organizationName = escapeHtml(organizationName);
     const contentHtml = `
       <p class="text">Hello <strong>${adminName || "Admin"}</strong>,</p>
       <p class="text">
@@ -427,6 +444,7 @@ class EmailService {
    * 7. Password Reset Email — sent when user requests password reset
    */
   async sendPasswordResetEmail(to, userName, { resetUrl, expiresIn = "60 minutes" }) {
+    userName = escapeHtml(userName);
     const contentHtml = `
       <p class="text">Hello <strong>${userName || "WorkPulse User"}</strong>,</p>
       <p class="text">

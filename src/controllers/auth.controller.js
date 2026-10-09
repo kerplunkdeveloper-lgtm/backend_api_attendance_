@@ -26,6 +26,10 @@ const isInfrastructureError = (error) => {
   };
   visit(error);
 
+  // pg-pool connection timeouts are plain Errors with no code.
+  const messages = [error?.message, error?.cause?.message].filter(Boolean).join(" ");
+  if (/timeout exceeded when trying to connect|Connection terminated/i.test(messages)) return true;
+
   return names.some((name) => /^PrismaClient/.test(name)) || codes.some(
     (code) =>
       code.startsWith("P") ||
@@ -104,6 +108,7 @@ const register = async (req, res) => {
       subscriptionPlan,
       billingCycle,
     });
+    res.cookie("refreshToken", result.refreshToken, getCookieOptions());
 
     return res.status(201).json({
       success: true,
@@ -111,6 +116,7 @@ const register = async (req, res) => {
       data: {
         accessToken: result.accessToken,
         token: result.accessToken,
+        ...refreshTokenForClient(req, result.refreshToken),
         user: result.user,
         requiresCheckout: result.requiresCheckout,
         selectedPlan: result.selectedPlan,
@@ -129,12 +135,14 @@ const loginWithGoogle = async (req, res) => {
     const { idToken, client } = req.body;
     const clientPlatform = client || req.headers["x-client-platform"] || null;
     const result = await authService.loginWithGoogle(idToken, clientPlatform);
+    res.cookie("refreshToken", result.refreshToken, getCookieOptions());
     return res.json({
       success: true,
       message: "Google sign-in successful",
       data: {
         accessToken: result.accessToken,
         token: result.accessToken,
+        ...refreshTokenForClient(req, result.refreshToken),
         user: result.user,
       },
     });
@@ -164,6 +172,7 @@ const login = async (req, res) => {
       clientPlatform,
       employeeCode,
     );
+    res.cookie("refreshToken", result.refreshToken, getCookieOptions());
 
     return res.json({
       success: true,
@@ -171,6 +180,7 @@ const login = async (req, res) => {
       data: {
         accessToken: result.accessToken,
         token: result.accessToken,
+        ...refreshTokenForClient(req, result.refreshToken),
         user: result.user,
       },
     });

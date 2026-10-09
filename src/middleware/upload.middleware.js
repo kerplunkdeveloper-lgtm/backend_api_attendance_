@@ -74,6 +74,16 @@ const createUploader = ({ allowed, maxBytes }) =>
  * Rejects a file whose actual bytes disagree with its declared type.
  * Text-ish formats (csv, legacy doc/xls) have no reliable signature, so they pass through.
  */
+/** Strict variant for images: the bytes must match a real image format. */
+const assertRealImage = (file) => {
+  const sniffed = file && file.buffer ? sniffType(file.buffer) : null;
+  if (!sniffed || !sniffed.startsWith("image/")) {
+    const err = new Error("That file is not a valid image. Upload a PNG, JPG or WEBP.");
+    err.statusCode = 415;
+    throw err;
+  }
+};
+
 const assertSniffedType = (file) => {
   if (!file || !file.buffer) return;
 
@@ -132,5 +142,6 @@ module.exports = {
   imageUploader,
   documentUploader,
   assertSniffedType,
+  assertRealImage,
   handleUploadErrors,
 };

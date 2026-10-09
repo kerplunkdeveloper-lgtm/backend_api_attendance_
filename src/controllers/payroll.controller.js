@@ -37,6 +37,36 @@ class PayrollController {
     }
   }
 
+  async getPayrollCycle(req, res) {
+    try {
+      const now = new Date();
+      const month = parseInt(req.query.month, 10) || now.getMonth() + 1;
+      const year = parseInt(req.query.year, 10) || now.getFullYear();
+      const data = await payrollService.getPayrollCycle(req.user.organizationId, month, year);
+      return res.json({ success: true, data });
+    } catch (err) {
+      return res.status(err.statusCode || 400).json({ success: false, message: err.message });
+    }
+  }
+
+  async bulkUpsertSalaryStructures(req, res) {
+    try {
+      const result = await payrollService.bulkUpsertSalaryStructures(
+        req.user.organizationId,
+        req.body,
+      );
+      return res.status(200).json({
+        success: true,
+        message: `Salary updated for ${result.updated} employee(s)${result.failed.length ? `, ${result.failed.length} failed` : ""}`,
+        data: result,
+      });
+    } catch (err) {
+      return res
+        .status(err.statusCode || 400)
+        .json({ success: false, message: err.message });
+    }
+  }
+
   async getSalaryStructure(req, res) {
     try {
       const { employeeId } = req.params;

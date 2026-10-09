@@ -1,9 +1,12 @@
 const prisma = require("../config/database");
-const { getPolicy } = require("./attendance.service");
+const { getOrgDateOnly } = require("./attendance.service");
+const policyService = require("./policy.service");
+const { getPayrollPeriod, resolveDayBasis, parseWorkingDays, classifyPayrollDays, computePermissionDeduction, buildCompanyLeaveMap, toIsoKey, round2 } = require("../utils/payrollCycle");
 const emailService = require("./email.service");
 const whatsappService = require("./whatsapp.service");
 const money = require("../utils/money");
 const statutoryService = require("./statutory.service");
+const { normalizeSplit, buildSalaryBreakdown } = require("../utils/salarySplit");
 
 /** Mask a bank account so only the last 4 digits are shown on payslips. */
 const maskAccount = (value) => {
@@ -128,6 +131,84 @@ class PayrollService {
   }
 
   /**
+   * Set or customise salary for many employees in one request. Each row keeps its own
+   * annual CTC; the percentage split is shared. Failures are reported per employee and
+   * do not stop the rest. Optionally sends each changed employee an in-app notification.
+   */
+  async bulkUpsertSalaryStructures(organizationId, data = {}) {
+    const entries = Array.isArray(data.entries) ? data.entries : [];
+    if (entries.length === 0) {
+      const error = new Error("Provide at least one employee salary entry");
+      error.statusCode = 400;
+      throw error;
+    }
+    if (entries.length > 1000) {
+      const error = new Error("Bulk salary update is limited to 1000 employees per request");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const split = normalizeSplit(data.split);
+    const ids = [...new Set(entries.map((entry) => String(entry?.employeeId || "")).filter(Boolean))];
+    const employees = await prisma.employee.findMany({
+      where: { organizationId, deletedAt: null, id: { in: ids } },
+      select: { id: true, userId: true },
+    });
+    const employeeById = new Map(employees.map((employee) => [employee.id, employee]));
+
+    const failed = [];
+    const planned = [];
+    for (const entry of entries) {
+      const employeeId = String(entry?.employeeId || "");
+      const employee = employeeById.get(employeeId);
+      if (!employee) {
+        failed.push({ employeeId, message: "Employee not found in this organization" });
+        continue;
+      }
+      try {
+        planned.push({ employee, breakdown: buildSalaryBreakdown(entry.annualCtc, split) });
+      } catch (err) {
+        failed.push({ employeeId, message: err.message });
+      }
+    }
+
+    // Save in small parallel batches so a large run does not exhaust the connection pool.
+    const saved = [];
+    for (let i = 0; i < planned.length; i += 10) {
+      const batch = planned.slice(i, i + 10);
+      const results = await Promise.allSettled(
+        batch.map(({ employee, breakdown }) =>
+          this.upsertSalaryStructure(organizationId, { employeeId: employee.id, ...breakdown }),
+        ),
+      );
+      results.forEach((result, index) => {
+        const { employee, breakdown } = batch[index];
+        if (result.status === "fulfilled") saved.push({ employee, breakdown });
+        else failed.push({ employeeId: employee.id, message: result.reason?.message || "Save failed" });
+      });
+    }
+
+    let notified = 0;
+    if (data.notify === true) {
+      const rows = saved
+        .filter(({ employee }) => employee.userId)
+        .map(({ employee, breakdown }) => ({
+          organizationId,
+          userId: employee.userId,
+          type: "PAYROLL",
+          title: "Salary structure updated",
+          message: `Your annual CTC is now ₹${Math.round(breakdown.annualCtc).toLocaleString("en-IN")}.`,
+        }));
+      if (rows.length) {
+        const result = await prisma.notification.createMany({ data: rows });
+        notified = result.count;
+      }
+    }
+
+    return { updated: saved.length, failed, notified };
+  }
+
+  /**
    * 2. Get salary structure for employee
    */
   async getSalaryStructure(organizationId, employeeId) {
@@ -137,20 +218,17 @@ class PayrollService {
   }
 
   /**
-   * 3. Calculate attendance-driven payroll for an employee in a given month/year
+   * Payroll for one employee over the organization's payroll cycle (for example 5th to 4th,
+   * or the calendar month). Loss-of-pay days, late marks, and permission hours beyond the
+   * allowance are deducted at the org's day basis (actual days, fixed 30, or working days).
    */
   async calculateEmployeePayroll(organizationId, employeeId, month, year) {
     const m = parseInt(month);
     const y = parseInt(year);
 
-    const startDate = new Date(Date.UTC(y, m - 1, 1));
-    const endDate = new Date(Date.UTC(y, m, 0)); // last day of month
-
-    const daysInMonth = endDate.getUTCDate();
-
-    // Fetch org policy for configurable working days
-    const policy = await getPolicy(organizationId);
-    const standardWorkingDays = policy.workingDaysPerMonth;
+    const policy = await policyService.getPolicy(organizationId);
+    const period = getPayrollPeriod(m, y, policy.payrollCycleStartDay, policy.payrollCycleEndDay);
+    const basisDays = resolveDayBasis(policy.payrollDayBasis, period, policy.workingDaysPerMonth);
     const maxLatesBeforeDeduction = policy.maxLatesBeforeDeduction;
     const lateDeductionPercent = policy.lateDeductionPercent;
 
@@ -159,6 +237,7 @@ class PayrollService {
       where: { id: employeeId, organizationId },
       include: {
         salaryStructure: true,
+        shift: { select: { workingDays: true } },
         user: { select: { email: true } },
       },
     });
@@ -192,66 +271,73 @@ class PayrollService {
     const professionalTax = Number(salary.professionalTax || 0);
     const overtimeMultiplier = Number(salary.overtimeRate) || 1.5;
 
-    const dailyRate = money.divide(baseSalary, standardWorkingDays);
+    const dailyRate = money.divide(baseSalary, basisDays);
     const hourlyRate = money.divide(dailyRate, 8);
 
-    // Fetch all attendance records for this employee in this month
+    const todayDate = await getOrgDateOnly(organizationId);
+    const todayKey = toIsoKey(todayDate);
+
+    // Attendance rows for the cycle, and the per-day status they record
     const attendances = await prisma.attendance.findMany({
       where: {
         employeeId,
         organizationId,
-        date: {
-          gte: startDate,
-          lte: endDate,
-        },
+        date: { gte: period.start, lte: period.end },
       },
     });
+    const attendanceStatusByKey = new Map(attendances.map((att) => [toIsoKey(att.date), att.status]));
 
     // An ON_LEAVE attendance row does not say whether the leave was paid — that
     // lives on LeaveType.isPaid. Without this lookup, loss-of-pay leave would be
     // counted as paid leave and the employee would be paid in full.
-    const unpaidLeaveDates = await this._getUnpaidLeaveDates(
-      organizationId,
-      employeeId,
-      startDate,
-      endDate
-    );
+    const unpaidLeaveKeys = await this._getUnpaidLeaveDates(organizationId, employeeId, period.start, period.end);
 
-    let presentDays = 0;
-    let halfDays = 0;
-    let totalOvertimeMinutes = 0;
-    let lateCount = 0;
-    let paidLeaveDays = 0;
-    let unpaidLeaveDays = 0;
+    // Company-wide holidays plus holidays for this employee's branch
+    const holidays = await prisma.holiday.findMany({
+      where: {
+        organizationId,
+        date: { gte: period.start, lte: period.end },
+        OR: [{ branchId: null }, ...(employee.branchId ? [{ branchId: employee.branchId }] : [])],
+      },
+      select: { date: true },
+    });
+    const holidayKeys = new Set(holidays.map((holiday) => toIsoKey(holiday.date)));
 
-    attendances.forEach((att) => {
-      if (att.status === "PRESENT" || att.status === "WORK_FROM_HOME") {
-        presentDays += 1;
-      } else if (att.status === "LATE") {
-        presentDays += 1;
-        lateCount += 1;
-      } else if (att.status === "HALF_DAY") {
-        halfDays += 1;
-        presentDays += 0.5;
-      } else if (att.status === "ON_LEAVE") {
-        if (unpaidLeaveDates.has(toDateKey(att.date))) {
-          unpaidLeaveDays += 1;
-        } else {
-          paidLeaveDays += 1;
-        }
-      }
-      if (!policy.requireOtApproval) {
-        totalOvertimeMinutes += att.overtimeMinutes || 0;
-      }
+    // Company-wide leave that covers this cycle: all employees, or only this branch
+    const companyLeaves = await prisma.companyLeave.findMany({
+      where: {
+        organizationId,
+        startDate: { lte: period.end },
+        endDate: { gte: period.start },
+        OR: [{ branchId: null }, ...(employee.branchId ? [{ branchId: employee.branchId }] : [])],
+      },
+      select: { startDate: true, endDate: true, isPaid: true },
+    });
+    const companyLeaveByKey = buildCompanyLeaveMap(companyLeaves, period);
+
+    const dayCounts = classifyPayrollDays({
+      period,
+      asOf: todayDate,
+      workingDays: parseWorkingDays(employee.shift?.workingDays),
+      holidayKeys,
+      attendanceStatusByKey,
+      unpaidLeaveKeys,
+      companyLeaveByKey,
+      todayKey,
     });
 
-    if (policy.requireOtApproval) {
+    let totalOvertimeMinutes = 0;
+    if (!policy.requireOtApproval) {
+      attendances.forEach((att) => {
+        totalOvertimeMinutes += att.overtimeMinutes || 0;
+      });
+    } else {
       const approvedOt = await prisma.overtimeRequest.findMany({
         where: {
           organizationId,
           employeeId,
           status: "APPROVED",
-          attendance: { date: { gte: startDate, lte: endDate } },
+          attendance: { date: { gte: period.start, lte: period.end } },
         },
         select: { approvedMinutes: true, requestedMinutes: true },
       });
@@ -267,14 +353,27 @@ class PayrollService {
       overtimeMultiplier
     );
 
-    // Any working day with neither attendance nor paid leave is also loss of pay.
-    const accountedDays = presentDays + paidLeaveDays + unpaidLeaveDays;
-    if (accountedDays < standardWorkingDays) {
-      unpaidLeaveDays += standardWorkingDays - accountedDays;
-    }
-    unpaidLeaveDays = Math.max(0, unpaidLeaveDays);
+    // Permission hours approved in this cycle. The monthly allowance covers the first hours in
+    // each cycle; hours beyond it are charged at the hourly rate.
+    const approvedPermissions = await prisma.permissionRequest.findMany({
+      where: {
+        organizationId,
+        employeeId,
+        status: "APPROVED",
+        date: { gte: period.start, lte: period.end },
+      },
+      select: { hours: true },
+    });
+    const approvedPermissionHours = approvedPermissions.reduce((sum, row) => sum + Number(row.hours), 0);
+    const permission = computePermissionDeduction({
+      approvedHours: approvedPermissionHours,
+      allowanceHours: policy.monthlyPermissionHours,
+      dailyRate,
+    });
 
+    const unpaidLeaveDays = Math.max(0, dayCounts.unpaidLeaveDays);
     const unpaidLeaveDeduction = money.multiply(dailyRate, unpaidLeaveDays);
+    const lateCount = dayCounts.lateCount;
     const lateDeduction =
       lateCount > maxLatesBeforeDeduction
         ? money.multiply(
@@ -286,6 +385,7 @@ class PayrollService {
     const deductionsTotal = money.sum(
       unpaidLeaveDeduction,
       lateDeduction,
+      permission.deduction,
       statutoryDeductions
     );
 
@@ -329,17 +429,28 @@ class PayrollService {
       period: {
         month: m,
         year: y,
-        daysInMonth,
-        workingDays: standardWorkingDays,
+        start: toIsoKey(period.start),
+        end: toIsoKey(period.end),
+        days: period.days,
+        daysInMonth: period.days,
+        workingDays: basisDays,
+        dayBasis: policy.payrollDayBasis,
+        // True while the cycle is still running: the figures are a preview, not a payroll run.
+        provisional: todayDate.getTime() <= period.end.getTime(),
       },
       attendanceSummary: {
-        presentDays,
-        halfDays,
-        paidLeaveDays,
+        presentDays: dayCounts.presentDays,
+        halfDays: dayCounts.halfDays,
+        paidLeaveDays: dayCounts.paidLeaveDays,
         unpaidLeaveDays,
         lateCount,
+        holidayDays: dayCounts.holidayDays,
+        weekOffDays: dayCounts.weekOffDays,
+        companyLeaveDays: dayCounts.companyLeaveDays,
         overtimeMinutes: totalOvertimeMinutes,
         overtimeHours,
+        permissionHours: round2(approvedPermissionHours),
+        permissionExcessHours: permission.excessHours,
       },
       salaryBreakdown: {
         annualCtc,
@@ -358,6 +469,7 @@ class PayrollService {
       deductions: {
         unpaidLeaveDeduction,
         lateDeduction,
+        permissionDeduction: permission.deduction,
         pfDeduction: pf,
         esiDeduction: esi,
         ptDeduction: professionalTax,
@@ -374,6 +486,27 @@ class PayrollService {
         date: e.date,
       })),
       netSalary,
+    };
+  }
+
+  /**
+   * Payroll cycle for a month: the period, the day basis, and whether the run can be generated yet.
+   */
+  async getPayrollCycle(organizationId, month, year) {
+    const policy = await policyService.getPolicy(organizationId);
+    const period = getPayrollPeriod(month, year, policy.payrollCycleStartDay, policy.payrollCycleEndDay);
+    const today = await getOrgDateOnly(organizationId);
+    return {
+      month: parseInt(month),
+      year: parseInt(year),
+      start: toIsoKey(period.start),
+      end: toIsoKey(period.end),
+      days: period.days,
+      dayBasis: policy.payrollDayBasis,
+      basisDays: resolveDayBasis(policy.payrollDayBasis, period, policy.workingDaysPerMonth),
+      today: toIsoKey(today),
+      canGenerate: today.getTime() > period.end.getTime(),
+      generateAfter: toIsoKey(period.end),
     };
   }
 
@@ -430,6 +563,16 @@ class PayrollService {
       throw err;
     }
 
+    // A cycle is generated only after its last day has ended, so the figures are final.
+    const cycle = await this.getPayrollCycle(organizationId, m, y);
+    if (!cycle.canGenerate) {
+      const err = new Error(
+        `Payroll for ${m}/${y} covers ${cycle.start} to ${cycle.end}. Generate it after ${cycle.end} ends; the preview is available now.`
+      );
+      err.statusCode = 422;
+      throw err;
+    }
+
     const employees = await prisma.employee.findMany({
       where: { organizationId, status: "ACTIVE" },
     });
@@ -469,6 +612,9 @@ class PayrollService {
 
       const payslipPayload = {
         workingDays: payroll.period.workingDays,
+        periodStart: new Date(payroll.period.start),
+        periodEnd: new Date(payroll.period.end),
+        permissionDeduction: payroll.deductions.permissionDeduction || 0,
         presentDays: payroll.attendanceSummary.presentDays,
         paidLeaveDays: payroll.attendanceSummary.paidLeaveDays,
         unpaidLeaveDays: payroll.attendanceSummary.unpaidLeaveDays,

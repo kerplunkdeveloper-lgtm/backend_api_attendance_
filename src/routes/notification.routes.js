@@ -160,6 +160,33 @@ router.put("/read-all", async (req, res) => {
 });
 
 // Trigger daily reminders (morning before shift start, evening after shift end). Admin trigger ignores the clock window.
+// Announce one message to every active user in the organization (admin only)
+router.post("/broadcast", adminOnly, async (req, res) => {
+  try {
+    const title = String(req.body?.title || "").trim();
+    const message = String(req.body?.message || "").trim();
+    if (!title || title.length > 120) {
+      return res.status(400).json({ success: false, message: "Title is required (max 120 characters)" });
+    }
+    if (!message || message.length > 1000) {
+      return res.status(400).json({ success: false, message: "Message is required (max 1000 characters)" });
+    }
+
+    const result = await notificationService.broadcastToOrganization(req.user.organizationId, {
+      title,
+      message,
+      type: "SYSTEM",
+    });
+    return res.json({
+      success: true,
+      message: `Notification sent to ${result.sent} people`,
+      data: result,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 router.post("/trigger-reminders", adminOnly, async (req, res) => {
   try {
     // Postman/legacy clients send `type`; the web app sends `reminderType`.

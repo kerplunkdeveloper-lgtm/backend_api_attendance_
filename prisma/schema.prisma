@@ -105,8 +105,10 @@ model Organization {
   leaveRequests        LeaveRequest[]
   leaveBalances        LeaveBalance[]
   holidays             Holiday[]
+  companyLeaves        CompanyLeave[]
   salaryStructures     SalaryStructure[]
   payslips             Payslip[]
+  permissionRequests   PermissionRequest[]
   notifications        Notification[]
   auditLogs            AuditLog[]
   employeeDevices      EmployeeDevice[]
@@ -162,18 +164,24 @@ model Subscription {
 
 // ─── Attendance Policy (configurable per org) ─────────────────────────────────
 model AttendancePolicy {
-  id                      String   @id @default(uuid())
-  organizationId          String   @unique
-  workingDaysPerMonth     Int      @default(26) // Used in payroll calculation (Mon-Sat = 26 days)
-  halfDayThresholdMinutes Int      @default(240) // 4h = HALF_DAY trigger
-  maxLatesBeforeDeduction Int      @default(3) // First N lates are free
-  lateDeductionPercent    Decimal  @default(0.25) @db.Decimal(4, 2) // % of daily rate per extra late
-  allowWfh                Boolean  @default(true)
-  requireOtApproval       Boolean  @default(false) // OT must be approved before payroll
-  geofenceStrict          Boolean  @default(false) // When true, reject punches outside branch radius
-  requireTrustedDevice    Boolean  @default(false)
-  createdAt               DateTime @default(now())
-  updatedAt               DateTime @updatedAt
+  id                          String   @id @default(uuid())
+  organizationId              String   @unique
+  workingDaysPerMonth         Int      @default(26) // Used in payroll calculation (Mon-Sat = 26 days)
+  probationMonths             Int      @default(3) // Paid leave and permission eligibility waiting period
+  monthlyPermissionHours      Decimal  @default(3.0) @db.Decimal(4, 1) // Monthly short-permission allowance
+  permissionRequiresProbation Boolean  @default(true)
+  payrollCycleStartDay        Int      @default(1) // Payroll period start day (1-31)
+  payrollCycleEndDay          Int      @default(31) // Payroll period end day (1-31, 31 = last day of month)
+  payrollDayBasis             String   @default("ACTUAL_DAYS") // ACTUAL_DAYS, FIXED_30, WORKING_DAYS
+  halfDayThresholdMinutes     Int      @default(240) // 4h = HALF_DAY trigger
+  maxLatesBeforeDeduction     Int      @default(3) // First N lates are free
+  lateDeductionPercent        Decimal  @default(0.25) @db.Decimal(4, 2) // % of daily rate per extra late
+  allowWfh                    Boolean  @default(true)
+  requireOtApproval           Boolean  @default(false) // OT must be approved before payroll
+  geofenceStrict              Boolean  @default(false) // When true, reject punches outside branch radius
+  requireTrustedDevice        Boolean  @default(false)
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id])
 }
@@ -284,6 +292,7 @@ model Branch {
   employees            Employee[]
   attendances          Attendance[]
   holidays             Holiday[]
+  companyLeaves        CompanyLeave[]
   onboardingCandidates OnboardingCandidate[]
 
   @@index([organizationId])
@@ -312,9 +321,16 @@ model User {
   mustChangePassword Boolean   @default(false) // true for new invited employees
   isActive           Boolean   @default(true) // false = account disabled
   lastLoginAt        DateTime?
-  googleSub          String?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+
+  // Two-step verification (authenticator app). Secret is AES-GCM encrypted at rest;
+  // backup codes are stored as SHA-256 hashes and are single-use.
+  twoFactorSecret      String?
+  twoFactorEnabledAt   DateTime?
+  twoFactorLastStep    Int?
+  twoFactorBackupCodes String[]  @default([])
+  googleSub            String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   organization    Organization   @relation(fields: [organizationId], references: [id])
   employee        Employee?
@@ -350,6 +366,7 @@ model Employee {
   designation           String?
   dateOfJoining         DateTime?
   dateOfBirth           DateTime?
+  gender                String? // MALE, FEMALE
   employmentType        String? // FULL_TIME, PART_TIME, CONTRACT, INTERN
   reportingManagerId    String?
   workEmail             String?
@@ -372,34 +389,35 @@ model Employee {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  organization     Organization           @relation(fields: [organizationId], references: [id])
-  user             User?                  @relation(fields: [userId], references: [id])
-  branch           Branch?                @relation(fields: [branchId], references: [id])
-  department       Department?            @relation(fields: [departmentId], references: [id])
-  shift            Shift?                 @relation(fields: [shiftId], references: [id])
-  reportingManager Employee?              @relation("EmployeeReports", fields: [reportingManagerId], references: [id])
-  directReports    Employee[]             @relation("EmployeeReports")
-  attendances      Attendance[]
-  corrections      AttendanceCorrection[]
-  leaveRequests    LeaveRequest[]
-  leaveBalances    LeaveBalance[]
-  salaryStructure  SalaryStructure?
-  payslips         Payslip[]
-  devices          EmployeeDevice[]
-  salaryRevisions  SalaryRevision[]
-  expenses         ExpenseClaim[]
-  shiftOverrides   ShiftOverride[]
-  compOffBalance   CompOffBalance?
-  overtimeRequests OvertimeRequest[]
-  documents        EmployeeDocument[]
-  exits            EmployeeExit[]
-  finalSettlements FinalSettlement[]
-  assignedAssets   Asset[]
-  assetAssignments AssetAssignment[]
-  itDeclarations   ItDeclaration[]
-  form16Records    Form16Record[]
-  loanAdvances     LoanAdvance[]
-  appraisals       AppraisalReview[]
+  organization       Organization           @relation(fields: [organizationId], references: [id])
+  user               User?                  @relation(fields: [userId], references: [id])
+  branch             Branch?                @relation(fields: [branchId], references: [id])
+  department         Department?            @relation(fields: [departmentId], references: [id])
+  shift              Shift?                 @relation(fields: [shiftId], references: [id])
+  reportingManager   Employee?              @relation("EmployeeReports", fields: [reportingManagerId], references: [id])
+  directReports      Employee[]             @relation("EmployeeReports")
+  attendances        Attendance[]
+  corrections        AttendanceCorrection[]
+  leaveRequests      LeaveRequest[]
+  leaveBalances      LeaveBalance[]
+  salaryStructure    SalaryStructure?
+  payslips           Payslip[]
+  permissionRequests PermissionRequest[]
+  devices            EmployeeDevice[]
+  salaryRevisions    SalaryRevision[]
+  expenses           ExpenseClaim[]
+  shiftOverrides     ShiftOverride[]
+  compOffBalance     CompOffBalance?
+  overtimeRequests   OvertimeRequest[]
+  documents          EmployeeDocument[]
+  exits              EmployeeExit[]
+  finalSettlements   FinalSettlement[]
+  assignedAssets     Asset[]
+  assetAssignments   AssetAssignment[]
+  itDeclarations     ItDeclaration[]
+  form16Records      Form16Record[]
+  loanAdvances       LoanAdvance[]
+  appraisals         AppraisalReview[]
 
   @@unique([organizationId, employeeCode])
   @@index([organizationId])
@@ -581,6 +599,48 @@ model LeaveBalance {
   @@index([employeeId, year])
 }
 
+// Short absence during a working day, charged against the monthly permission allowance.
+model PermissionRequest {
+  id             String        @id @default(uuid())
+  organizationId String
+  employeeId     String
+  date           DateTime      @db.Date
+  hours          Decimal       @db.Decimal(4, 2)
+  reason         String
+  status         RequestStatus @default(PENDING)
+  reviewedBy     String?
+  reviewNote     String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  employee     Employee     @relation(fields: [employeeId], references: [id])
+
+  @@index([organizationId, status, date])
+  @@index([employeeId, date])
+}
+
+// Leave for everyone (or one branch) on the same dates. Payroll reads it per day instead of
+// writing one leave row per employee.
+model CompanyLeave {
+  id             String   @id @default(uuid())
+  organizationId String
+  branchId       String?
+  title          String
+  reason         String?
+  startDate      DateTime @db.Date
+  endDate        DateTime @db.Date
+  isPaid         Boolean  @default(false)
+  createdBy      String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  branch       Branch?      @relation(fields: [branchId], references: [id])
+
+  @@index([organizationId, startDate, endDate])
+}
+
 model Holiday {
   id             String   @id @default(uuid())
   organizationId String
@@ -655,6 +715,9 @@ model Payslip {
   netSalary            Decimal   @db.Decimal(10, 2)
   reimbursements       Decimal   @default(0) @db.Decimal(10, 2)
   loanRecovery         Decimal   @default(0) @db.Decimal(10, 2)
+  periodStart          DateTime? @db.Date
+  periodEnd            DateTime? @db.Date
+  permissionDeduction  Decimal   @default(0) @db.Decimal(10, 2)
   status               String    @default("DRAFT") // DRAFT, PENDING_APPROVAL, APPROVED, DISBURSED, REJECTED
   approvedBy           String?
   approvedAt           DateTime?
@@ -1097,6 +1160,9 @@ model EmployeeExit {
   hrNotes          String?
   hrReviewerId     String?
   hrReviewedAt     DateTime?
+  // Final decision by an admin, after HR has reviewed (or directly)
+  approvedById     String?
+  approvedAt       DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

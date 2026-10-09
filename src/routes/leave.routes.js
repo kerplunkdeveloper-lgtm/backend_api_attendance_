@@ -33,6 +33,7 @@ router.post(
   leaveController.carryForward,
 );
 router.get("/balances", leaveController.getLeaveBalances);
+router.get("/eligibility", leaveController.getEligibility);
 
 // Leave Requests (Employee)
 router.post(

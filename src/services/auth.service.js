@@ -9,7 +9,7 @@ const {
   verifyPasswordResetToken,
 } = require("../utils/jwt");
 const emailService = require("./email.service");
-const { organizationWithSubscription } = require("../utils/prismaSelects");
+const { organizationWithSubscription, WITH_SECRETS } = require("../utils/prismaSelects");
 const { resolveAvatarUrl } = require("../utils/avatar");
 
 const { PLAN_CONFIGS, SUBSCRIPTION_PLANS, isPaidPlan, addBillingPeriod } = require("../config/plans");
@@ -23,6 +23,18 @@ const MIN_PASSWORD_LENGTH = 8;
 // so a database read cannot be turned directly into an authenticated session.
 const hashRefreshToken = (token) =>
   crypto.createHash("sha256").update(String(token)).digest("hex");
+
+const issueRefreshToken = async (userId, tokenPayload) => {
+  const refreshToken = generateRefreshToken(tokenPayload);
+  await prisma.refreshToken.create({
+    data: {
+      userId,
+      token: hashRefreshToken(refreshToken),
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    },
+  });
+  return refreshToken;
+};
 
 /**
  * Returns an error message when the password is unacceptable, or null when it passes.
@@ -216,6 +228,7 @@ const register = async ({
   };
 
   const accessToken = generateAccessToken(tokenPayload);
+  const refreshToken = await issueRefreshToken(user.id, tokenPayload);
 
   // Send unlock code to admin email (async — don't block registration)
   const loginUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/login`;
@@ -240,6 +253,7 @@ const register = async ({
   return {
     accessToken,
     token: accessToken,
+    refreshToken,
     requiresCheckout: requestedPaid,
     selectedPlan: requestedPaid ? requestedPlanKey : "FREE_TRIAL",
     user: presentAuthUser({ ...user, mustChangePassword: false }),
@@ -270,6 +284,7 @@ const login = async (email, password, client = null, employeeCode = null) => {
   };
 
   const candidates = await prisma.user.findMany({
+    omit: WITH_SECRETS,
     where: cleanEmail
       ? { email: { equals: cleanEmail, mode: "insensitive" } }
       : cleanCode
@@ -325,6 +340,7 @@ const login = async (email, password, client = null, employeeCode = null) => {
   };
 
   const accessToken = generateAccessToken(tokenPayload);
+  const refreshToken = await issueRefreshToken(user.id, tokenPayload);
 
   // Update lastLoginAt in background without blocking login response latency
   prisma.user
@@ -337,6 +353,7 @@ const login = async (email, password, client = null, employeeCode = null) => {
   return {
     accessToken,
     token: accessToken,
+    refreshToken,
     user: presentAuthUser(user),
   };
 };
@@ -609,7 +626,7 @@ const changePassword = async (userId, currentPassword, newPassword) => {
     throw err;
   }
 
-  const user = await prisma.user.findUnique({ where: { id: userId } });
+  const user = await prisma.user.findUnique({ omit: WITH_SECRETS, where: { id: userId } });
   if (!user) {
     const err = new Error("User not found.");
     err.statusCode = 404;
@@ -655,6 +672,7 @@ const forgotPassword = async (email) => {
 
   const normalizedEmail = email.toLowerCase().trim();
   const users = await prisma.user.findMany({
+    omit: WITH_SECRETS,
     where: { email: { equals: normalizedEmail, mode: "insensitive" }, isActive: true },
     include: { employee: true, organization: organizationWithSubscription },
   });
@@ -697,7 +715,9 @@ const forgotPassword = async (email) => {
   return {
     success: true,
     message: genericMessage,
-    ...(process.env.NODE_ENV !== "production" || process.env.FRONTEND_URL?.includes("localhost") || lastEmailResult?.simulated
+    // Returning the link would let anyone reset any account, so it is only ever
+    // done for local development, outside production, with an explicit opt-in.
+    ...(process.env.NODE_ENV !== "production" && process.env.EXPOSE_RESET_LINKS === "true"
       ? { resetUrl: resetUrls[0], resetUrls, simulated: lastEmailResult?.simulated || false }
       : {}),
   };
@@ -739,6 +759,7 @@ const resetPassword = async (token, newPassword) => {
   }
 
   const user = await prisma.user.findUnique({
+    omit: WITH_SECRETS,
     where: { id: decoded.userId },
   });
 
@@ -837,10 +858,12 @@ const loginWithGoogle = async (idToken, client = null) => {
   }
   const tokenPayload = { userId: user.id, organizationId: user.organizationId, role: user.role };
   const accessToken = generateAccessToken(tokenPayload);
+  const refreshToken = await issueRefreshToken(user.id, tokenPayload);
   await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
   return {
     accessToken,
     token: accessToken,
+    refreshToken,
     user: presentAuthUser(user),
   };
 };

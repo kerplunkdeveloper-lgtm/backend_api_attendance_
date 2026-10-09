@@ -157,6 +157,32 @@ class OffboardingController {
   }
 
   /**
+   * POST /api/offboarding/:id/withdraw
+   * Employee withdraws their own resignation before it is approved
+   */
+  async withdrawExit(req, res, next) {
+    try {
+      const data = await offboardingService.withdrawExit(req.user.organizationId, req.params.id, req.user);
+      return res.status(200).json({ success: true, message: "Resignation withdrawn", data });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * GET /api/offboarding/notice-summary
+   * Employees serving notice and resignations waiting for HR or an admin
+   */
+  async getNoticeSummary(req, res, next) {
+    try {
+      const data = await offboardingService.getNoticeSummary(req.user.organizationId);
+      return res.status(200).json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * PUT /api/offboarding/:id/clearances/:clearanceId
    */
   async updateClearanceItem(req, res, next) {
@@ -271,6 +297,8 @@ controller.getMyExit = controller.getMyExit.bind(controller);
 controller.getExitList = controller.getExitList.bind(controller);
 controller.getExitDetails = controller.getExitDetails.bind(controller);
 controller.reviewResignation = controller.reviewResignation.bind(controller);
+controller.withdrawExit = controller.withdrawExit.bind(controller);
+controller.getNoticeSummary = controller.getNoticeSummary.bind(controller);
 controller.updateClearanceItem =
   controller.updateClearanceItem.bind(controller);
 controller.saveExitInterview = controller.saveExitInterview.bind(controller);

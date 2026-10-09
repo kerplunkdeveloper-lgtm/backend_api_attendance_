@@ -31,6 +31,17 @@ router.post(
   payrollController.upsertSalaryStructure,
 );
 router.get(
+  "/cycle",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  payrollController.getPayrollCycle,
+);
+
+router.post(
+  "/salary-structure/bulk",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  payrollController.bulkUpsertSalaryStructures,
+);
+router.get(
   "/salary-structure/:employeeId",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
   payrollController.getSalaryStructure,

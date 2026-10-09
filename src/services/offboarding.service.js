@@ -1,6 +1,14 @@
 const prisma = require("../config/database");
 const notificationService = require("./notification.service");
-const { getPolicy } = require("./attendance.service");
+const { getPolicy, getOrgDateOnly } = require("./attendance.service");
+
+const EXIT_ADMIN_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN"];
+/** Resignations that still need a decision. */
+const PENDING_REVIEW_STATUSES = ["RESIGNED", "UNDER_HR_REVIEW"];
+/** Approved exits where the employee is still serving notice. */
+const ACTIVE_NOTICE_STATUSES = ["NOTICE_PERIOD", "CLEARANCE_IN_PROGRESS", "SETTLEMENT_CALCULATED"];
+
+const httpError = (message, statusCode) => Object.assign(new Error(message), { statusCode });
 
 // Standard Departmental Clearances Checklist
 const DEFAULT_CLEARANCE_TEMPLATES = [
@@ -107,7 +115,9 @@ class OffboardingService {
       lwd.setDate(lwd.getDate() + noticeDays);
     }
 
-    const isHrInitiated = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"].includes(initiatedByUser?.role);
+    // HR or an admin acting for someone else. Their own resignation goes through review like anyone's.
+    const isSelf = Boolean(initiatedByUser?.employee?.id) && initiatedByUser.employee.id === employeeId;
+    const isHrInitiated = !isSelf && ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"].includes(initiatedByUser?.role);
     const initialStatus = isHrInitiated && exitType === "TERMINATION" ? "NOTICE_PERIOD" : "RESIGNED";
 
     // 1. Create Exit Record and map notice-period employees
@@ -181,7 +191,8 @@ class OffboardingService {
   }
 
   /**
-   * 2. HR / Admin Review of Resignation
+   * 2. Resignation review. HR (MANAGER) forwards a resignation to an admin with notes; an
+   * admin approves it (the notice period starts) or rejects it. Admins may also decide directly.
    */
   async reviewResignation(organizationId, exitId, payload, reviewerUser) {
     const exit = await prisma.employeeExit.findFirst({
@@ -196,7 +207,7 @@ class OffboardingService {
     }
 
     const {
-      action, // APPROVE, REJECT
+      action, // FORWARD (HR), APPROVE or REJECT (admin)
       approvedLastWorkingDate,
       noticePeriodDays,
       isNoticeWaived = false,
@@ -204,20 +215,70 @@ class OffboardingService {
       hrNotes,
     } = payload;
 
-    if (!["APPROVE", "REJECT"].includes(action)) {
-      const error = new Error("Action must be APPROVE or REJECT");
-      error.statusCode = 400;
-      throw error;
+    if (!["FORWARD", "APPROVE", "REJECT"].includes(action)) {
+      throw httpError("Action must be FORWARD, APPROVE or REJECT", 400);
+    }
+    if (!PENDING_REVIEW_STATUSES.includes(exit.status)) {
+      throw httpError(
+        `This exit is already ${exit.status.replace(/_/g, " ").toLowerCase()}, so it cannot be reviewed again`,
+        409,
+      );
+    }
+    if (exit.employee?.userId && exit.employee.userId === reviewerUser.id) {
+      throw httpError("You cannot review your own resignation", 403);
     }
 
+    const notes = hrNotes ? String(hrNotes).trim() : "";
+
+    if (action === "FORWARD") {
+      if (exit.status !== "RESIGNED") throw httpError("This resignation is already waiting for an admin", 409);
+      await prisma.employeeExit.update({
+        where: { id: exitId },
+        data: {
+          status: "UNDER_HR_REVIEW",
+          hrNotes: notes || exit.hrNotes,
+          hrReviewerId: reviewerUser.id,
+          hrReviewedAt: new Date(),
+        },
+      });
+
+      try {
+        const admins = await prisma.user.findMany({
+          where: { organizationId, role: { in: EXIT_ADMIN_ROLES }, isActive: true },
+          select: { id: true },
+        });
+        const name = `${exit.employee.firstName} ${exit.employee.lastName || ""}`.trim();
+        for (const admin of admins) {
+          await notificationService.createNotification({
+            organizationId,
+            userId: admin.id,
+            title: "Resignation awaiting your approval",
+            message: `HR has reviewed ${name} (${exit.employee.employeeCode})'s resignation and forwarded it for approval.${notes ? ` Notes: ${notes}` : ""}`,
+            type: "SYSTEM",
+          });
+        }
+      } catch (notifErr) {
+        console.warn("Notification dispatch failed:", notifErr.message);
+      }
+
+      return await this.getExitDetails(organizationId, exitId);
+    }
+
+    if (!EXIT_ADMIN_ROLES.includes(reviewerUser.role)) {
+      throw httpError("Only an admin can approve or reject a resignation. Forward it with your notes instead.", 403);
+    }
+
+    // Keep HR's notes and add the admin's below them.
+    const combinedNotes = [exit.hrNotes, notes && `Admin: ${notes}`].filter(Boolean).join("\n") || null;
+
     if (action === "REJECT") {
-      const rejectedExit = await prisma.employeeExit.update({
+      await prisma.employeeExit.update({
         where: { id: exitId },
         data: {
           status: "REJECTED",
-          hrNotes: hrNotes ? hrNotes.trim() : "Resignation request rejected by HR",
-          hrReviewerId: reviewerUser.id,
-          hrReviewedAt: new Date(),
+          hrNotes: combinedNotes || "Resignation request rejected",
+          approvedById: reviewerUser.id,
+          approvedAt: new Date(),
         },
       });
 
@@ -226,21 +287,22 @@ class OffboardingService {
           organizationId,
           userId: exit.employee.user.id,
           title: "Resignation Request Rejected",
-          message: `Your resignation request was reviewed and not accepted. Notes: ${hrNotes || "Please connect with HR."}`,
+          message: `Your resignation request was reviewed and not accepted. Notes: ${notes || "Please connect with HR."}`,
           type: "SYSTEM",
         });
       }
 
-      return rejectedExit;
+      return await this.getExitDetails(organizationId, exitId);
     }
 
     // Action === APPROVE
     const approvedLwd = approvedLastWorkingDate
       ? new Date(approvedLastWorkingDate)
       : exit.preferredLastWorkingDate || new Date();
+    if (Number.isNaN(approvedLwd.getTime())) throw httpError("Approved last working date is not a valid date", 400);
 
-    const updated = await prisma.$transaction(async (tx) => {
-      const next = await tx.employeeExit.update({
+    await prisma.$transaction(async (tx) => {
+      await tx.employeeExit.update({
         where: { id: exitId },
         data: {
           status: "NOTICE_PERIOD",
@@ -248,16 +310,15 @@ class OffboardingService {
           noticePeriodDays: noticePeriodDays !== undefined ? Number(noticePeriodDays) : exit.noticePeriodDays,
           isNoticeWaived: Boolean(isNoticeWaived),
           waivedNoticeDays: Number(waivedNoticeDays) || 0,
-          hrNotes: hrNotes ? hrNotes.trim() : null,
-          hrReviewerId: reviewerUser.id,
-          hrReviewedAt: new Date(),
+          hrNotes: combinedNotes,
+          approvedById: reviewerUser.id,
+          approvedAt: new Date(),
         },
       });
       await tx.employee.update({
         where: { id: exit.employeeId },
         data: { status: "NOTICE_PERIOD" },
       });
-      return next;
     });
 
     if (exit.employee?.user?.id) {
@@ -272,6 +333,101 @@ class OffboardingService {
     }
 
     return await this.getExitDetails(organizationId, exitId);
+  }
+
+  /**
+   * Employee withdraws their own resignation while it is still under review.
+   */
+  async withdrawExit(organizationId, exitId, user) {
+    const exit = await prisma.employeeExit.findFirst({
+      where: { id: exitId, organizationId },
+      include: { employee: true },
+    });
+    if (!exit) throw httpError("Exit record not found", 404);
+    if (!exit.employee || exit.employee.userId !== user.id) {
+      throw httpError("You can only withdraw your own resignation", 403);
+    }
+    if (exit.exitType !== "RESIGNATION" || !PENDING_REVIEW_STATUSES.includes(exit.status)) {
+      throw httpError("Only a resignation that is still under review can be withdrawn. Contact HR after approval.", 409);
+    }
+
+    await prisma.employeeExit.update({ where: { id: exitId }, data: { status: "WITHDRAWN" } });
+
+    try {
+      const reviewers = await prisma.user.findMany({
+        where: { organizationId, role: { in: [...EXIT_ADMIN_ROLES, "MANAGER"] }, isActive: true },
+        select: { id: true },
+      });
+      const name = `${exit.employee.firstName} ${exit.employee.lastName || ""}`.trim();
+      for (const reviewer of reviewers) {
+        await notificationService.createNotification({
+          organizationId,
+          userId: reviewer.id,
+          title: "Resignation withdrawn",
+          message: `${name} (${exit.employee.employeeCode}) withdrew their resignation.`,
+          type: "SYSTEM",
+        });
+      }
+    } catch (notifErr) {
+      console.warn("Notification dispatch failed:", notifErr.message);
+    }
+
+    return await this.getExitDetails(organizationId, exitId);
+  }
+
+  /**
+   * Who is serving notice right now, when each person leaves, and how many resignations are
+   * waiting for HR or for an admin. Employee status is the source of truth for "in notice".
+   */
+  async getNoticeSummary(organizationId) {
+    const today = await getOrgDateOnly(organizationId);
+    const [employees, awaitingHrReview, awaitingAdminApproval] = await Promise.all([
+      prisma.employee.findMany({
+        where: { organizationId, deletedAt: null, status: "NOTICE_PERIOD" },
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          employeeCode: true,
+          department: { select: { name: true } },
+          exits: {
+            where: { status: { in: ACTIVE_NOTICE_STATUSES } },
+            orderBy: { createdAt: "desc" },
+            take: 1,
+            select: { id: true, exitType: true, status: true, approvedLastWorkingDate: true },
+          },
+        },
+      }),
+      prisma.employeeExit.count({ where: { organizationId, status: "RESIGNED" } }),
+      prisma.employeeExit.count({ where: { organizationId, status: "UNDER_HR_REVIEW" } }),
+    ]);
+
+    const rows = employees
+      .map((employee) => {
+        const exit = employee.exits[0] || null;
+        const lwd = exit?.approvedLastWorkingDate ? new Date(exit.approvedLastWorkingDate) : null;
+        return {
+          employeeId: employee.id,
+          name: `${employee.firstName} ${employee.lastName || ""}`.trim(),
+          employeeCode: employee.employeeCode,
+          department: employee.department?.name || null,
+          exitId: exit?.id || null,
+          exitType: exit?.exitType || null,
+          exitStatus: exit?.status || null,
+          lastWorkingDate: lwd ? lwd.toISOString().slice(0, 10) : null,
+          daysLeft: lwd ? Math.round((lwd.getTime() - today.getTime()) / 86400000) : null,
+        };
+      })
+      .sort((a, b) => (a.daysLeft ?? Infinity) - (b.daysLeft ?? Infinity));
+
+    return {
+      inNoticeCount: rows.length,
+      endingWithin7Days: rows.filter((r) => r.daysLeft !== null && r.daysLeft >= 0 && r.daysLeft <= 7).length,
+      pastLastWorkingDay: rows.filter((r) => r.daysLeft !== null && r.daysLeft < 0).length,
+      awaitingHrReview,
+      awaitingAdminApproval,
+      employees: rows,
+    };
   }
 
   /**
@@ -402,6 +558,11 @@ class OffboardingService {
     }
 
     const { status, recoveryAmount = 0, remarks } = payload;
+    const parentExit = await prisma.employeeExit.findFirst({ where: { id: exitId, organizationId }, select: { status: true } });
+    if (!parentExit || !ACTIVE_NOTICE_STATUSES.includes(parentExit.status)) {
+      throw httpError("Clearances start after the resignation is approved", 409);
+    }
+
     if (!["PENDING", "CLEARED", "RECOVERABLE_DUE", "WAIVED"].includes(status)) {
       const error = new Error("Invalid clearance status");
       error.statusCode = 400;
@@ -428,7 +589,7 @@ class OffboardingService {
     const allCleared = allClearances.every((c) => ["CLEARED", "WAIVED"].includes(c.status));
 
     const exit = await prisma.employeeExit.findUnique({ where: { id: exitId } });
-    if (exit && ["NOTICE_PERIOD", "RESIGNED"].includes(exit.status)) {
+    if (exit && exit.status === "NOTICE_PERIOD") {
       await prisma.employeeExit.update({
         where: { id: exitId },
         data: { status: "CLEARANCE_IN_PROGRESS" },

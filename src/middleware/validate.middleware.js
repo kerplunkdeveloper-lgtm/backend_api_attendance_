@@ -12,8 +12,59 @@ const PASSWORD = z
 
 const LATITUDE = z.coerce.number().finite().min(-90).max(90);
 const LONGITUDE = z.coerce.number().finite().min(-180).max(180);
-const ACCURACY = z.coerce.number().finite().nonnegative().max(100000);
+// No upper bound: laptops without GPS locate by IP/Wi-Fi and report accuracy of
+// 100+ km. That is a weak fix, not an invalid request — the geofence decides.
+const ACCURACY = z.coerce.number().finite().nonnegative();
 const ISO_TIMESTAMP = z.string().datetime({ offset: true });
+
+const FIELD_LABELS = {
+  latitude: "location",
+  longitude: "location",
+  accuracy: "location accuracy",
+  timestamp: "punch time",
+  employeeId: "employee",
+  workMode: "work mode",
+  note: "note",
+  wfhNote: "note",
+  locationLabel: "location name",
+  deviceId: "device",
+  email: "email",
+  password: "password",
+  newPassword: "new password",
+  reason: "reason",
+  startDate: "start date",
+  endDate: "end date",
+};
+
+// Zod's built-in messages ("Too big: expected number to be <=100000") are for
+// developers. Schema-specific messages are kept; built-in ones are rewritten.
+const BUILT_IN_MESSAGE = /^(Too big|Too small|Invalid input|Invalid (string|number|option|ISO|UUID|email)|Unrecognized key)/i;
+
+const friendlyMessage = (issue) => {
+  if (!BUILT_IN_MESSAGE.test(issue.message)) return issue.message;
+  const field = String(issue.path[issue.path.length - 1] ?? "");
+  const label = FIELD_LABELS[field] || field.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase() || "request";
+
+  if (field === "latitude" || field === "longitude") {
+    return "We couldn't read your location. Refresh the page and try again.";
+  }
+  if (field === "timestamp") {
+    return "The punch time looks wrong. Check that your device clock is correct and try again.";
+  }
+  switch (issue.code) {
+    case "too_big":
+      return issue.origin === "string" ? `The ${label} is too long.` : `The ${label} value is too large.`;
+    case "too_small":
+      return issue.origin === "string" ? `Please enter a ${label}.` : `The ${label} value is too small.`;
+    case "invalid_type":
+      // Zod v4 omits the input from issues by default; the message names what it received.
+      return /received undefined/.test(issue.message) ? `Please provide a ${label}.` : `The ${label} is not valid.`;
+    case "unrecognized_keys":
+      return "Something went wrong with this request. Refresh the page and try again.";
+    default:
+      return `The ${label} is not valid.`;
+  }
+};
 
 /**
  * Validates one of `body`, `query` or `params` against a Zod schema.
@@ -26,7 +77,7 @@ const validate =
     if (!parsed.success) {
       const issues = parsed.error.issues.map((i) => ({
         path: i.path.join("."),
-        message: i.message,
+        message: friendlyMessage(i),
       }));
       return res.status(400).json({
         success: false,
@@ -206,4 +257,5 @@ module.exports = {
   z,
   validate,
   schemas,
+  friendlyMessage,
 };

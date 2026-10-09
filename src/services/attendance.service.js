@@ -1,5 +1,9 @@
 const prisma = require("../config/database");
-const { verifyGeofence } = require("../utils/geofence");
+const { verifyGeofence, officeOnlyRejection } = require("../utils/geofence");
+
+// Work modes that are, by definition, away from the office. They are exempt
+// from "office only" check-in (WFH still needs policy.allowWfh).
+const SPECIAL_WORK_MODES = ["WORK_FROM_HOME", "CLIENT_VISIT", "TRAVEL", "SHOOT"];
 const {
   calculateLateMinutes,
   evaluateAttendanceAgainstShift,
@@ -337,16 +341,22 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
     };
   }
 
-  if (!geofenceResult || (!geofenceResult.isInside && !geofenceResult.bypassed)) {
-    const isSpecialWorkMode = ["WORK_FROM_HOME", "CLIENT_VISIT", "TRAVEL"].includes(workMode);
-    if (policy.geofenceStrict && !isSpecialWorkMode && latitude != null && longitude != null) {
-      const error = new Error(
-        `Outside allowed branch boundary. Distance: ${geofenceResult?.distanceMeters || "N/A"}m, Max allowed: ${geofenceResult?.allowedRadiusMeters || 200}m`
-      );
-      error.statusCode = 400;
-      error.details = geofenceResult;
+  // "Office only" (policy.geofenceStrict): an office-mode punch must come from
+  // inside a branch radius. Previously a punch without coordinates slipped
+  // through as a bypass, so denying location permission defeated the rule.
+  const isSpecialWorkMode = SPECIAL_WORK_MODES.includes(workMode);
+  if (policy.geofenceStrict && !skipGeofence && !isSpecialWorkMode) {
+    const rejection = officeOnlyRejection({ latitude, longitude, accuracy, branches: branchesWithCoords, allowWfh: policy.allowWfh });
+    if (rejection) {
+      const error = new Error(rejection.message);
+      error.statusCode = 403;
+      error.code = rejection.code;
+      error.details = rejection.details;
       throw error;
     }
+  }
+
+  if (!geofenceResult || (!geofenceResult.isInside && !geofenceResult.bypassed)) {
     isBypassed = true;
     bypassReason = policy.geofenceStrict ? (workMode || "GEOFENCE_FLEXIBLE") : "OPEN_LOCATION";
     if (!geofenceResult) {
@@ -1206,11 +1216,14 @@ const getTodayStatus = async (userId, organizationId) => {
     };
   }
 
-  const attendance = await findOpenAttendance(employee.id, organizationId, new Date(), {
-    shift: true,
-    branch: true,
-    events: { orderBy: { timestamp: "desc" } },
-  });
+  const [attendance, policy] = await Promise.all([
+    findOpenAttendance(employee.id, organizationId, new Date(), {
+      shift: true,
+      branch: true,
+      events: { orderBy: { timestamp: "desc" } },
+    }),
+    getPolicy(organizationId),
+  ]);
 
   const hasCheckedIn = Boolean(attendance?.checkIn);
   const hasCheckedOut = Boolean(attendance?.checkOut);
@@ -1236,6 +1249,13 @@ const getTodayStatus = async (userId, organizationId) => {
       employeeCode: employee.employeeCode,
       branch: employee.branch,
       shift: employee.shift,
+    },
+    // Lets the punch screen tell employees the rule before they tap.
+    locationPolicy: {
+      mode: policy.geofenceStrict ? "OFFICE_ONLY" : "ANYWHERE",
+      allowWfh: policy.allowWfh,
+      branchName: employee.branch?.name || null,
+      radiusMeters: employee.branch?.latitude && employee.branch?.longitude ? employee.branch.radiusMeters || 200 : null,
     },
     attendance,
   };
@@ -1292,6 +1312,8 @@ const getLiveToday = async (organizationId) => {
       status: attendance?.status || "ABSENT",
       checkIn: attendance?.checkIn || null,
       checkOut: attendance?.checkOut || null,
+      checkInLocation: attendance?.checkInLocation || null,
+      checkOutLocation: attendance?.checkOutLocation || null,
       location,
       clockedIn,
     };
@@ -1442,7 +1464,8 @@ const getAttendanceSummary = async (organizationId, targetDate = new Date(), bra
 const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, from, to, status, page = 1, limit = 20 }) => {
   const where = { organizationId };
 
-  if (role === "EMPLOYEE") {
+  // Only admins and managers see the team; every other role sees only itself.
+  if (!ADMIN_ROLES.includes(role)) {
     const employee = await prisma.employee.findFirst({ where: { userId, organizationId } });
     if (!employee) return { success: true, total: 0, page: 1, limit: parseInt(limit) || 20, totalPages: 0, records: [] };
     where.employeeId = employee.id;
@@ -1468,9 +1491,9 @@ const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, 
       include: {
         employee: {
           select: {
-            id: true, firstName: true, lastName: true, employeeCode: true,
+            id: true, firstName: true, lastName: true, employeeCode: true, designation: true, avatarUrl: true,
             department: { select: { id: true, name: true } },
-            user: { select: { email: true } },
+            user: { select: { email: true, role: true } },
           },
         },
         branch: { select: { id: true, name: true, radiusMeters: true } },

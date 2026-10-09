@@ -4,7 +4,11 @@ const {
   authenticate,
   authorizeRoles,
 } = require("../middleware/auth.middleware");
-const { authRateLimiter, sessionRateLimiter, loginRateLimiter } = require("../middleware/rateLimiter.middleware");
+const {
+  authRateLimiter,
+  sessionRateLimiter,
+  loginRateLimiter,
+} = require("../middleware/rateLimiter.middleware");
 const { validate, schemas } = require("../middleware/validate.middleware");
 const { imageUploader, handleUploadErrors } = require("../middleware/upload.middleware");
 const { protectCookieMutation } = require("../middleware/requestSecurity.middleware");
@@ -80,6 +84,7 @@ router.post(
 router.post(
   "/activate-plan",
   authenticate,
+  authRateLimiter,
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
   validate(schemas.activatePlan),
   authController.activatePlan,

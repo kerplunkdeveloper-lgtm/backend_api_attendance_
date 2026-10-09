@@ -17,6 +17,7 @@ const createRateLimiter = ({
   keyBy = "ip",
   message,
   keyFn,
+  subjectFn,
   failuresOnly = false,
   namespace = `limiter-${++limiterSequence}`,
 }) => {
@@ -53,7 +54,9 @@ const createRateLimiter = ({
 
   return (req, res, next) => {
     let subject;
-    if (keyBy === "user" && req.user?.id) {
+    if (subjectFn) {
+      subject = subjectFn(req);
+    } else if (keyBy === "user" && req.user?.id) {
       subject = `user:${req.user.id}`;
     } else {
       // req.ip only trusts forwarding headers when Express is explicitly
@@ -130,7 +133,6 @@ const loginRateLimiter = createRateLimiter({
 });
 
 // Session restoration happens on page loads and should not consume the much
-// tighter credential-attempt budget used for login and password recovery.
 const sessionRateLimiter = createRateLimiter({
   namespace: "session",
   windowMs: 60 * 1000,

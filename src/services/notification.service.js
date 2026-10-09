@@ -29,6 +29,22 @@ class NotificationService {
   }
 
   /**
+   * Send one in-app notification to every active user in the organization.
+   */
+  async broadcastToOrganization(organizationId, { title, message, type = "SYSTEM" }) {
+    const users = await prisma.user.findMany({
+      where: { organizationId, isActive: true },
+      select: { id: true },
+    });
+    if (users.length === 0) return { sent: 0 };
+
+    const result = await prisma.notification.createMany({
+      data: users.map((user) => ({ organizationId, userId: user.id, title, message, type })),
+    });
+    return { sent: result.count };
+  }
+
+  /**
    * Get notifications for the logged in user
    */
   async getUserNotifications(userId, organizationId) {
@@ -106,12 +122,19 @@ class NotificationService {
       },
     });
 
-    let sentCount = 0;
-    const sentUsers = [];
+    // Single "now" for the whole pass — the loop below used to call `new Date()`
+    // per employee, which only drifted the result by however long the loop
+    // itself took to run.
+    const reminderNow = new Date();
 
+    // In-memory window filter first. Previously every employee issued up to
+    // two sequential queries regardless of whether they were even due for a
+    // reminder; for most of the day (outside each org's ~1h morning window)
+    // that filter now empties `due` and the function returns without
+    // touching the database at all.
+    const due = [];
     for (const emp of activeEmployees) {
       if (!emp.userId) continue;
-      const reminderNow = new Date();
       const timeZone = zoneOf(emp);
       const startMinutes = clockMinutes(emp.shift?.startTime || "09:00");
       if (
@@ -121,69 +144,87 @@ class NotificationService {
       ) {
         continue;
       }
+      due.push({ emp, startOfToday: getLocalDateOnly(reminderNow, timeZone) });
+    }
 
-      const startOfToday = getLocalDateOnly(reminderNow, timeZone);
+    if (due.length === 0) {
+      return { success: true, sentCount: 0, sentUsers: [], timestamp: reminderNow.toISOString() };
+    }
 
-      const todayAttendance = await prisma.attendance.findFirst({
+    const employeeIds = due.map((d) => d.emp.id);
+    const userIds = due.map((d) => d.emp.userId);
+    const earliestStartOfToday = new Date(Math.min(...due.map((d) => d.startOfToday.getTime())));
+
+    // Two queries cover every candidate, however many there are, instead of
+    // up to two per employee.
+    const [attendanceToday, candidateNotifications] = await Promise.all([
+      prisma.attendance.findMany({
+        where: { employeeId: { in: employeeIds }, checkIn: { not: null } },
+        select: { employeeId: true, date: true },
+      }),
+      prisma.notification.findMany({
         where: {
-          employeeId: emp.id,
-          date: startOfToday,
-          checkIn: { not: null },
+          userId: { in: userIds },
+          title: { contains: "Morning Shift Check-In" },
+          createdAt: { gte: earliestStartOfToday },
         },
-      });
+        select: { userId: true, createdAt: true },
+      }),
+    ]);
 
-      if (!todayAttendance) {
-        const existingNotification = await prisma.notification.findFirst({
-          where: {
-            userId: emp.userId,
-            createdAt: { gte: startOfToday },
-            title: { contains: "Morning Shift Check-In" },
-          },
-        });
+    const hasCheckedInByDate = new Set(attendanceToday.map((a) => `${a.employeeId}:${a.date.getTime()}`));
+    const notificationsByUser = new Map();
+    for (const n of candidateNotifications) {
+      const list = notificationsByUser.get(n.userId);
+      if (list) list.push(n.createdAt);
+      else notificationsByUser.set(n.userId, [n.createdAt]);
+    }
 
-        if (!existingNotification) {
-          const shiftTime = emp.shift?.startTime || "09:00";
-          const shiftName = emp.shift?.name || "General Morning Shift";
+    const toNotify = due.filter(({ emp, startOfToday }) => {
+      if (hasCheckedInByDate.has(`${emp.id}:${startOfToday.getTime()}`)) return false;
+      const sentAt = notificationsByUser.get(emp.userId);
+      return !sentAt?.some((createdAt) => createdAt >= startOfToday);
+    });
 
-          await prisma.notification.create({
-            data: {
-              organizationId: emp.organizationId,
-              userId: emp.userId,
-              title: "Morning Shift Check-In Reminder",
-              message: `Good morning, ${emp.firstName}! Shift starts at ${shiftTime}. Clock in on time to avoid a late mark.`,
-              type: "ATTENDANCE",
-            },
-          });
+    if (toNotify.length === 0) {
+      return { success: true, sentCount: 0, sentUsers: [], timestamp: reminderNow.toISOString() };
+    }
 
-          if (emp.user?.email) {
-            emailService
-              .sendShiftReminderEmail(emp.user.email, emp.firstName, {
-                shiftName,
-                shiftTime,
-              })
-              .catch((e) => console.warn(`[MorningReminder:Email] ${e.message}`));
-          }
+    await prisma.notification.createMany({
+      data: toNotify.map(({ emp }) => ({
+        organizationId: emp.organizationId,
+        userId: emp.userId,
+        title: "Morning Shift Check-In Reminder",
+        message: `Good morning, ${emp.firstName}! Shift starts at ${emp.shift?.startTime || "09:00"}. Clock in on time to avoid a late mark.`,
+        type: "ATTENDANCE",
+      })),
+    });
 
-          if (emp.phone) {
-            whatsappService
-              .sendShiftReminderWhatsApp(emp.phone, emp.firstName, {
-                shiftName,
-                shiftTime,
-              })
-              .catch((e) => console.warn(`[MorningReminder:WhatsApp] ${e.message}`));
-          }
+    const sentUsers = [];
+    for (const { emp } of toNotify) {
+      const shiftTime = emp.shift?.startTime || "09:00";
+      const shiftName = emp.shift?.name || "General Morning Shift";
 
-          sentCount++;
-          sentUsers.push(`${emp.firstName} (${emp.userId})`);
-        }
+      // Fire-and-forget, same as before: a slow or failing provider must
+      // never hold up the reminder pass for everyone behind it in the loop.
+      if (emp.user?.email) {
+        emailService
+          .sendShiftReminderEmail(emp.user.email, emp.firstName, { shiftName, shiftTime })
+          .catch((e) => console.warn(`[MorningReminder:Email] ${e.message}`));
       }
+      if (emp.phone) {
+        whatsappService
+          .sendShiftReminderWhatsApp(emp.phone, emp.firstName, { shiftName, shiftTime })
+          .catch((e) => console.warn(`[MorningReminder:WhatsApp] ${e.message}`));
+      }
+      sentUsers.push(`${emp.firstName} (${emp.userId})`);
     }
 
     return {
       success: true,
-      sentCount,
+      sentCount: sentUsers.length,
       sentUsers,
-      timestamp: new Date().toISOString(),
+      timestamp: reminderNow.toISOString(),
     };
   }
 
@@ -213,12 +254,11 @@ class NotificationService {
       },
     });
 
-    let sentCount = 0;
-    const sentUsers = [];
+    const reminderNow = new Date();
 
+    const due = [];
     for (const emp of activeEmployees) {
       if (!emp.userId) continue;
-      const reminderNow = new Date();
       const timeZone = zoneOf(emp);
       const endMinutes = clockMinutes(emp.shift?.endTime || "18:00");
       if (
@@ -228,48 +268,67 @@ class NotificationService {
       ) {
         continue;
       }
-
-      const startOfToday = getLocalDateOnly(reminderNow, timeZone);
-
-      const todayAttendance = await prisma.attendance.findFirst({
-        where: {
-          employeeId: emp.id,
-          date: startOfToday,
-          checkIn: { not: null },
-        },
-      });
-
-      if (todayAttendance && !todayAttendance.checkOut) {
-        const existingNotification = await prisma.notification.findFirst({
-          where: {
-            userId: emp.userId,
-            createdAt: { gte: startOfToday },
-            title: { contains: "Shift Completion" },
-          },
-        });
-
-        if (!existingNotification) {
-          const endTime = emp.shift?.endTime || "18:00";
-          await prisma.notification.create({
-            data: {
-              organizationId: emp.organizationId,
-              userId: emp.userId,
-              title: "Shift Completion & Check-Out Reminder",
-              message: `Great job today, ${emp.firstName}! Working hours ended at ${endTime}. Clock out to close your shift.`,
-              type: "ATTENDANCE",
-            },
-          });
-          sentCount++;
-          sentUsers.push(`${emp.firstName} (${emp.userId})`);
-        }
-      }
+      due.push({ emp, startOfToday: getLocalDateOnly(reminderNow, timeZone) });
     }
 
+    if (due.length === 0) {
+      return { success: true, sentCount: 0, sentUsers: [], timestamp: reminderNow.toISOString() };
+    }
+
+    const employeeIds = due.map((d) => d.emp.id);
+    const userIds = due.map((d) => d.emp.userId);
+    const earliestStartOfToday = new Date(Math.min(...due.map((d) => d.startOfToday.getTime())));
+
+    const [attendanceToday, candidateNotifications] = await Promise.all([
+      prisma.attendance.findMany({
+        where: { employeeId: { in: employeeIds }, checkIn: { not: null } },
+        select: { employeeId: true, date: true, checkOut: true },
+      }),
+      prisma.notification.findMany({
+        where: {
+          userId: { in: userIds },
+          title: { contains: "Shift Completion" },
+          createdAt: { gte: earliestStartOfToday },
+        },
+        select: { userId: true, createdAt: true },
+      }),
+    ]);
+
+    const attendanceByEmployeeDate = new Map(attendanceToday.map((a) => [`${a.employeeId}:${a.date.getTime()}`, a]));
+    const notificationsByUser = new Map();
+    for (const n of candidateNotifications) {
+      const list = notificationsByUser.get(n.userId);
+      if (list) list.push(n.createdAt);
+      else notificationsByUser.set(n.userId, [n.createdAt]);
+    }
+
+    const toNotify = due.filter(({ emp, startOfToday }) => {
+      const attendance = attendanceByEmployeeDate.get(`${emp.id}:${startOfToday.getTime()}`);
+      if (!attendance || attendance.checkOut) return false;
+      const sentAt = notificationsByUser.get(emp.userId);
+      return !sentAt?.some((createdAt) => createdAt >= startOfToday);
+    });
+
+    if (toNotify.length === 0) {
+      return { success: true, sentCount: 0, sentUsers: [], timestamp: reminderNow.toISOString() };
+    }
+
+    await prisma.notification.createMany({
+      data: toNotify.map(({ emp }) => ({
+        organizationId: emp.organizationId,
+        userId: emp.userId,
+        title: "Shift Completion & Check-Out Reminder",
+        message: `Great job today, ${emp.firstName}! Working hours ended at ${emp.shift?.endTime || "18:00"}. Clock out to close your shift.`,
+        type: "ATTENDANCE",
+      })),
+    });
+
+    const sentUsers = toNotify.map(({ emp }) => `${emp.firstName} (${emp.userId})`);
     return {
       success: true,
-      sentCount,
+      sentCount: sentUsers.length,
       sentUsers,
-      timestamp: new Date().toISOString(),
+      timestamp: reminderNow.toISOString(),
     };
   }
 
@@ -312,91 +371,101 @@ class NotificationService {
       select: { id: true, organizationId: true, branchId: true, shiftId: true, firstName: true, lastName: true },
     });
 
-    let markedCount = 0;
+    if (activeEmployees.length === 0) {
+      return { success: true, markedCount: 0, markedEmployees: [], date: today.toISOString().split("T")[0] };
+    }
+
+    const employeeIds = activeEmployees.map((e) => e.id);
+    const orgIds = [...new Set(activeEmployees.map((e) => e.organizationId))];
+    const shiftIds = [...new Set(activeEmployees.map((e) => e.shiftId).filter(Boolean))];
+
+    // Previously up to four sequential queries per employee (existing
+    // attendance, holiday, approved leave, shift) — now four queries total,
+    // independent of how many employees are platform-wide.
+    const [existingToday, holidaysToday, approvedLeavesToday, shifts] = await Promise.all([
+      prisma.attendance.findMany({
+        where: { employeeId: { in: employeeIds }, date: today },
+        select: { employeeId: true },
+      }),
+      prisma.holiday.findMany({
+        where: { organizationId: { in: orgIds }, date: today, isOptional: false },
+        select: { organizationId: true, branchId: true },
+      }),
+      prisma.leaveRequest.findMany({
+        where: { employeeId: { in: employeeIds }, status: "APPROVED", startDate: { lte: today }, endDate: { gte: today } },
+        select: { employeeId: true },
+      }),
+      shiftIds.length
+        ? prisma.shift.findMany({ where: { id: { in: shiftIds } }, select: { id: true, workingDays: true } })
+        : Promise.resolve([]),
+    ]);
+
+    const hasAttendanceToday = new Set(existingToday.map((a) => a.employeeId));
+    const onLeaveToday = new Set(approvedLeavesToday.map((l) => l.employeeId));
+    const shiftById = new Map(shifts.map((s) => [s.id, s]));
+    // Mirrors the original OR: a holiday row with no branchId covers the
+    // whole organization; one with a branchId covers only that branch.
+    const orgWideHoliday = new Set(holidaysToday.filter((h) => !h.branchId).map((h) => h.organizationId));
+    const branchHoliday = new Set(holidaysToday.filter((h) => h.branchId).map((h) => `${h.organizationId}:${h.branchId}`));
+    const isHolidayFor = (emp) =>
+      orgWideHoliday.has(emp.organizationId) || (emp.branchId && branchHoliday.has(`${emp.organizationId}:${emp.branchId}`));
+
+    const dayOfWeek = today.getDay(); // 0=Sun, 1=Mon...
+    const weekOffRecords = [];
+    const absentRecords = [];
     const markedEmployees = [];
 
     for (const emp of activeEmployees) {
-      // Check if already has any attendance record for today
-      const existing = await prisma.attendance.findUnique({
-        where: { employeeId_date: { employeeId: emp.id, date: today } },
-      });
+      if (hasAttendanceToday.has(emp.id)) continue; // Already marked (PRESENT, ON_LEAVE, HOLIDAY, etc.)
+      if (isHolidayFor(emp)) continue; // Holiday — skip
+      if (onLeaveToday.has(emp.id)) continue; // On leave — skip
 
-      if (existing) continue; // Already marked (PRESENT, ON_LEAVE, HOLIDAY, etc.)
-
-      // Check if today is a holiday for this employee's branch
-      const holiday = await prisma.holiday.findFirst({
-        where: {
-          organizationId: emp.organizationId,
-          date: today,
-          isOptional: false,
-          OR: [{ branchId: null }, ...(emp.branchId ? [{ branchId: emp.branchId }] : [])],
-        },
-      });
-
-      if (holiday) continue; // Holiday — skip
-
-      // Check for approved leave
-      const approvedLeave = await prisma.leaveRequest.findFirst({
-        where: {
-          employeeId: emp.id,
-          status: "APPROVED",
-          startDate: { lte: today },
-          endDate: { gte: today },
-        },
-      });
-
-      if (approvedLeave) continue; // On leave — skip
-
-      // Check if today is a scheduled rest day (WEEK_OFF)
-      if (emp.shiftId) {
-        const shift = await prisma.shift.findUnique({ where: { id: emp.shiftId } });
-        if (shift && shift.workingDays) {
-          const workingDays = shift.workingDays.split(",").map((d) => parseInt(d.trim()));
-          const dayOfWeek = today.getDay(); // 0=Sun, 1=Mon...
-          if (!workingDays.includes(dayOfWeek)) {
-            try {
-              await prisma.attendance.create({
-                data: {
-                  organizationId: emp.organizationId,
-                  employeeId: emp.id,
-                  branchId: emp.branchId || null,
-                  shiftId: emp.shiftId || null,
-                  date: today,
-                  status: "WEEK_OFF",
-                  workingMinutes: 0,
-                },
-              });
-            } catch (weekOffErr) {
-              console.warn("[markAbsent] Failed to upsert WEEK_OFF record:", weekOffErr.message);
-            }
-            continue; // Week-off — skip marking absent
-          }
-        }
-      }
-
-      // Mark as ABSENT
-      try {
-        await prisma.attendance.create({
-          data: {
+      const shift = emp.shiftId ? shiftById.get(emp.shiftId) : null;
+      if (shift?.workingDays) {
+        const workingDays = shift.workingDays.split(",").map((d) => parseInt(d.trim(), 10));
+        if (!workingDays.includes(dayOfWeek)) {
+          weekOffRecords.push({
             organizationId: emp.organizationId,
             employeeId: emp.id,
             branchId: emp.branchId || null,
             shiftId: emp.shiftId || null,
             date: today,
-            status: "ABSENT",
+            status: "WEEK_OFF",
             workingMinutes: 0,
-          },
-        });
-        markedCount++;
-        markedEmployees.push(`${emp.firstName} ${emp.lastName || ""}`.trim());
-      } catch (err) {
-        // Ignore unique constraint errors (race condition)
-        if (!err.message?.includes("Unique constraint")) {
-          console.error(`[AbsentMarker] Failed for employee ${emp.id}:`, err.message);
+          });
+          continue; // Week-off — skip marking absent
         }
       }
+
+      absentRecords.push({
+        organizationId: emp.organizationId,
+        employeeId: emp.id,
+        branchId: emp.branchId || null,
+        shiftId: emp.shiftId || null,
+        date: today,
+        status: "ABSENT",
+        workingMinutes: 0,
+      });
+      markedEmployees.push(`${emp.firstName} ${emp.lastName || ""}`.trim());
     }
 
+    // skipDuplicates absorbs the same race the original try/catch ignored: a
+    // punch landing between the reads above and this write.
+    const [, absentResult] = await Promise.all([
+      weekOffRecords.length
+        ? prisma.attendance.createMany({ data: weekOffRecords, skipDuplicates: true }).catch((err) =>
+            console.warn("[markAbsent] Failed to create WEEK_OFF records:", err.message),
+          )
+        : null,
+      absentRecords.length
+        ? prisma.attendance.createMany({ data: absentRecords, skipDuplicates: true }).catch((err) => {
+            console.error("[AbsentMarker] Failed to create ABSENT records:", err.message);
+            return { count: 0 };
+          })
+        : { count: 0 },
+    ]);
+
+    const markedCount = absentResult?.count ?? 0;
     console.log(`[AbsentMarker] Marked ${markedCount} employees ABSENT for ${today.toISOString().split("T")[0]}`);
     return { success: true, markedCount, markedEmployees, date: today.toISOString().split("T")[0] };
   }

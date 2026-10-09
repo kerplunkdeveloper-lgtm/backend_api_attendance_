@@ -10,3 +10,14 @@ yarn-error.log*
 .DS_Store
 *.log
 .neon
+
+# Local agent instructions and workspace state
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.agents/
+.agent/
+.claude/
+.gemini/
+.gsd/
+.codex/

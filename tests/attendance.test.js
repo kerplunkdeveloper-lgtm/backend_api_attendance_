@@ -12,7 +12,7 @@ const employee = {
   branch: null,
 };
 
-mockPrisma({
+const prisma = mockPrisma({
   organization: {
     findUnique: async () => ({ timezone: "UTC" }),
   },
@@ -61,5 +61,20 @@ describe("attendance", () => {
         }),
       /Already checked in/
     );
+  });
+
+  it("refuses an office-mode punch without location when check-in is office only", async () => {
+    const original = prisma.branch.findMany;
+    prisma.branch.findMany = async () => [
+      { id: "br-1", name: "Andheri office", latitude: "19.1197", longitude: "72.8468", radiusMeters: 200 },
+    ];
+    try {
+      await assert.rejects(
+        () => checkIn({ userId: "user-1", organizationId: "org-1", workMode: "OFFICE" }),
+        (err) => err.code === "LOCATION_REQUIRED" && err.statusCode === 403
+      );
+    } finally {
+      prisma.branch.findMany = original;
+    }
   });
 });

@@ -44,6 +44,15 @@ class LeaveController {
     }
   }
 
+  async getEligibility(req, res) {
+    try {
+      const result = await leaveService.getEligibility(req.user.id, req.user.organizationId);
+      return res.status(200).json({ success: true, data: result });
+    } catch (err) {
+      return res.status(err.statusCode || 500).json({ success: false, message: err.message });
+    }
+  }
+
   async createLeaveRequest(req, res) {
     try {
       const result = await leaveService.createLeaveRequest(

@@ -25,6 +25,18 @@ const withoutSensitiveEmployeeFields = (employee) => {
   return safe;
 };
 
+const GENDER_VALUES = ["MALE", "FEMALE"];
+
+/** Blank means "not recorded". Anything else must be Male or Female. */
+const normalizeGender = (value) => {
+  if (value === undefined || value === null || String(value).trim() === "" || String(value).trim().toUpperCase() === "NOT_SPECIFIED") return null;
+  const gender = String(value).trim().toUpperCase();
+  if (!GENDER_VALUES.includes(gender)) {
+    throw Object.assign(new Error("Gender must be Male or Female"), { statusCode: 400 });
+  }
+  return gender;
+};
+
 const MANAGER_UPDATE_FIELDS = new Set([
   "firstName", "lastName", "phone", "status", "branchId", "departmentId",
   "shiftId", "designation", "employmentType", "reportingManagerId", "avatarUrl",
@@ -57,6 +69,7 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
   }
 
   const cleanEmail = email.trim().toLowerCase();
+  const gender = normalizeGender(data.gender);
 
   const existingUser = await prisma.user.findUnique({
     where: {
@@ -115,6 +128,12 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
     if (!shift) throw new Error("Specified shift does not exist in this organization");
   }
 
+  if (data.reportingManagerId) {
+    // Reporting manager must be a colleague in the same organization.
+    const manager = await prisma.employee.findFirst({ where: { id: String(data.reportingManagerId), organizationId, deletedAt: null }, select: { id: true } });
+    if (!manager) throw Object.assign(new Error("Reporting manager not found in this organization"), { statusCode: 400 });
+  }
+
   const tempPassword = password && String(password).trim() ? String(password).trim() : generateTempPassword();
   const salt = await bcrypt.genSalt(10);
   const passwordHash = await bcrypt.hash(tempPassword, salt);
@@ -161,6 +180,7 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
         designation: data.designation ? String(data.designation).trim() : null,
         dateOfJoining: data.dateOfJoining ? new Date(data.dateOfJoining) : null,
         dateOfBirth: data.dateOfBirth ? new Date(data.dateOfBirth) : null,
+        gender,
         employmentType: data.employmentType ? String(data.employmentType).trim() : null,
         reportingManagerId: data.reportingManagerId || null,
         workEmail: cleanEmail,
@@ -238,6 +258,10 @@ const getEmployees = async (organizationId, query = {}) => {
   if (asText(query.branchId)) where.branchId = asText(query.branchId);
   if (asText(query.shiftId)) where.shiftId = asText(query.shiftId);
   if (VALID_ROLES.includes(asText(query.role))) where.user = { role: asText(query.role) };
+  // Login access is separate from employment status: OFF means the account was deactivated.
+  if (query.loginAccess === "ON" || query.loginAccess === "OFF") {
+    where.user = { ...(where.user || {}), isActive: query.loginAccess === "ON" };
+  }
   if (query.search) {
     const q = String(query.search).trim();
     if (q) {
@@ -256,11 +280,13 @@ const getEmployees = async (organizationId, query = {}) => {
       where,
       include: {
         user: {
-          select: { id: true, email: true, role: true, avatarUrl: true },
+          select: { id: true, email: true, role: true, avatarUrl: true, isActive: true },
         },
         branch: true,
         department: true,
         shift: true,
+        // Route is limited to admins and managers, so the salary column is safe here.
+        salaryStructure: { select: { annualCtc: true, monthlyCtc: true } },
       },
       orderBy: { createdAt: "desc" },
       take,
@@ -351,6 +377,7 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
     designation,
     dateOfJoining,
     dateOfBirth,
+    gender,
     employmentType,
     reportingManagerId,
     workEmail,
@@ -364,6 +391,8 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
     emergencyContactPhone,
     address,
   } = data;
+
+  const genderToSet = gender !== undefined ? normalizeGender(gender) : undefined;
 
   if (branchId) {
     const branch = await prisma.branch.findFirst({
@@ -384,6 +413,12 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
       where: { id: shiftId, organizationId },
     });
     if (!shift) throw new Error("Shift not found in this organization");
+  }
+
+  if (reportingManagerId) {
+    // Reporting manager must be a colleague in the same organization.
+    const manager = await prisma.employee.findFirst({ where: { id: String(reportingManagerId), organizationId, deletedAt: null }, select: { id: true } });
+    if (!manager) throw Object.assign(new Error("Reporting manager not found in this organization"), { statusCode: 400 });
   }
 
   const avatarToSet = data.avatarUrl !== undefined ? data.avatarUrl : (
@@ -428,6 +463,7 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
         ...(designation !== undefined ? { designation: designation ? String(designation).trim() : null } : {}),
         ...(dateOfJoining !== undefined ? { dateOfJoining: dateOfJoining ? new Date(dateOfJoining) : null } : {}),
         ...(dateOfBirth !== undefined ? { dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : null } : {}),
+        ...(genderToSet !== undefined ? { gender: genderToSet } : {}),
         ...(employmentType !== undefined ? { employmentType: employmentType ? String(employmentType).trim() : null } : {}),
         ...(reportingManagerId !== undefined ? { reportingManagerId: reportingManagerId || null } : {}),
         ...(workEmail !== undefined ? { workEmail: workEmail ? String(workEmail).trim().toLowerCase() : null } : {}),
@@ -614,6 +650,7 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
   if (!email || !email.trim()) throw new Error("Employee email is required.");
 
   const cleanEmail = email.trim().toLowerCase();
+  const gender = normalizeGender(data.gender);
 
   const existing = await prisma.user.findUnique({
     where: { organizationId_email: { organizationId, email: cleanEmail } },
@@ -668,6 +705,7 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
         branchId: branchId || null,
         departmentId: departmentId || null,
         shiftId: shiftId || null,
+        gender,
         panNumber: data.panNumber ? String(data.panNumber).trim().toUpperCase() : null,
         uanNumber: data.uanNumber ? String(data.uanNumber).trim() : null,
         esiNumber: data.esiNumber ? String(data.esiNumber).trim() : null,

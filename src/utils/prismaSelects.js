@@ -18,6 +18,7 @@ const organizationSelect = {
   unlockCodeUsedAt: true,
   planActivatedAt: true,
   planLocked: true,
+  logoUrl: true,
   suspendedAt: true,
   subscription: true,
 };
@@ -28,6 +29,12 @@ const policySelect = {
   id: true,
   organizationId: true,
   workingDaysPerMonth: true,
+  probationMonths: true,
+  monthlyPermissionHours: true,
+  permissionRequiresProbation: true,
+  payrollCycleStartDay: true,
+  payrollCycleEndDay: true,
+  payrollDayBasis: true,
   halfDayThresholdMinutes: true,
   maxLatesBeforeDeduction: true,
   lateDeductionPercent: true,
@@ -38,7 +45,11 @@ const policySelect = {
   updatedAt: true,
 };
 
+/** Opt back in to the user secrets that the client omits by default (see config/database.js). */
+const WITH_SECRETS = { passwordHash: false, twoFactorSecret: false, twoFactorBackupCodes: false, twoFactorLastStep: false };
+
 module.exports = {
+  WITH_SECRETS,
   organizationSelect,
   organizationWithSubscription,
   policySelect,

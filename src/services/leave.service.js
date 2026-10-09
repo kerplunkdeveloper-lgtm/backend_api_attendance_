@@ -5,6 +5,7 @@ const holidayService = require("./holiday.service");
 const emailService = require("./email.service");
 const whatsappService = require("./whatsapp.service");
 const notificationService = require("./notification.service");
+const policyService = require("./policy.service");
 
 const ADMIN_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"];
 
@@ -59,6 +60,33 @@ const classifyRangeDays = (start, end, holidayDateKeys, workingDaySet) => {
 };
 
 class LeaveService {
+  async getEligibilityForEmployee(employee, organizationId) {
+    const policy = await policyService.getPolicy(organizationId);
+    const joinedAt = employee.dateOfJoining || employee.createdAt;
+    const eligibleFrom = new Date(joinedAt || new Date());
+    eligibleFrom.setMonth(eligibleFrom.getMonth() + Number(policy.probationMonths || 0));
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    eligibleFrom.setHours(0, 0, 0, 0);
+    const eligible = !policy.permissionRequiresProbation || today >= eligibleFrom;
+    const remainingDays = eligible ? 0 : Math.max(0, Math.ceil((eligibleFrom - today) / 86400000));
+    return {
+      eligible,
+      joinedAt,
+      eligibleFrom,
+      remainingDays,
+      probationMonths: Number(policy.probationMonths || 0),
+      monthlyPermissionHours: Number(policy.monthlyPermissionHours || 0),
+      permissionRequiresProbation: Boolean(policy.permissionRequiresProbation),
+    };
+  }
+
+  async getEligibility(userId, organizationId) {
+    const employee = await prisma.employee.findFirst({ where: { userId, organizationId } });
+    if (!employee) return null;
+    return this.getEligibilityForEmployee(employee, organizationId);
+  }
+
   /**
    * 1. Create Leave Type (Company Admin)
    */
@@ -215,6 +243,8 @@ class LeaveService {
       throw error;
     }
 
+    const eligibility = await this.getEligibilityForEmployee(employee, organizationId);
+
     const start = await getOrgDateOnly(organizationId, new Date(startDate));
     const end = await getOrgDateOnly(organizationId, new Date(endDate));
 
@@ -315,6 +345,11 @@ class LeaveService {
 
     // Check balance for paid leaves
     if (leaveType.isPaid) {
+      if (!eligibility.eligible) {
+        const error = new Error(`Paid leave becomes available after the ${eligibility.probationMonths}-month eligibility period. ${eligibility.remainingDays} day(s) remaining.`);
+        error.statusCode = 400;
+        throw error;
+      }
       const currentYear = start.getUTCFullYear();
       const balance = await prisma.leaveBalance.findUnique({
         where: {

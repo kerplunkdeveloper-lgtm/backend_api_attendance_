@@ -1,8 +1,15 @@
 const prisma = require("../config/database");
 const { policySelect } = require("../utils/prismaSelects");
+const { normalizeCycleDay, normalizeDayBasis } = require("../utils/payrollCycle");
 
 const DEFAULT_POLICY = {
   workingDaysPerMonth: 26,
+  probationMonths: 3,
+  monthlyPermissionHours: 3,
+  permissionRequiresProbation: true,
+  payrollCycleStartDay: 1,
+  payrollCycleEndDay: 31,
+  payrollDayBasis: "ACTUAL_DAYS",
   halfDayThresholdMinutes: 240,
   maxLatesBeforeDeduction: 3,
   lateDeductionPercent: 0.25,
@@ -35,6 +42,7 @@ class PolicyService {
     return {
       ...policy,
       lateDeductionPercent: Number(policy.lateDeductionPercent),
+      monthlyPermissionHours: Number(policy.monthlyPermissionHours),
       isDefault: false,
     };
   }
@@ -46,6 +54,12 @@ class PolicyService {
   async upsertPolicy(organizationId, data) {
     const {
       workingDaysPerMonth,
+      probationMonths,
+      monthlyPermissionHours,
+      permissionRequiresProbation,
+      payrollCycleStartDay,
+      payrollCycleEndDay,
+      payrollDayBasis,
       halfDayThresholdMinutes,
       maxLatesBeforeDeduction,
       lateDeductionPercent,
@@ -57,6 +71,12 @@ class PolicyService {
 
     const payload = {};
     if (workingDaysPerMonth !== undefined) payload.workingDaysPerMonth = parseInt(workingDaysPerMonth);
+    if (probationMonths !== undefined) payload.probationMonths = Math.max(0, parseInt(probationMonths));
+    if (monthlyPermissionHours !== undefined) payload.monthlyPermissionHours = Math.max(0, Number(monthlyPermissionHours));
+    if (permissionRequiresProbation !== undefined) payload.permissionRequiresProbation = parseBoolean(permissionRequiresProbation);
+    if (payrollCycleStartDay !== undefined) payload.payrollCycleStartDay = normalizeCycleDay(payrollCycleStartDay, DEFAULT_POLICY.payrollCycleStartDay);
+    if (payrollCycleEndDay !== undefined) payload.payrollCycleEndDay = normalizeCycleDay(payrollCycleEndDay, DEFAULT_POLICY.payrollCycleEndDay);
+    if (payrollDayBasis !== undefined) payload.payrollDayBasis = normalizeDayBasis(payrollDayBasis, DEFAULT_POLICY.payrollDayBasis);
     if (halfDayThresholdMinutes !== undefined) payload.halfDayThresholdMinutes = parseInt(halfDayThresholdMinutes);
     if (maxLatesBeforeDeduction !== undefined) payload.maxLatesBeforeDeduction = parseInt(maxLatesBeforeDeduction);
     if (lateDeductionPercent !== undefined) payload.lateDeductionPercent = Number(lateDeductionPercent);
@@ -75,6 +95,7 @@ class PolicyService {
     return {
       ...policy,
       lateDeductionPercent: Number(policy.lateDeductionPercent),
+      monthlyPermissionHours: Number(policy.monthlyPermissionHours),
     };
   }
 }

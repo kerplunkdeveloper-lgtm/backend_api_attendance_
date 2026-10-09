@@ -678,6 +678,9 @@ class OnboardingService {
           designation: candidate.designation || null,
           dateOfJoining: candidate.expectedJoinDate || candidate.dateOfJoining || null,
           dateOfBirth: candidate.dateOfBirth || null,
+          gender: ["MALE", "FEMALE"].includes(String(candidate.gender || "").trim().toUpperCase())
+            ? String(candidate.gender).trim().toUpperCase()
+            : null,
           workEmail: candidate.email || null,
           panNumber: candidate.panNumber || null,
           uanNumber: candidate.uanNumber || null,

@@ -1,9 +1,12 @@
 const requiredOneOf = (names) => {
   if (names.some((name) => String(process.env[name] || "").trim())) return;
-  throw new Error(`Missing required environment variable: ${names.join(" or ")}`);
+  throw new Error(
+    `Missing required environment variable: ${names.join(" or ")}`,
+  );
 };
 
-// Vercel production frontend. Keep the former Netlify origin trusted during transition.
+// The production frontend is now hosted on Vercel. Keep the previous Netlify
+// origin trusted during the transition so existing links do not break.
 const DEFAULT_PRODUCTION_FRONTEND_URL = "https://workpluse-frontend.vercel.app";
 const LEGACY_PRODUCTION_FRONTEND_URL = "https://workplusein.netlify.app";
 
@@ -12,7 +15,8 @@ const validateUrl = (name) => {
   if (!value) throw new Error(`Missing required environment variable: ${name}`);
   try {
     const url = new URL(value);
-    if (!/^https?:$/.test(url.protocol)) throw new Error("unsupported protocol");
+    if (!/^https?:$/.test(url.protocol))
+      throw new Error("unsupported protocol");
   } catch {
     throw new Error(`${name} must be an absolute HTTP(S) URL`);
   }
@@ -46,7 +50,9 @@ const validateEnvironment = () => {
   requiredOneOf(["RAZORPAY_KEY_SECRET"]);
   requiredOneOf(["RAZORPAY_WEBHOOK_SECRET"]);
   if (/^rzp_test_/.test(String(process.env.RAZORPAY_KEY_ID || ""))) {
-    console.warn("[config] WARNING: production is running with Razorpay TEST keys; real payments will not be collected.");
+    console.warn(
+      "[config] WARNING: production is running with Razorpay TEST keys; real payments will not be collected.",
+    );
   }
 };
 

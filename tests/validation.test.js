@@ -44,4 +44,25 @@ describe("request validation", () => {
     assert.equal(result.req.body.latitude, 12.9716);
     assert.equal(result.req.body.accuracy, 15);
   });
+
+  it("accepts the very coarse accuracy laptops report from IP/Wi-Fi location", () => {
+    const result = run(schemas.checkIn, { latitude: 19.07, longitude: 72.87, accuracy: 148213.6 });
+
+    assert.equal(result.called, true);
+    assert.equal(result.req.body.accuracy, 148213.6);
+  });
+
+  it("replaces Zod's developer-facing messages with plain language", () => {
+    const coords = run(schemas.checkIn, { latitude: 120, longitude: 80 });
+    assert.doesNotMatch(coords.payload.message, /Too big|expected/);
+    assert.match(coords.payload.message, /couldn't read your location/);
+
+    const note = run(schemas.checkIn, { note: "x".repeat(501) });
+    assert.equal(note.payload.message, "The note is too long.");
+  });
+
+  it("keeps messages a schema defines itself", () => {
+    const result = run(schemas.resetPassword, { token: "x".repeat(20), newPassword: "short" });
+    assert.equal(result.payload.message, "Password must be at least 8 characters");
+  });
 });

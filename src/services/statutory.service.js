@@ -24,7 +24,18 @@ async function resolveEmployee(organizationId, user) {
   return emp?.id || null;
 }
 
+/** employeeId comes from the request for admins, so it must belong to the caller's organization. */
+async function assertEmployeeInOrg(organizationId, employeeId) {
+  const found = await prisma.employee.findFirst({ where: { id: String(employeeId || ""), organizationId }, select: { id: true } });
+  if (!found) {
+    const err = new Error("Employee not found");
+    err.statusCode = 404;
+    throw err;
+  }
+}
+
 async function getOrCreateDeclaration(organizationId, employeeId, financialYear) {
+  await assertEmployeeInOrg(organizationId, employeeId);
   const fy = financialYear || currentFinancialYear();
   return prisma.itDeclaration.upsert({
     where: { employeeId_financialYear: { employeeId, financialYear: fy } },
@@ -34,6 +45,7 @@ async function getOrCreateDeclaration(organizationId, employeeId, financialYear)
 }
 
 async function upsertDeclaration(organizationId, employeeId, payload) {
+  await assertEmployeeInOrg(organizationId, employeeId);
   const fy = payload.financialYear || currentFinancialYear();
   const data = {
     regime: payload.regime === "OLD" ? "OLD" : "NEW",
