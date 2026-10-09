@@ -3,7 +3,9 @@ const requiredOneOf = (names) => {
   throw new Error(`Missing required environment variable: ${names.join(" or ")}`);
 };
 
-const DEFAULT_PRODUCTION_FRONTEND_URL = "https://workplusein.netlify.app";
+// Vercel production frontend. Keep the former Netlify origin trusted during transition.
+const DEFAULT_PRODUCTION_FRONTEND_URL = "https://workpluse-frontend.vercel.app";
+const LEGACY_PRODUCTION_FRONTEND_URL = "https://workplusein.netlify.app";
 
 const validateUrl = (name) => {
   const value = String(process.env[name] || "").trim();
@@ -48,4 +50,8 @@ const validateEnvironment = () => {
   }
 };
 
-module.exports = { DEFAULT_PRODUCTION_FRONTEND_URL, validateEnvironment };
+module.exports = {
+  DEFAULT_PRODUCTION_FRONTEND_URL,
+  LEGACY_PRODUCTION_FRONTEND_URL,
+  validateEnvironment,
+};
