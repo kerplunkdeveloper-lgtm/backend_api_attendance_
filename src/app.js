@@ -1,6 +1,7 @@
 require("dotenv").config();
 const {
   DEFAULT_PRODUCTION_FRONTEND_URL,
+  LEGACY_PRODUCTION_FRONTEND_URL,
   validateEnvironment,
 } = require("./config/environment");
 validateEnvironment();
@@ -71,6 +72,7 @@ const configuredOrigins = (process.env.CORS_ALLOWED_ORIGINS || "")
 
 const allowedOrigins = [
   DEFAULT_PRODUCTION_FRONTEND_URL,
+  LEGACY_PRODUCTION_FRONTEND_URL,
   String(process.env.FRONTEND_URL || "").trim().replace(/\/$/, ""),
   ...configuredOrigins,
 ].filter(Boolean);
