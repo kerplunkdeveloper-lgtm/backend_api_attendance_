@@ -1,5 +1,8 @@
 const crypto = require("crypto");
-const { DEFAULT_PRODUCTION_FRONTEND_URL } = require("../config/environment");
+const {
+  DEFAULT_PRODUCTION_FRONTEND_URL,
+  LEGACY_PRODUCTION_FRONTEND_URL,
+} = require("../config/environment");
 
 const FORBIDDEN_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
@@ -36,6 +39,7 @@ const rejectUnsafePayload = (req, res, next) => {
 const trustedWebOrigins = () => {
   const values = [
     DEFAULT_PRODUCTION_FRONTEND_URL,
+    LEGACY_PRODUCTION_FRONTEND_URL,
     process.env.FRONTEND_URL,
     ...(process.env.CORS_ALLOWED_ORIGINS || "").split(","),
   ];
