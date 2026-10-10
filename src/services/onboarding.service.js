@@ -982,7 +982,13 @@ class OnboardingService {
     }
     assertPortalCandidate(candidate);
 
-    const { action, signature, reason } = responseData;
+    // Accept the documented contract and the older frontend contract so a
+    // stale portal build cannot fail with a misleading "Invalid action" error.
+    const rawAction = responseData?.action ?? responseData?.response;
+    const actionAliases = { ACCEPTED: "ACCEPT", REJECTED: "REJECT" };
+    const action = actionAliases[String(rawAction || "").trim().toUpperCase()] || String(rawAction || "").trim().toUpperCase();
+    const signature = responseData?.signature;
+    const reason = responseData?.reason ?? responseData?.note;
 
     if (!["ACCEPT", "REJECT"].includes(action)) {
       const error = new Error("Invalid action. Must be 'ACCEPT' or 'REJECT'");
