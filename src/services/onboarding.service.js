@@ -584,12 +584,8 @@ class OnboardingService {
           email: candidate.email,
         },
       },
+      include: { employee: { include: { salaryStructure: true } } },
     });
-    if (existingUser) {
-      const error = new Error(`User account with email '${candidate.email}' already exists in this organization`);
-      error.statusCode = 400;
-      throw error;
-    }
 
     const {
       adminNotes,
@@ -642,9 +638,12 @@ class OnboardingService {
 
     // Execute atomic transaction for user, employee, candidate activation, and offer letter
     const result = await prisma.$transaction(async (tx) => {
-      await assertSeatAvailable(organizationId, tx);
-      // 1. Create User
-      const newUser = await tx.user.create({
+      const needsEmployee = !existingUser?.employee;
+      if (needsEmployee) await assertSeatAvailable(organizationId, tx);
+
+      // Reuse an account created earlier by offer acceptance. This makes the
+      // admin approval endpoint safe to retry after a partially completed flow.
+      const newUser = existingUser || await tx.user.create({
         data: {
           organizationId,
           email: candidate.email,
@@ -663,8 +662,8 @@ class OnboardingService {
         employeeCode: finalEmployeeCode,
       });
 
-      // 2. Create Employee
-      const newEmployee = await tx.employee.create({
+      // 2. Create Employee, unless the offer acceptance already created it.
+      const newEmployee = existingUser?.employee || await tx.employee.create({
         data: {
           organizationId,
           userId: newUser.id,
@@ -698,15 +697,17 @@ class OnboardingService {
       });
 
       // 3. Create initial Salary Structure
-      await tx.salaryStructure.create({
-        data: {
-          organizationId,
-          employeeId: newEmployee.id,
-          baseSalary: basic,
-          hra: hra,
-          special: specialAllowance,
-        },
-      });
+      if (!existingUser?.employee?.salaryStructure) {
+        await tx.salaryStructure.create({
+          data: {
+            organizationId,
+            employeeId: newEmployee.id,
+            baseSalary: basic,
+            hra: hra,
+            special: special,
+          },
+        });
+      }
 
       // 4. Update Candidate Record to ACTIVATED with offer letter details
       const activatedCandidate = await tx.onboardingCandidate.update({
@@ -733,7 +734,7 @@ class OnboardingService {
         employee: newEmployee,
         candidate: activatedCandidate,
         offerLetter: offerLetterData,
-        temporaryPassword: tempPassword,
+        temporaryPassword: existingUser ? null : tempPassword,
       };
     });
 
