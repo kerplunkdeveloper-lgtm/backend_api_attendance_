@@ -43,7 +43,7 @@ const prisma = require("../src/config/database");
     },
   });
   await prisma.user.create({
-    data: { organizationId: org.id, email, passwordHash, role: "SUPER_ADMIN", isActive: true, mustChangePassword: true },
+    data: { organizationId: org.id, email, passwordHash, role: "SUPER_ADMIN", isActive: true, mustChangePassword: true, emailVerifiedAt: new Date() },
   });
 
   console.log("\nPlatform owner created.\n");

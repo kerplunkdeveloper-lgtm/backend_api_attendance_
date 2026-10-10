@@ -36,15 +36,10 @@ router.get("/communication-status", adminOnly, async (req, res) => {
     return res.json({
       success: true,
       email: {
-        isConfigured:
-          connectionStatus.bird.configured || connectionStatus.smtp.configured,
+        isConfigured: connectionStatus.brevo.configured,
         activeProvider: connectionStatus.activeProvider,
-        bird: connectionStatus.bird,
-        smtp: connectionStatus.smtp,
-        from:
-          process.env.BIRD_FROM_EMAIL ||
-          process.env.EMAIL_FROM ||
-          "onboarding@messagebird.dev",
+        brevo: connectionStatus.brevo,
+        from: process.env.BREVO_FROM_EMAIL || "onboarding@workpulse.com",
       },
       whatsapp: {
         isConfigured: whatsappService.isConfigured,
@@ -72,7 +67,7 @@ router.post("/test-email", adminOnly, async (req, res) => {
         });
     }
 
-    const testHtml = emailService.buildHtmlTemplate({
+    const testHtml = await emailService.buildHtmlTemplate({
       title: "WorkPulse Test Notification",
       badge: "Diagnostic Test",
       badgeColor: "#10b981",

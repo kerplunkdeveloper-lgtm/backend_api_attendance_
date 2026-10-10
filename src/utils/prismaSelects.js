@@ -46,7 +46,7 @@ const policySelect = {
 };
 
 /** Opt back in to the user secrets that the client omits by default (see config/database.js). */
-const WITH_SECRETS = { passwordHash: false, twoFactorSecret: false, twoFactorBackupCodes: false, twoFactorLastStep: false };
+const WITH_SECRETS = { passwordHash: false, twoFactorSecret: false, twoFactorBackupCodes: false, twoFactorLastStep: false, emailVerificationCodeHash: false };
 
 module.exports = {
   WITH_SECRETS,

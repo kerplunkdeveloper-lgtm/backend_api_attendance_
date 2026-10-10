@@ -257,6 +257,17 @@ const formatMinutes = (minutes) => {
   return `${mins} min`;
 };
 
+// Breaks are measured at second precision. A one-second break must never be
+// rounded up and reported as a full minute.
+const formatDurationSeconds = (seconds) => {
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  const mins = Math.floor(total / 60);
+  const secs = total % 60;
+  if (mins > 0 && secs > 0) return `${mins} min ${secs} sec`;
+  if (mins > 0) return `${mins} min`;
+  return `${secs} sec`;
+};
+
 module.exports = {
   parseTimeToMinutes,
   getScheduledDurationMinutes,
@@ -264,4 +275,5 @@ module.exports = {
   calculateEarlyMinutes,
   evaluateAttendanceAgainstShift,
   formatMinutes,
+  formatDurationSeconds,
 };

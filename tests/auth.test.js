@@ -62,6 +62,7 @@ describe("auth", () => {
       id: "employee-web-user",
       email: "employee@example.com",
       passwordHash: await bcrypt.hash(password, 4),
+      emailVerifiedAt: new Date(),
       role: "EMPLOYEE",
       organizationId: "org-employee",
       isActive: true,
@@ -90,13 +91,14 @@ describe("auth", () => {
     assert.ok(result.accessToken);
   });
 
-  it("uses only an access JWT during login", async () => {
+  it("issues an access JWT and a hashed refresh token during login", async () => {
     const password = "Password123";
     let refreshTokenWrites = 0;
     prisma.user.findMany = async () => [{
       id: "u-hash",
       email: "admin@example.com",
       passwordHash: await bcrypt.hash(password, 4),
+      emailVerifiedAt: new Date(),
       role: "COMPANY_ADMIN",
       organizationId: "org-hash",
       isActive: true,
@@ -118,8 +120,9 @@ describe("auth", () => {
 
     assert.ok(result.accessToken);
     assert.equal(result.token, result.accessToken);
-    assert.equal(result.refreshToken, undefined);
-    assert.equal(refreshTokenWrites, 0);
+    // The controller moves the refresh token into an HTTP-only cookie for browsers.
+    assert.ok(result.refreshToken);
+    assert.equal(refreshTokenWrites, 1);
   });
 
   it("keeps browser refresh tokens out of JSON responses", async () => {

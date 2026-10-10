@@ -1,5 +1,6 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["relationJoins"]
 }
 
 datasource db {
@@ -321,6 +322,12 @@ model User {
   mustChangePassword Boolean   @default(false) // true for new invited employees
   isActive           Boolean   @default(true) // false = account disabled
   lastLoginAt        DateTime?
+
+  // Signup email verification. The 6-digit code is never stored in plaintext;
+  // emailVerifiedAt gates login until the address is confirmed.
+  emailVerifiedAt             DateTime?
+  emailVerificationCodeHash   String?
+  emailVerificationExpiresAt  DateTime?
 
   // Two-step verification (authenticator app). Secret is AES-GCM encrypted at rest;
   // backup codes are stored as SHA-256 hashes and are single-use.

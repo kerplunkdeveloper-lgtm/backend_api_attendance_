@@ -826,7 +826,10 @@ class PayrollService {
           where: { organizationId, month: m, year: y, status: "DISBURSED" },
           include: {
             employee: {
-              include: { user: { select: { email: true } } },
+              include: {
+                user: { select: { email: true } },
+                organization: { select: { name: true, logoUrl: true } },
+              },
             },
           },
         })
@@ -846,6 +849,8 @@ class PayrollService {
                   deductionsTotal: Number(slip.deductionsTotal),
                   workingDays: slip.workingDays,
                   presentDays: slip.presentDays,
+                  companyName: slip.employee.organization?.name,
+                  companyLogoUrl: slip.employee.organization?.logoUrl,
                 })
                 .catch((e) => console.warn(`[PayrollNotification:Email] Error for ${email}:`, e.message));
             }

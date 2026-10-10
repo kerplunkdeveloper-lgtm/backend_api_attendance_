@@ -10,6 +10,7 @@ const employee = {
   userId: "user-1",
   branchId: null,
   shiftId: "shift-1",
+  dateOfJoining: new Date("2020-01-01T00:00:00.000Z"),
   shift: { id: "shift-1", workingDays: "1,2,3,4,5" },
 };
 
@@ -60,6 +61,9 @@ const prisma = {
       return { count: 1 };
     },
     aggregate: async () => ({ _sum: { totalDays: 0 } }),
+  },
+  attendancePolicy: {
+    findUnique: async () => null,
   },
   holiday: {
     findMany: async () => [],

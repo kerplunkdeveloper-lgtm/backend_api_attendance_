@@ -19,9 +19,14 @@ const dbUrl = normalizeDatabaseUrl(
   process.env.DATABASE_URL || "",
 );
 
-const directUrl = process.env.DIRECT_URL
-  ? normalizeDatabaseUrl(process.env.DIRECT_URL)
-  : dbUrl;
+// Neon branch checkouts provide DATABASE_URL_UNPOOLED. Prefer it so schema
+// commands cannot accidentally keep using a stale DIRECT_URL from another
+// branch or environment.
+const directUrl = process.env.DATABASE_URL_UNPOOLED
+  ? normalizeDatabaseUrl(process.env.DATABASE_URL_UNPOOLED)
+  : process.env.DIRECT_URL
+    ? normalizeDatabaseUrl(process.env.DIRECT_URL)
+    : dbUrl;
 
 if (!dbUrl) {
   throw new Error(

@@ -57,7 +57,7 @@ describe("security audit regressions", () => {
 
   it("does not load password hashes or two-step secrets unless a query opts in", () => {
     const db = read("../src/config/database.js");
-    assert.match(db, /omit: \{\n\s*user: \{ passwordHash: true, twoFactorSecret: true, twoFactorBackupCodes: true, twoFactorLastStep: true \}/);
+    assert.match(db, /omit: \{\n\s*user: \{ passwordHash: true, twoFactorSecret: true, twoFactorBackupCodes: true, twoFactorLastStep: true, emailVerificationCodeHash: true \}/);
   });
 
   it("limits org-wide expense totals to admins and HR", () => {

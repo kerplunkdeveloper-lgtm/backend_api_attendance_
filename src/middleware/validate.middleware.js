@@ -136,6 +136,15 @@ const schemas = {
 
   forgotPassword: z.object({ email: EMAIL }).strict(),
 
+  verifyEmail: z
+    .object({
+      email: EMAIL,
+      code: z.string().trim().regex(/^\d{6}$/, "Enter the 6-digit code from your email."),
+    })
+    .strict(),
+
+  resendVerification: z.object({ email: EMAIL }).strict(),
+
   resetPassword: z
     .object({
       token: z.string().min(10).max(2000),

@@ -1,51 +1,56 @@
-const nodemailer = require("nodemailer");
-const birdService = require("./bird.service");
+const brevoService = require("./brevo.service");
+const { generateOfferLetterPdf } = require("./offer-letter-pdf.service");
 
-/** Escapes text placed into email HTML so names or notes cannot inject markup or links. */
-const escapeHtml = (value) =>
+ const escapeHtml = (value) =>
   String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+
+const getEmailLogoUrl = (value) => {
+  const raw = String(value || "").trim();
+  if (!/^https:\/\/[^\s"'<>]+$/i.test(raw)) return null;
+  if (/res\.cloudinary\.com\/[^/]+\/image\/upload\//i.test(raw)) {
+    return raw.replace(
+      /\/image\/upload\//i,
+      "/image/upload/f_auto,q_auto,w_320,h_120,c_fit/",
+    );
+  }
+  return raw;
+};
+
+const getInlineEmailLogo = async (value) => {
+  const url = getEmailLogoUrl(value);
+  if (!url) return null;
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return url;
+    const contentType = response.headers.get("content-type") || "image/png";
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.length <= 250 * 1024 && contentType.startsWith("image/")) {
+      return `data:${contentType};base64,${bytes.toString("base64")}`;
+    }
+  } catch (error) {
+    console.warn("[EmailService] Logo inline embedding skipped:", error.message);
+  }
+  return url;
+};
 
 class EmailService {
   constructor() {
-    this.isConfigured = false;
-    this.transporter = null;
-    this.birdService = birdService;
-    this.initTransporter();
-  }
-
-  initTransporter() {
-    const host = process.env.SMTP_HOST || "smtp.gmail.com";
-    const port = parseInt(process.env.SMTP_PORT) || 587;
-    const secure = process.env.SMTP_SECURE === "true" || port === 465;
-    const user = process.env.SMTP_USER;
-    const pass = process.env.SMTP_PASS;
-
-    if (user && pass) {
-      try {
-        this.transporter = nodemailer.createTransport({
-          host,
-          port,
-          secure,
-          auth: { user, pass },
-          tls: { rejectUnauthorized: false },
-        });
-        this.isConfigured = true;
-        console.log(`[EmailService] Initialized live SMTP transport (${host}:${port})`);
-      } catch (err) {
-        console.warn(`[EmailService] Failed to initialize live transport: ${err.message}. Falling back to simulation mode.`);
-        this.isConfigured = false;
-      }
-    } else {
-      this.isConfigured = false;
-    }
+    this.brevoService = brevoService;
   }
 
   /**
    * Generates modern, responsive WorkPulse HTML email template
    */
-  buildHtmlTemplate({ title, badge, badgeColor = "#2563eb", contentHtml, ctaText, ctaUrl }) {
+  async buildHtmlTemplate({ title, badge, badgeColor = "#2563eb", contentHtml, ctaText, ctaUrl, companyName, companyLogoUrl }) {
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
     const actionUrl = ctaUrl || frontendUrl;
+    const displayCompanyName = escapeHtml(companyName || "WorkPulse");
+    const safeLogoUrl = await getInlineEmailLogo(companyLogoUrl);
+    const escapedLogoUrl = safeLogoUrl ? escapeHtml(safeLogoUrl) : null;
+    const brandMark = safeLogoUrl
+      ? `<img src="${escapedLogoUrl}" alt="${displayCompanyName} logo" width="240" height="90" style="width: 240px; height: 90px; object-fit: contain; margin: 0 auto 10px; display: block; background: #ffffff; border-radius: 10px; padding: 8px; border: 0;">`
+      : `<div class="logo" style="font-size: 24px; font-weight: 800; letter-spacing: -0.5px; margin: 0 0 8px 0; color: #ffffff;">Work<span style="color: #60a5fa;">Pulse</span></div>`;
 
     return `
 <!DOCTYPE html>
@@ -75,19 +80,19 @@ class EmailService {
     .footer a { color: #64748b; text-decoration: underline; }
   </style>
 </head>
-<body>
-  <div class="container">
-    <div class="header">
-      <div class="logo">Work<span>Pulse</span></div>
-      <p class="header-sub">Enterprise Workforce & Attendance Management</p>
+<body style="font-family: Arial, Helvetica, sans-serif; background-color: #f1f5f9; margin: 0; padding: 24px; color: #1e293b;">
+  <div class="container" style="max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0;">
+    <div class="header" style="background: #1e3a8a; padding: 32px 28px; text-align: center; color: #ffffff;">
+      ${brandMark}
+      <p class="header-sub" style="font-size: 13px; color: #bfdbfe; margin: 0; font-weight: 500;">${displayCompanyName} · Powered by WorkPulse</p>
     </div>
-    <div class="body">
-      ${badge ? `<div class="badge">${badge}</div>` : ""}
-      <h1 class="heading">${title}</h1>
+    <div class="body" style="padding: 32px 28px;">
+      ${badge ? `<div class="badge" style="display: inline-block; padding: 6px 14px; border-radius: 9999px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 20px; background-color: ${badgeColor}15; color: ${badgeColor}; border: 1px solid ${badgeColor}30;">${badge}</div>` : ""}
+      <h1 class="heading" style="font-size: 20px; font-weight: 700; color: #0f172a; margin: 0 0 16px 0;">${title}</h1>
       ${contentHtml}
       ${ctaText ? `<div style="text-align: center; margin-top: 28px;"><a href="${actionUrl}" class="btn">${ctaText} &rarr;</a></div>` : ""}
     </div>
-    <div class="footer">
+    <div class="footer" style="padding: 24px; background: #f8fafc; border-top: 1px solid #e2e8f0; text-align: center; font-size: 12px; color: #94a3b8; line-height: 1.5;">
       This is an automated notification from WorkPulse Workforce Systems.<br>
       © ${new Date().getFullYear()} WorkPulse Inc. All rights reserved.
     </div>
@@ -98,49 +103,33 @@ class EmailService {
   }
 
   /**
-   * Generic sender with Bird API primary and SMTP / mock simulation fallback
+   * Generic sender — Brevo transactional API live, simulation fallback outside production.
    */
-  async sendEmail({ to, subject, html, text }) {
+  async sendEmail({ to, subject, html, text, attachments = [] }) {
     if (!to) {
       console.warn("[EmailService] No recipient address provided. Skipping.");
       return { success: false, message: "Recipient required" };
     }
 
-    // 1. Try Bird Email API if ready
-    if (this.birdService && this.birdService.isReady()) {
+    // 1. Try Brevo if ready
+    if (this.brevoService && this.brevoService.isReady()) {
       try {
-        const birdResult = await this.birdService.sendEmail({ to, subject, html, text });
-        if (birdResult.success) {
-          console.log(`[EmailService:BIRD_LIVE] Sent email to ${to} via Bird API (ID: ${birdResult.id})`);
-          return { success: true, live: true, provider: "BIRD", ...birdResult };
+        const result = await this.brevoService.sendEmail({ to, subject, html, text, attachments });
+        if (result.success) {
+          console.log(`[EmailService:BREVO_LIVE] Sent email to ${to} via Brevo API (ID: ${result.id})`);
+          return { success: true, live: true, provider: "BREVO", ...result };
         }
-        console.warn(`[EmailService:BIRD_FAIL] Bird dispatch failed for ${to}: ${birdResult.error}. Falling back...`);
+        console.warn(`[EmailService:BREVO_FAIL] Brevo dispatch failed for ${to}: ${result.error}.`);
+        if (process.env.NODE_ENV === "production") {
+          return { success: false, error: result.error, provider: "BREVO" };
+        }
       } catch (err) {
-        console.warn(`[EmailService:BIRD_ERROR] Bird exception: ${err.message}. Falling back...`);
+        console.warn(`[EmailService:BREVO_ERROR] Brevo exception: ${err.message}.`);
+        if (process.env.NODE_ENV === "production") {
+          return { success: false, error: err.message, provider: "BREVO" };
+        }
       }
-    }
-
-    // 2. Try SMTP if configured
-    const from = process.env.EMAIL_FROM || "WorkPulse Notifications <notifications@workpulse.com>";
-
-    if (this.isConfigured && this.transporter) {
-      try {
-        const info = await this.transporter.sendMail({
-          from,
-          to,
-          subject,
-          text: text || "WorkPulse notification",
-          html,
-        });
-        console.log(`[EmailService:SMTP_LIVE] Sent email to ${to} (MessageId: ${info.messageId})`);
-        return { success: true, live: true, provider: "SMTP", messageId: info.messageId };
-      } catch (err) {
-        console.error(`[EmailService:SMTP_LIVE_FAIL] Failed to send email to ${to}:`, err.message);
-        return { success: false, error: err.message };
-      }
-    }
-
-    if (process.env.NODE_ENV === "production") {
+    } else if (process.env.NODE_ENV === "production") {
       console.error("[EmailService] No live email provider is configured.");
       return {
         success: false,
@@ -149,11 +138,11 @@ class EmailService {
       };
     }
 
-    // 3. Development-only simulation fallback
+    // 2. Development-only simulation fallback
     console.log("────────────────────────────────────────────────────────────");
     console.log(`[EmailService:SIMULATION] Email to: ${to}`);
     console.log(`[EmailService:SIMULATION] Subject:  ${subject}`);
-    console.log(`[EmailService:SIMULATION] Status:   Simulated (Configure SMTP or Bird API for live dispatch)`);
+    console.log(`[EmailService:SIMULATION] Status:   Simulated (configure BREVO_API_KEY for live dispatch)`);
     console.log("────────────────────────────────────────────────────────────");
 
     return {
@@ -169,7 +158,7 @@ class EmailService {
   /**
    * 1. Leave Request Status Email (Approved or Rejected)
    */
-  async sendLeaveStatusEmail(to, employeeName, { status, leaveType, startDate, endDate, totalDays, reviewNote, reviewerName }) {
+  async sendLeaveStatusEmail(to, employeeName, { status, leaveType, startDate, endDate, totalDays, reviewNote, reviewerName, companyName, companyLogoUrl }) {
     employeeName = escapeHtml(employeeName);
     leaveType = escapeHtml(leaveType);
     reviewNote = reviewNote ? escapeHtml(reviewNote) : reviewNote;
@@ -198,13 +187,15 @@ class EmailService {
       </p>
     `;
 
-    const html = this.buildHtmlTemplate({
+    const html = await this.buildHtmlTemplate({
       title: `Leave Request ${statusText}`,
       badge: `Leave ${statusText}`,
       badgeColor,
       contentHtml,
       ctaText: "View Leave Status",
       ctaUrl: `${process.env.FRONTEND_URL || "http://localhost:3000"}/leaves`,
+      companyName,
+      companyLogoUrl,
     });
 
     return await this.sendEmail({
@@ -217,7 +208,7 @@ class EmailService {
   /**
    * 2. Monthly Payslip Disbursed Notification Email
    */
-  async sendPayslipDisbursedEmail(to, employeeName, { month, year, netSalary, grossSalary, deductionsTotal, workingDays, presentDays }) {
+  async sendPayslipDisbursedEmail(to, employeeName, { month, year, netSalary, grossSalary, deductionsTotal, workingDays, presentDays, companyName, companyLogoUrl }) {
     employeeName = escapeHtml(employeeName);
     const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
     const monthName = monthNames[(parseInt(month) || 1) - 1];
@@ -242,13 +233,15 @@ class EmailService {
       </p>
     `;
 
-    const html = this.buildHtmlTemplate({
+    const html = await this.buildHtmlTemplate({
       title: `Payslip Disbursed — ${monthName} ${year}`,
       badge: "Salary Disbursed",
       badgeColor: "#10b981",
       contentHtml,
       ctaText: "Download Payslip PDF",
       ctaUrl: `${process.env.FRONTEND_URL || "http://localhost:3000"}/payroll`,
+      companyName,
+      companyLogoUrl,
     });
 
     return await this.sendEmail({
@@ -261,7 +254,7 @@ class EmailService {
   /**
    * 3. Morning Shift Check-in Reminder Email
    */
-  async sendShiftReminderEmail(to, employeeName, { shiftName, shiftTime, punchUrl }) {
+  async sendShiftReminderEmail(to, employeeName, { shiftName, shiftTime, punchUrl, companyName, companyLogoUrl }) {
     employeeName = escapeHtml(employeeName);
     shiftName = escapeHtml(shiftName);
     const contentHtml = `
@@ -279,13 +272,15 @@ class EmailService {
       </p>
     `;
 
-    const html = this.buildHtmlTemplate({
+    const html = await this.buildHtmlTemplate({
       title: "Daily Attendance Reminder",
       badge: "Punch In Reminder",
       badgeColor: "#f59e0b",
       contentHtml,
       ctaText: "Clock In Now",
       ctaUrl: punchUrl || `${process.env.FRONTEND_URL || "http://localhost:3000"}`,
+      companyName,
+      companyLogoUrl,
     });
 
     return await this.sendEmail({
@@ -298,7 +293,7 @@ class EmailService {
   /**
    * 4. Candidate Offer Letter Notification Email
    */
-  async sendOfferLetterEmail(to, candidateName, { designation, department, expectedJoinDate, salary, offerUrl }) {
+  async sendOfferLetterEmail(to, candidateName, { designation, department, expectedJoinDate, salary, offerUrl, companyName, companyLogoUrl, offerLetterData }) {
     candidateName = escapeHtml(candidateName);
     department = escapeHtml(department);
     const rawDesignation = designation;
@@ -306,6 +301,24 @@ class EmailService {
     const joinDateStr = expectedJoinDate
       ? new Date(expectedJoinDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
       : "To be confirmed";
+
+    const offer = offerLetterData || {
+      candidateName,
+      designation,
+      department,
+      expectedJoinDate,
+      salary,
+    };
+    const offerName = escapeHtml(offer.candidateName || candidateName);
+    const offerDesignation = escapeHtml(offer.designation || designation || "To be confirmed");
+    const offerDepartment = escapeHtml(offer.department || department || "General");
+    const offerBranch = escapeHtml(offer.branch || "Corporate Headquarters");
+    const offerReference = escapeHtml(offer.referenceNo || "WP-OFFER");
+    const monthlyCtc = offer.compensation?.grossMonthly || offer.salary || salary;
+    const annualCtc = offer.compensation?.ctcAnnual || (Number(monthlyCtc || 0) * 12);
+    const probation = offer.terms?.probationMonths || 3;
+    const noticePeriod = offer.terms?.noticePeriodDays || 30;
+    const workingHours = escapeHtml(offer.terms?.workingHours || "As per company policy");
 
     const contentHtml = `
       <p class="text">Dear <strong>${candidateName}</strong>,</p>
@@ -318,24 +331,50 @@ class EmailService {
         <div class="info-row"><span class="info-label">Expected Joining:</span><span class="info-value">${joinDateStr}</span></div>
         ${salary ? `<div class="info-row"><span class="info-label">Monthly CTC:</span><span class="info-value">₹${Number(salary).toLocaleString("en-IN")}</span></div>` : ""}
       </div>
-      <p class="text">
-        Please access your dedicated onboarding portal to review the complete offer terms, upload any required onboarding documents, and accept the offer.
+      <h2 style="font-size: 16px; color: #163b8f; margin: 28px 0 12px;">Complete offer details</h2>
+      <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px 20px; margin: 16px 0;">
+        <p style="font-size: 14px; color: #475569; margin: 6px 0;">Offer reference: <strong>${offerReference}</strong></p>
+        <p style="font-size: 14px; color: #475569; margin: 6px 0;">Candidate: <strong>${offerName}</strong></p>
+        <p style="font-size: 14px; color: #475569; margin: 6px 0;">Designation: <strong>${offerDesignation}</strong></p>
+        <p style="font-size: 14px; color: #475569; margin: 6px 0;">Department: <strong>${offerDepartment}</strong></p>
+        <p style="font-size: 14px; color: #475569; margin: 6px 0;">Work location: <strong>${offerBranch}</strong></p>
+        <p style="font-size: 14px; color: #475569; margin: 6px 0;">Joining date: <strong>${joinDateStr}</strong></p>
+        <p style="font-size: 14px; color: #475569; margin: 6px 0;">Monthly CTC: <strong>INR ${Number(monthlyCtc || 0).toLocaleString("en-IN")}</strong></p>
+        <p style="font-size: 14px; color: #475569; margin: 6px 0;">Annual CTC: <strong>INR ${Number(annualCtc || 0).toLocaleString("en-IN")}</strong></p>
+      </div>
+      <h2 style="font-size: 16px; color: #163b8f; margin: 28px 0 12px;">Terms and conditions</h2>
+      <ul style="font-size: 14px; line-height: 1.7; color: #475569; padding-left: 20px; margin: 0 0 20px;">
+        <li>Probation period: ${probation} months.</li>
+        <li>Notice period: ${noticePeriod} days after confirmation.</li>
+        <li>Working hours: ${workingHours}.</li>
+        <li>This offer is subject to verification of the information and documents provided.</li>
+      </ul>
+      <p class="text" style="font-size: 13px; line-height: 1.6; color: #64748b; margin: 20px 0 0;">
+        Your complete offer letter is attached as a PDF. The secure portal button is only required to accept the offer and complete onboarding.
       </p>
     `;
 
-    const html = this.buildHtmlTemplate({
+    const html = await this.buildHtmlTemplate({
       title: "Congratulations on your Job Offer!",
       badge: "Official Job Offer",
       badgeColor: "#8b5cf6",
       contentHtml,
-      ctaText: "View & Accept Offer Letter",
-      ctaUrl: offerUrl || `${process.env.FRONTEND_URL || "http://localhost:3000"}`,
+      ctaText: offerUrl ? "Accept Offer Securely" : null,
+      ctaUrl: offerUrl,
+      companyName,
+      companyLogoUrl,
     });
+
+    const pdf = await generateOfferLetterPdf({ offer, companyName, companyLogoUrl });
 
     return await this.sendEmail({
       to,
       subject: `[WorkPulse] Job Offer: ${rawDesignation} at WorkPulse`,
       html,
+      attachments: [{
+        content: pdf.toString("base64"),
+        name: `Offer_Letter_${String(candidateName).replace(/[^a-z0-9]+/gi, "_")}.pdf`,
+      }],
     });
   }
 
@@ -343,7 +382,7 @@ class EmailService {
    * 5. Plan Unlock Code Email — sent to admin after registration
    * Contains the code they must enter in the dashboard to activate their plan.
    */
-  async sendUnlockCodeEmail(to, adminName, { organizationName, unlockCode, plan, loginUrl }) {
+  async sendUnlockCodeEmail(to, adminName, { organizationName, unlockCode, plan, loginUrl, companyLogoUrl }) {
     adminName = escapeHtml(adminName);
     organizationName = escapeHtml(organizationName);
     const contentHtml = `
@@ -372,13 +411,15 @@ class EmailService {
       </p>
     `;
 
-    const html = this.buildHtmlTemplate({
+    const html = await this.buildHtmlTemplate({
       title: "Your WorkPulse Plan Unlock Code",
       badge: "Plan Activation Required",
       badgeColor: "#2563eb",
       contentHtml,
       ctaText: "Login & Activate Now",
       ctaUrl: loginUrl || `${process.env.FRONTEND_URL || "http://localhost:3000"}/login`,
+      companyName: organizationName,
+      companyLogoUrl,
     });
 
     return await this.sendEmail({
@@ -392,7 +433,7 @@ class EmailService {
    * 6. Employee Welcome Email — sent when admin invites an employee by email.
    * Contains their auto-generated login credentials.
    */
-  async sendEmployeeWelcomeEmail(to, firstName, { organizationName, tempPassword, loginUrl, role }) {
+  async sendEmployeeWelcomeEmail(to, firstName, { organizationName, tempPassword, loginUrl, role, companyLogoUrl }) {
     const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
     firstName = esc(firstName);
     const rawOrganizationName = organizationName;
@@ -424,13 +465,15 @@ class EmailService {
       </p>
     `;
 
-    const html = this.buildHtmlTemplate({
+    const html = await this.buildHtmlTemplate({
       title: `Welcome to ${organizationName} on WorkPulse!`,
       badge: "Account Created",
       badgeColor: "#10b981",
       contentHtml,
       ctaText: "Login to WorkPulse",
       ctaUrl: loginUrl || `${process.env.FRONTEND_URL || "http://localhost:3000"}/login`,
+      companyName: rawOrganizationName,
+      companyLogoUrl,
     });
 
     return await this.sendEmail({
@@ -443,20 +486,20 @@ class EmailService {
   /**
    * 7. Password Reset Email — sent when user requests password reset
    */
-  async sendPasswordResetEmail(to, userName, { resetUrl, expiresIn = "60 minutes" }) {
+  async sendPasswordResetEmail(to, userName, { resetUrl, expiresIn = "60 minutes", companyName, companyLogoUrl }) {
     userName = escapeHtml(userName);
     const contentHtml = `
-      <p class="text">Hello <strong>${userName || "WorkPulse User"}</strong>,</p>
-      <p class="text">
+      <p class="text" style="font-size: 15px; line-height: 1.6; color: #475569; margin: 0 0 20px 0;">Hello <strong>${userName || "WorkPulse User"}</strong>,</p>
+      <p class="text" style="font-size: 15px; line-height: 1.6; color: #475569; margin: 0 0 20px 0;">
         We received a request to reset the password for your WorkPulse enterprise account. If you made this request, click the button below to choose a new password:
       </p>
       <div style="text-align: center; margin: 28px 0;">
         <a href="${resetUrl}" class="btn" style="background: #4f46e5; color: #ffffff !important; font-weight: 700; padding: 14px 32px; border-radius: 12px; text-decoration: none; display: inline-block;">Reset Password &rarr;</a>
       </div>
-      <div class="info-card">
-        <div class="info-row"><span class="info-label">Account:</span><span class="info-value" style="font-family: monospace;">${to}</span></div>
-        <div class="info-row"><span class="info-label">Expires In:</span><span class="info-value" style="color: #f59e0b;">${expiresIn}</span></div>
-        <div class="info-row"><span class="info-label">Security:</span><span class="info-value" style="color: #10b981;">Single-Use Protected</span></div>
+      <div class="info-card" style="background: #f8fafc; border-radius: 12px; border: 1px solid #e2e8f0; padding: 18px 20px; margin: 20px 0;">
+        <div class="info-row" style="padding: 6px 0; border-bottom: 1px dashed #e2e8f0; font-size: 14px;"><span class="info-label" style="color: #64748b; font-weight: 500;">Account:</span><span class="info-value" style="color: #0f172a; font-weight: 600; text-align: right; font-family: monospace;">${to}</span></div>
+        <div class="info-row" style="padding: 6px 0; border-bottom: 1px dashed #e2e8f0; font-size: 14px;"><span class="info-label" style="color: #64748b; font-weight: 500;">Expires In:</span><span class="info-value" style="color: #f59e0b; font-weight: 600; text-align: right;">${expiresIn}</span></div>
+        <div class="info-row" style="padding: 6px 0; font-size: 14px;"><span class="info-label" style="color: #64748b; font-weight: 500;">Security:</span><span class="info-value" style="color: #10b981; font-weight: 600; text-align: right;">Single-Use Protected</span></div>
       </div>
       <p class="text" style="font-size: 13px; color: #64748b;">
         If the button doesn't work, copy and paste this link into your browser:<br>
@@ -467,13 +510,17 @@ class EmailService {
       </p>
     `;
 
-    const html = this.buildHtmlTemplate({
+    const html = await this.buildHtmlTemplate({
       title: "Reset Your WorkPulse Password",
       badge: "Password Reset",
       badgeColor: "#4f46e5",
       contentHtml,
-      ctaText: "Reset Password",
+      // The reset button is already included in contentHtml. Keeping only one
+      // CTA avoids duplicate buttons in clients that strip the head stylesheet.
+      ctaText: null,
       ctaUrl: resetUrl,
+      companyName,
+      companyLogoUrl,
     });
 
     return await this.sendEmail({
@@ -484,39 +531,57 @@ class EmailService {
   }
 
   /**
-   * Verify communication connection status (Bird + SMTP)
+   * Verify communication connection status (Brevo)
    */
   async verifyConnection() {
-    const birdStatus = {
-      configured: this.birdService ? this.birdService.isReady() : false,
-      provider: "Bird Email API (@messagebird/sdk)",
-      fromEmail: process.env.BIRD_FROM_EMAIL || "onboarding@messagebird.dev",
+    const brevoStatus = {
+      configured: this.brevoService ? this.brevoService.isReady() : false,
+      provider: "Brevo Transactional Email API",
+      fromEmail: process.env.BREVO_FROM_EMAIL || "onboarding@workpulse.com",
     };
-
-    let smtpStatus = {
-      configured: this.isConfigured,
-      provider: "Nodemailer (SMTP)",
-    };
-
-    if (this.transporter && this.isConfigured) {
-      try {
-        await this.transporter.verify();
-        smtpStatus.verified = true;
-        smtpStatus.message = "SMTP server connected and verified successfully.";
-      } catch (err) {
-        smtpStatus.verified = false;
-        smtpStatus.error = err.message;
-      }
-    } else {
-      smtpStatus.message = "SMTP not configured (Simulation mode fallback)";
-    }
 
     return {
-      activeProvider: birdStatus.configured ? "BIRD" : (smtpStatus.configured ? "SMTP" : "SIMULATION"),
-      bird: birdStatus,
-      smtp: smtpStatus,
+      activeProvider: brevoStatus.configured ? "BREVO" : "SIMULATION",
+      brevo: brevoStatus,
     };
   }
-}
 
+  /**
+   * 8. Signup Email Verification Code
+   */
+  async sendVerificationEmail(to, userName, { code, expiresIn = "15 minutes", companyName, companyLogoUrl } = {}) {
+    userName = escapeHtml(userName);
+    const contentHtml = `
+      <p class="text">Hello <strong>${userName || "there"}</strong>,</p>
+      <p class="text">
+        Thanks for signing up for <strong>WorkPulse</strong>! Enter the verification code below to confirm your email address and activate your account.
+      </p>
+      <div class="info-card" style="text-align: center; padding: 28px;">
+        <p style="margin: 0 0 8px; font-size: 13px; color: #64748b; font-weight: 500; text-transform: uppercase; letter-spacing: 1px;">Your Verification Code</p>
+        <div style="font-size: 32px; font-weight: 800; letter-spacing: 8px; color: #2563eb; font-family: 'Courier New', monospace; background: #eff6ff; border: 2px dashed #bfdbfe; border-radius: 10px; padding: 16px 24px; display: inline-block;">
+          ${code}
+        </div>
+        <p style="margin: 12px 0 0; font-size: 12px; color: #94a3b8;">This code expires in ${expiresIn}.</p>
+      </div>
+      <p class="text" style="font-size: 13px; color: #64748b;">
+        If you did not create a WorkPulse account, you can safely ignore this email.
+      </p>
+    `;
+
+    const html = await this.buildHtmlTemplate({
+      title: "Verify Your Email Address",
+      badge: "Email Verification",
+      badgeColor: "#2563eb",
+      contentHtml,
+      companyName,
+      companyLogoUrl,
+    });
+
+    return await this.sendEmail({
+      to,
+      subject: `[WorkPulse] Your verification code is ${code}`,
+      html,
+    });
+  }
+}
 module.exports = new EmailService();

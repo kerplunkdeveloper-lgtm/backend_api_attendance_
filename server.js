@@ -58,6 +58,7 @@ if (typeof PhusionPassenger !== "undefined") {
     startBackgroundScheduler();
     startChatGateway(server);
   });
+  tuneServerForLoadBalancer(server);
 } else {
   const PORT = process.env.PORT || 5000;
   const HOST = process.env.HOST || "0.0.0.0";
@@ -66,6 +67,19 @@ if (typeof PhusionPassenger !== "undefined") {
     startBackgroundScheduler();
     startChatGateway(server);
   });
+  tuneServerForLoadBalancer(server);
+}
+
+/**
+ * Behind a load balancer (Railway, nginx, ALB) the balancer reuses upstream
+ * connections. Node's 5s default keep-alive closes them first, so a request
+ * the balancer already sent on a "live" socket dies with a 502. Stay open
+ * longer than the balancer's idle timeout (commonly 60s) and keep
+ * headersTimeout above keepAliveTimeout.
+ */
+function tuneServerForLoadBalancer(srv) {
+  srv.keepAliveTimeout = Number(process.env.KEEP_ALIVE_TIMEOUT_MS) || 65_000;
+  srv.headersTimeout = srv.keepAliveTimeout + 1_000;
 }
 
 /**
@@ -77,6 +91,9 @@ const shutdown = async (signal) => {
   const forceExit = setTimeout(() => process.exit(1), 10_000);
   forceExit.unref();
 
+  // Idle keep-alive sockets would otherwise hold close() open until the
+  // force-exit timer fires, stretching every rolling deploy by 10 seconds.
+  server?.closeIdleConnections?.();
   server?.close(async () => {
     try {
       await prisma.$disconnect();

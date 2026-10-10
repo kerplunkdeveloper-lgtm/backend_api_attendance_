@@ -88,6 +88,7 @@ async function main() {
       role: "COMPANY_ADMIN",
       isActive: true,
       mustChangePassword: false,
+      emailVerifiedAt: new Date(),
     },
     create: {
       organizationId: org.id,
@@ -96,6 +97,7 @@ async function main() {
       role: "COMPANY_ADMIN",
       isActive: true,
       mustChangePassword: false,
+      emailVerifiedAt: new Date(),
     },
   });
 

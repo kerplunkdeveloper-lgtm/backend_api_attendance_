@@ -161,6 +161,8 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
         avatarUrl,
         mustChangePassword: true,
         isActive: true,
+        // Admin-invited, not self-registered — the admin already vouches for this address.
+        emailVerifiedAt: new Date(),
       },
     });
 
@@ -233,6 +235,7 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
     firstName.trim(),
     {
       organizationName: org?.name || "WorkPulse",
+      companyLogoUrl: org?.logoUrl,
       tempPassword,
       loginUrl,
       role: userRole,
@@ -690,6 +693,8 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
         avatarUrl,
         mustChangePassword: true, // force password change on first login
         isActive: true,
+        // Admin-invited, not self-registered — the admin already vouches for this address.
+        emailVerifiedAt: new Date(),
       },
     });
 
@@ -766,6 +771,7 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
       firstName.trim(),
       {
         organizationName: org.name,
+        companyLogoUrl: org.logoUrl,
         tempPassword,
         loginUrl,
         role: userRole,
@@ -880,7 +886,7 @@ const bulkImportEmployees = async (organizationId, employeesList, actorRole = "C
   }
 
   const [org, branches, departments, shifts] = await Promise.all([
-    prisma.organization.findUnique({ where: { id: organizationId }, select: { name: true } }),
+    prisma.organization.findUnique({ where: { id: organizationId }, select: { name: true, logoUrl: true } }),
     prisma.branch.findMany({ where: { organizationId }, select: { id: true, name: true } }),
     prisma.department.findMany({ where: { organizationId }, select: { id: true, name: true } }),
     prisma.shift.findMany({ where: { organizationId }, select: { id: true, name: true } }),
@@ -1097,6 +1103,8 @@ const bulkImportEmployees = async (organizationId, employeesList, actorRole = "C
               }),
               mustChangePassword: true,
               isActive: true,
+              // Admin-imported, not self-registered — the admin already vouches for this address.
+              emailVerifiedAt: new Date(),
             })),
             select: { id: true, email: true, avatarUrl: true },
           });
@@ -1151,6 +1159,7 @@ const bulkImportEmployees = async (organizationId, employeesList, actorRole = "C
       try {
         await emailService.sendEmployeeWelcomeEmail(r.email, r.firstName, {
           organizationName: org?.name || "WorkPulse",
+          companyLogoUrl: org?.logoUrl,
           tempPassword: r.tempPassword,
           loginUrl,
           role: r.userRole,

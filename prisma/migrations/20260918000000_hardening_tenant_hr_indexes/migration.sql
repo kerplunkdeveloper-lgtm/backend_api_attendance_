@@ -1,8 +1,46 @@
 -- DropIndex
-DROP INDEX "User_email_key";
+DROP INDEX IF EXISTS "User_email_key";
+
+-- CompOffBalance and CompOffTransaction were present in the Prisma schema when
+-- this migration was authored, but their CREATE statements were missing from
+-- the earlier migration chain. Create them before applying the hardening
+-- changes below so fresh databases and the Alpha database can converge.
+CREATE TABLE IF NOT EXISTS "CompOffBalance" (
+    "id" TEXT NOT NULL,
+    "organizationId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "creditedDays" DECIMAL(5,1) NOT NULL DEFAULT 0,
+    "usedDays" DECIMAL(5,1) NOT NULL DEFAULT 0,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+    CONSTRAINT "CompOffBalance_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE IF NOT EXISTS "CompOffTransaction" (
+    "id" TEXT NOT NULL,
+    "compOffBalanceId" TEXT NOT NULL,
+    "type" TEXT NOT NULL,
+    "days" DECIMAL(5,1) NOT NULL,
+    "reason" TEXT,
+    "referenceDate" DATE,
+    "createdBy" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "CompOffTransaction_pkey" PRIMARY KEY ("id")
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "CompOffBalance_employeeId_key"
+  ON "CompOffBalance"("employeeId");
+
+ALTER TABLE "CompOffBalance"
+  ADD CONSTRAINT "CompOffBalance_employeeId_fkey"
+  FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+ALTER TABLE "CompOffTransaction"
+  ADD CONSTRAINT "CompOffTransaction_compOffBalanceId_fkey"
+  FOREIGN KEY ("compOffBalanceId") REFERENCES "CompOffBalance"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AlterTable
-ALTER TABLE "CompOffTransaction" ADD COLUMN     "expiresAt" DATE;
+ALTER TABLE "CompOffTransaction" ADD COLUMN IF NOT EXISTS "expiresAt" DATE;
 
 -- AlterTable
 ALTER TABLE "Employee" ADD COLUMN     "address" TEXT,

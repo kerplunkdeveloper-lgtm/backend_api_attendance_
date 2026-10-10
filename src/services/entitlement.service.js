@@ -252,6 +252,7 @@ const presentAuthUser = (user) => {
     avatarUrl: user.avatarUrl || user.employee?.avatarUrl || null,
     planLocked: org?.planLocked ?? false,
     mustChangePassword: user.mustChangePassword ?? false,
+    emailVerifiedAt: user.emailVerifiedAt || null,
     entitlement: {
       state: entitlement.state,
       allowApp: entitlement.allowApp,

@@ -118,7 +118,7 @@ class NotificationService {
         organizationId: true,
         user: { select: { email: true } },
         shift: { select: { name: true, startTime: true, workingDays: true } },
-        organization: { select: { timezone: true } },
+        organization: { select: { timezone: true, name: true, logoUrl: true } },
       },
     });
 
@@ -209,7 +209,12 @@ class NotificationService {
       // never hold up the reminder pass for everyone behind it in the loop.
       if (emp.user?.email) {
         emailService
-          .sendShiftReminderEmail(emp.user.email, emp.firstName, { shiftName, shiftTime })
+          .sendShiftReminderEmail(emp.user.email, emp.firstName, {
+            shiftName,
+            shiftTime,
+            companyName: emp.organization?.name,
+            companyLogoUrl: emp.organization?.logoUrl,
+          })
           .catch((e) => console.warn(`[MorningReminder:Email] ${e.message}`));
       }
       if (emp.phone) {

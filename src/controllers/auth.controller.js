@@ -108,22 +108,65 @@ const register = async (req, res) => {
       subscriptionPlan,
       billingCycle,
     });
-    res.cookie("refreshToken", result.refreshToken, getCookieOptions());
-
+    // No session is created yet — the account cannot log in until the emailed
+    // verification code is confirmed, so no refresh-token cookie is set here.
     return res.status(201).json({
       success: true,
-      message: "Registration successful",
+      message: result.message,
+      data: {
+        requiresVerification: result.requiresVerification,
+        email: result.email,
+        requiresCheckout: result.requiresCheckout,
+        selectedPlan: result.selectedPlan,
+        ...(result.verificationCode ? { verificationCode: result.verificationCode, simulated: result.simulated } : {}),
+      },
+    });
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+/**
+ * POST /api/auth/verify-email
+ * Public endpoint to confirm a signup verification code and activate the account.
+ */
+const verifyEmail = async (req, res) => {
+  try {
+    const { email, code } = req.body;
+    const result = await authService.verifyEmail(email, code);
+    res.cookie("refreshToken", result.refreshToken, getCookieOptions());
+    return res.status(200).json({
+      success: true,
+      message: "Email verified successfully",
       data: {
         accessToken: result.accessToken,
         token: result.accessToken,
         ...refreshTokenForClient(req, result.refreshToken),
         user: result.user,
-        requiresCheckout: result.requiresCheckout,
-        selectedPlan: result.selectedPlan,
       },
     });
   } catch (error) {
-    return res.status(400).json({
+    return res.status(error.statusCode || 400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+/**
+ * POST /api/auth/resend-verification
+ * Public endpoint to request a fresh verification code.
+ */
+const resendVerification = async (req, res) => {
+  try {
+    const { email } = req.body;
+    const result = await authService.resendVerificationCode(email);
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({
       success: false,
       message: error.message,
     });
@@ -445,6 +488,8 @@ const resetPassword = async (req, res) => {
 
 module.exports = {
   register,
+  verifyEmail,
+  resendVerification,
   login,
   loginWithGoogle,
   refreshToken,

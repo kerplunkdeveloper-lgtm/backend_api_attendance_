@@ -8,6 +8,7 @@ const {
   calculateLateMinutes,
   evaluateAttendanceAgainstShift,
   formatMinutes,
+  formatDurationSeconds,
 } = require("../utils/shiftCalculator");
 const {
   DEFAULT_TIMEZONE,
@@ -686,7 +687,6 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
   const isOnActiveBreak = lastEvent && lastEvent.type === "BREAK_START";
   if (isOnActiveBreak) {
     autoClosedBreakDuration = Math.max(
-      1,
       Math.floor((checkOutTime.getTime() - new Date(lastEvent.timestamp).getTime()) / 60000)
     );
   }
@@ -987,9 +987,13 @@ const endBreak = async ({ userId, employeeId, organizationId, latitude, longitud
   }
 
   const breakEndTime = eventTime;
+  const durationSeconds = Math.max(
+    0,
+    Math.floor((breakEndTime.getTime() - new Date(lastBreakStart.timestamp).getTime()) / 1000)
+  );
   const durationMinutes = Math.max(
-    1,
-    Math.floor((breakEndTime.getTime() - new Date(lastBreakStart.timestamp).getTime()) / 60000)
+    0,
+    Math.floor(durationSeconds / 60)
   );
 
   const updatedAttendance = await prisma.$transaction(async (tx) => {
@@ -1014,8 +1018,9 @@ const endBreak = async ({ userId, employeeId, organizationId, latitude, longitud
 
   return {
     success: true,
-    message: `Break ended. Duration: ${formatMinutes(durationMinutes)}`,
+    message: `Break ended. Duration: ${formatDurationSeconds(durationSeconds)}`,
     durationMinutes,
+    durationSeconds,
     totalBreakMinutes: updatedAttendance.breakMinutes,
     attendance: updatedAttendance,
   };
@@ -1055,14 +1060,19 @@ const getBreakDetails = async ({ userId, employeeId, organizationId, attendanceI
     if (event.type === "BREAK_START") {
       openBreak = event;
     } else if (event.type === "BREAK_END" && openBreak) {
+      const durationSeconds = Math.max(
+        0,
+        Math.floor((new Date(event.timestamp).getTime() - new Date(openBreak.timestamp).getTime()) / 1000)
+      );
       const durationMinutes = Math.floor(
-        (new Date(event.timestamp).getTime() - new Date(openBreak.timestamp).getTime()) / 60000
+        durationSeconds / 60
       );
       breaks.push({
         startTime: openBreak.timestamp,
         endTime: event.timestamp,
         durationMinutes,
-        durationFormatted: formatMinutes(durationMinutes),
+        durationSeconds,
+        durationFormatted: formatDurationSeconds(durationSeconds),
       });
       openBreak = null;
     }
@@ -1070,12 +1080,14 @@ const getBreakDetails = async ({ userId, employeeId, organizationId, attendanceI
 
   // Unclosed break (employee still on break)
   if (openBreak) {
-    const durationMinutes = Math.floor((Date.now() - new Date(openBreak.timestamp).getTime()) / 60000);
+    const durationSeconds = Math.max(0, Math.floor((Date.now() - new Date(openBreak.timestamp).getTime()) / 1000));
+    const durationMinutes = Math.floor(durationSeconds / 60);
     breaks.push({
       startTime: openBreak.timestamp,
       endTime: null,
       durationMinutes,
-      durationFormatted: formatMinutes(durationMinutes),
+      durationSeconds,
+      durationFormatted: formatDurationSeconds(durationSeconds),
       isActive: true,
     });
   }

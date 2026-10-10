@@ -35,6 +35,18 @@ router.post(
   validate(schemas.login),
   authController.login,
 );
+router.post(
+  "/verify-email",
+  authRateLimiter,
+  validate(schemas.verifyEmail),
+  authController.verifyEmail,
+);
+router.post(
+  "/resend-verification",
+  authRateLimiter,
+  validate(schemas.resendVerification),
+  authController.resendVerification,
+);
 router.post("/google", authRateLimiter, validate(schemas.googleLogin), authController.loginWithGoogle);
 router.post(
   "/refresh-token",

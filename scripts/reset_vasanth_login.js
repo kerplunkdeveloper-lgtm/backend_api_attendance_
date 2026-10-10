@@ -93,6 +93,7 @@ async function upsertAdmin(email, org, branch, department, shift, passwordHash) 
       role: "COMPANY_ADMIN",
       isActive: true,
       mustChangePassword: false,
+      emailVerifiedAt: new Date(),
     },
     create: {
       organizationId: org.id,
@@ -101,6 +102,7 @@ async function upsertAdmin(email, org, branch, department, shift, passwordHash) 
       role: "COMPANY_ADMIN",
       isActive: true,
       mustChangePassword: false,
+      emailVerifiedAt: new Date(),
     },
   });
 

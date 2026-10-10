@@ -21,7 +21,9 @@ if (dnsResultOrder) {
 const { Pool } = require("pg");
 const pool = new Pool({
   connectionString,
-  max: 15,
+  // Per instance. With N replicas the database sees N x this many connections,
+  // so size it against the Neon plan's limit (or use the -pooler endpoint).
+  max: Number(process.env.DB_POOL_MAX) || 15,
   idleTimeoutMillis: 60000,
   connectionTimeoutMillis: 15000,
   query_timeout: 15000,
@@ -37,7 +39,7 @@ const prisma = new PrismaClient({
   // Secrets are never loaded by default, so no API response or nested include
   // can leak them. Queries that truly need one opt in with `omit: WITH_SECRETS`.
   omit: {
-    user: { passwordHash: true, twoFactorSecret: true, twoFactorBackupCodes: true, twoFactorLastStep: true },
+    user: { passwordHash: true, twoFactorSecret: true, twoFactorBackupCodes: true, twoFactorLastStep: true, emailVerificationCodeHash: true },
   },
   transactionOptions: { maxWait: 10000, timeout: 20000 },
 });

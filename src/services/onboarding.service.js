@@ -7,6 +7,7 @@ const whatsappService = require("./whatsapp.service");
 const { generateTempPassword, resolveAssignableRole } = require("../utils/password");
 const { resolveAvatarUrl } = require("../utils/avatar");
 const { assertSeatAvailable } = require("./entitlement.service");
+const { normalizeIndianPhone } = require("../utils/phone");
 
 const PORTAL_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const CLOSED_PORTAL_STATUSES = new Set(["ACTIVATED", "REJECTED", "OFFER_REJECTED"]);
@@ -87,6 +88,7 @@ class OnboardingService {
     }
 
     const cleanEmail = email.trim().toLowerCase();
+    const cleanPhone = normalizeIndianPhone(phone);
 
     // Check if an active user already exists with this email
     const existingUser = await prisma.user.findUnique({
@@ -158,7 +160,7 @@ class OnboardingService {
         firstName: firstName.trim(),
         lastName: lastName ? lastName.trim() : null,
         email: cleanEmail,
-        phone: phone ? phone.trim() : null,
+        phone: cleanPhone,
         designation: designation.trim(),
         departmentId: departmentId || null,
         branchId: branchId || null,
@@ -650,6 +652,8 @@ class OnboardingService {
           role: assignedRole,
           mustChangePassword: true,
           isActive: true,
+          // Converted from a vetted onboarding candidate, not self-registered.
+          emailVerifiedAt: new Date(),
         },
       });
 
@@ -743,6 +747,7 @@ class OnboardingService {
       emailService
         .sendEmployeeWelcomeEmail(candEmail, candName, {
           organizationName: candidate.organization?.name || "WorkPulse",
+          companyLogoUrl: candidate.organization?.logoUrl,
           tempPassword: result.temporaryPassword,
           loginUrl: `${process.env.FRONTEND_URL || "http://localhost:3000"}/login`,
           role: "EMPLOYEE",
@@ -758,6 +763,9 @@ class OnboardingService {
           expectedJoinDate: candidate.expectedJoinDate,
           salary: candidate.proposedSalary,
           offerUrl,
+          offerLetterData: result.offerLetter,
+          companyName: candidate.organization?.name,
+          companyLogoUrl: candidate.organization?.logoUrl,
         })
         .catch((e) => console.warn("[OfferNotification:Email] Error:", e.message));
     }
@@ -1037,6 +1045,8 @@ class OnboardingService {
               role: "EMPLOYEE",
               mustChangePassword: true,
               isActive: true,
+              // Converted from a vetted onboarding candidate, not self-registered.
+              emailVerifiedAt: new Date(),
             },
           });
         }
@@ -1094,6 +1104,7 @@ class OnboardingService {
       emailService
         .sendEmployeeWelcomeEmail(candidate.email, `${candidate.firstName} ${candidate.lastName || ""}`.trim(), {
           organizationName: candidate.organization?.name || "WorkPulse",
+          companyLogoUrl: candidate.organization?.logoUrl,
           tempPassword,
           loginUrl: `${process.env.FRONTEND_URL || "http://localhost:3000"}/login`,
           role: "EMPLOYEE",

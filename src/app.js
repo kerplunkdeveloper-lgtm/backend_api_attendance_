@@ -9,6 +9,7 @@ const express = require("express");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const helmet = require("helmet");
+const compression = require("compression");
 const morgan = require("morgan");
 const { isConfigured: cloudinaryConfigured } = require("./config/cloudinary");
 
@@ -90,6 +91,9 @@ if (!isProduction) {
 }
 
 app.use(helmet());
+// JSON lists (employees, attendance, reports) compress 5-10x, which matters
+// most on the slow, remote hop between the browser and the API.
+app.use(compression({ threshold: 1024 }));
 app.use(requestContext);
 app.use(
   cors({

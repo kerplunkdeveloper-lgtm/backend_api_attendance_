@@ -18,6 +18,9 @@ const auditService = require("./audit.service");
 const billingService = require("./billing.service");
 
 const MIN_PASSWORD_LENGTH = 8;
+const VERIFICATION_CODE_TTL_MS = 15 * 60 * 1000;
+
+const generateVerificationCode = () => String(crypto.randomInt(0, 1000000)).padStart(6, "0");
 
 // Refresh tokens are bearer credentials. Persist only a deterministic digest
 // so a database read cannot be turned directly into an authenticated session.
@@ -221,17 +224,41 @@ const register = async ({
     },
   });
 
-  const tokenPayload = {
-    userId: user.id,
-    organizationId: user.organizationId,
-    role: user.role,
-  };
+  // Account exists but cannot log in until the email address is confirmed.
+  const verificationCode = generateVerificationCode();
+  const verificationCodeHash = await bcrypt.hash(verificationCode, 10);
+  const verificationExpiresAt = new Date(Date.now() + VERIFICATION_CODE_TTL_MS);
 
-  const accessToken = generateAccessToken(tokenPayload);
-  const refreshToken = await issueRefreshToken(user.id, tokenPayload);
+  await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      emailVerificationCodeHash: verificationCodeHash,
+      emailVerificationExpiresAt: verificationExpiresAt,
+    },
+  });
 
-  // Send unlock code to admin email (async — don't block registration)
   const loginUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/login`;
+
+  // Verification code must reach the inbox before we report success — an
+  // unverifiable account is a dead end for the user. The unlock-code email is
+  // informational and can be retried silently; verification cannot.
+  const verificationResult = await emailService.sendVerificationEmail(
+    cleanEmail,
+    firstName || "there",
+    {
+      code: verificationCode,
+      expiresIn: "15 minutes",
+      companyName: user.organization?.name,
+      companyLogoUrl: user.organization?.logoUrl,
+    },
+  );
+
+  if (!verificationResult.success) {
+    const err = new Error("We couldn't send your verification email. Please try registering again in a moment.");
+    err.statusCode = 502;
+    throw err;
+  }
+
   emailService.sendUnlockCodeEmail(
     cleanEmail,
     firstName || "Admin",
@@ -240,26 +267,126 @@ const register = async ({
       unlockCode,         // plaintext — only sent once in this email
       plan: planMeta.plan,
       loginUrl,
+      companyLogoUrl: user.organization?.logoUrl,
     }
   ).catch((err) => console.warn("[Register] Unlock code email failed:", err.message));
- 
+
   if (process.env.NODE_ENV !== "production") {
     console.log("────────────────────────────────────────────────────────────");
     console.log(`[Register] Organization: ${organizationName || "Default Organization"}`);
     console.log(`[Register] Admin Email : ${cleanEmail}`);
+    console.log(`[Register] Verify Code : ${verificationCode}`);
     console.log("────────────────────────────────────────────────────────────");
   }
 
   return {
-    accessToken,
-    token: accessToken,
-    refreshToken,
+    requiresVerification: true,
+    email: cleanEmail,
     requiresCheckout: requestedPaid,
     selectedPlan: requestedPaid ? requestedPlanKey : "FREE_TRIAL",
-    user: presentAuthUser({ ...user, mustChangePassword: false }),
+    message: "Account created. Enter the verification code we emailed you to activate your account.",
+    // Local development convenience only — never exposed in production.
+    ...(process.env.NODE_ENV !== "production" && process.env.EXPOSE_RESET_LINKS === "true"
+      ? { verificationCode, simulated: verificationResult.simulated || false }
+      : {}),
   };
 };
 
+/**
+ * Confirms a signup verification code and activates the account. Email is not
+ * globally unique, so every account under that address is checked and the one
+ * whose stored hash matches the submitted code is the one that gets verified.
+ */
+const verifyEmail = async (email, code) => {
+  const cleanEmail = String(email || "").trim().toLowerCase();
+  const cleanCode = String(code || "").trim();
+
+  const candidates = await prisma.user.findMany({
+    omit: WITH_SECRETS,
+    where: { email: { equals: cleanEmail, mode: "insensitive" }, isActive: true },
+    include: {
+      organization: organizationWithSubscription,
+      employee: { include: { branch: true, shift: true, department: true } },
+    },
+  });
+
+  for (const candidate of candidates) {
+    if (!candidate.emailVerificationCodeHash) continue;
+    const matches = await bcrypt.compare(cleanCode, candidate.emailVerificationCodeHash);
+    if (!matches) continue;
+
+    if (!candidate.emailVerificationExpiresAt || candidate.emailVerificationExpiresAt < new Date()) {
+      const err = new Error("This verification code has expired. Request a new one.");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const user = await prisma.user.update({
+      where: { id: candidate.id },
+      data: {
+        emailVerifiedAt: new Date(),
+        emailVerificationCodeHash: null,
+        emailVerificationExpiresAt: null,
+      },
+      include: {
+        organization: organizationWithSubscription,
+        employee: { include: { branch: true, shift: true, department: true } },
+      },
+    });
+
+    const tokenPayload = { userId: user.id, organizationId: user.organizationId, role: user.role };
+    const accessToken = generateAccessToken(tokenPayload);
+    const refreshToken = await issueRefreshToken(user.id, tokenPayload);
+
+    return {
+      accessToken,
+      token: accessToken,
+      refreshToken,
+      user: presentAuthUser(user),
+    };
+  }
+
+  const err = new Error("That verification code is invalid or has expired.");
+  err.statusCode = 400;
+  throw err;
+};
+
+/**
+ * Re-sends a fresh verification code. Always returns a generic message so the
+ * endpoint cannot be used to enumerate which addresses have registered.
+ */
+const resendVerificationCode = async (email) => {
+  const cleanEmail = String(email || "").trim().toLowerCase();
+  const genericMessage = "If that email address has a pending verification, a new code has been sent.";
+
+  const candidates = await prisma.user.findMany({
+    include: { organization: organizationWithSubscription },
+    where: { email: { equals: cleanEmail, mode: "insensitive" }, isActive: true, emailVerifiedAt: null },
+  });
+
+  for (const candidate of candidates) {
+    const verificationCode = generateVerificationCode();
+    const verificationCodeHash = await bcrypt.hash(verificationCode, 10);
+    await prisma.user.update({
+      where: { id: candidate.id },
+      data: {
+        emailVerificationCodeHash: verificationCodeHash,
+        emailVerificationExpiresAt: new Date(Date.now() + VERIFICATION_CODE_TTL_MS),
+      },
+    });
+
+    await emailService
+      .sendVerificationEmail(cleanEmail, "there", {
+        code: verificationCode,
+        expiresIn: "15 minutes",
+        companyName: candidate.organization?.name,
+        companyLogoUrl: candidate.organization?.logoUrl,
+      })
+      .catch((err) => console.warn("[ResendVerification] Email dispatch failed:", err.message));
+  }
+
+  return { success: true, message: genericMessage };
+};
 
 const login = async (email, password, client = null, employeeCode = null) => {
   // Mobile clients send employeeCode when the identifier has no '@'. Either
@@ -318,6 +445,13 @@ const login = async (email, password, client = null, employeeCode = null) => {
   if (user.isActive === false) {
     const error = new Error("This account has been deactivated. Contact your administrator.");
     error.statusCode = 403;
+    throw error;
+  }
+
+  if (!user.emailVerifiedAt) {
+    const error = new Error("Please verify your email address before logging in. Check your inbox for the verification code.");
+    error.statusCode = 403;
+    error.code = "EMAIL_NOT_VERIFIED";
     throw error;
   }
 
@@ -707,7 +841,8 @@ const forgotPassword = async (email) => {
     lastEmailResult = await emailService.sendPasswordResetEmail(user.email, userName, {
       resetUrl,
       expiresIn: "60 minutes",
-      organizationName: user.organization?.name,
+      companyName: user.organization?.name,
+      companyLogoUrl: user.organization?.logoUrl,
     });
     resetUrls.push(resetUrl);
   }
@@ -856,6 +991,12 @@ const loginWithGoogle = async (idToken, client = null) => {
   if (profile.sub && !user.googleSub) {
     await prisma.user.update({ where: { id: user.id }, data: { googleSub: profile.sub } });
   }
+  // Google already proved this address is real and reachable, so it satisfies
+  // our own signup verification requirement too.
+  if (!user.emailVerifiedAt) {
+    user.emailVerifiedAt = new Date();
+    await prisma.user.update({ where: { id: user.id }, data: { emailVerifiedAt: user.emailVerifiedAt } });
+  }
   const tokenPayload = { userId: user.id, organizationId: user.organizationId, role: user.role };
   const accessToken = generateAccessToken(tokenPayload);
   const refreshToken = await issueRefreshToken(user.id, tokenPayload);
@@ -870,6 +1011,8 @@ const loginWithGoogle = async (idToken, client = null) => {
 
 module.exports = {
   register,
+  verifyEmail,
+  resendVerificationCode,
   login,
   loginWithGoogle,
   refreshAccessToken,

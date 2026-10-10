@@ -628,7 +628,13 @@ class LeaveService {
         include: {
           leaveType: true,
           employee: {
-            select: { id: true, firstName: true, lastName: true, employeeCode: true },
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              employeeCode: true,
+              organization: { select: { name: true, logoUrl: true } },
+            },
           },
         },
       });
@@ -668,6 +674,8 @@ class LeaveService {
           endDate: request.endDate,
           totalDays: Number(request.totalDays),
           reviewNote,
+          companyName: request.employee?.organization?.name,
+          companyLogoUrl: request.employee?.organization?.logoUrl,
         })
         .catch((err) => console.warn("[LeaveNotification:Email] Error:", err.message));
     }
