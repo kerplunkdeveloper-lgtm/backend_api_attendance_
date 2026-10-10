@@ -209,7 +209,7 @@ const register = async ({
             employee: {
               create: {
                 organizationId: finalOrgId,
-                employeeCode: employeeCode || await getNextEmployeeCode(finalOrgId, prisma),
+                employeeCode: employeeCode || await getNextEmployeeCode(finalOrgId, prisma, finalRole, organizationName),
                 firstName,
                 lastName: lastName || null,
                 avatarUrl: registerAvatar,

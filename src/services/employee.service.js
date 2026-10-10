@@ -4,7 +4,7 @@ const emailService = require("./email.service");
 const { generateTempPassword, resolveAssignableRole, assertRoleAssignment } = require("../utils/password");
 const { resolveAvatarUrl } = require("../utils/avatar");
 const { assertSeatAvailable, assertBranchAvailable } = require("./entitlement.service");
-const { getNextEmployeeCode } = require("../utils/employeeCode");
+const { getNextEmployeeCode, organizationPrefix } = require("../utils/employeeCode");
 
 const SENSITIVE_EMPLOYEE_FIELDS = [
   "panNumber",
@@ -82,9 +82,17 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
     throw new Error(`A user account with email '${cleanEmail}' already exists in this organization`);
   }
 
-  // Generate or validate employeeCode
+  const userRole = resolveAssignableRole(role, actorRole);
+
+  const org = await prisma.organization.findUnique({
+    where: { id: organizationId },
+    include: { subscription: true },
+  });
+  if (!org) throw new Error("Organization not found.");
+
+  // Generate or validate one common company-prefixed employee code, e.g. KM002.
   const finalEmployeeCode =
-    employeeCode?.trim() || await getNextEmployeeCode(organizationId, prisma);
+    employeeCode?.trim() || await getNextEmployeeCode(organizationId, prisma, userRole, org.name);
 
   const existingCode = await prisma.employee.findUnique({
     where: {
@@ -98,12 +106,6 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
   if (existingCode) {
     throw new Error(`Employee code '${finalEmployeeCode}' is already taken in this organization`);
   }
-
-  const org = await prisma.organization.findUnique({
-    where: { id: organizationId },
-    include: { subscription: true },
-  });
-  if (!org) throw new Error("Organization not found.");
 
   // Validate branch
   if (branchId) {
@@ -138,8 +140,6 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
   const tempPassword = password && String(password).trim() ? String(password).trim() : generateTempPassword();
   const salt = await bcrypt.genSalt(10);
   const passwordHash = await bcrypt.hash(tempPassword, salt);
-  const userRole = resolveAssignableRole(role, actorRole);
-
   const avatarUrl = resolveAvatarUrl({
     avatarUrl: data.avatarUrl,
     profileImage: data.profileImage,
@@ -669,9 +669,9 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
   const salt = await bcrypt.genSalt(10);
   const passwordHash = await bcrypt.hash(tempPassword, salt);
 
-  // Determine employee code
-  const employeeCode = data.employeeCode?.trim() || await getNextEmployeeCode(organizationId, prisma);
   const userRole = resolveAssignableRole(role, actorRole);
+  // HR uses the same company-wide employee-code sequence as every other employee.
+  const employeeCode = data.employeeCode?.trim() || await getNextEmployeeCode(organizationId, prisma, userRole, org.name);
   const avatarUrl = resolveAvatarUrl({
     avatarUrl: data.avatarUrl,
     profileImage: data.profileImage,
@@ -776,6 +776,7 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
         tempPassword,
         loginUrl,
         role: userRole,
+        employeeCode: employee.employeeCode,
       }
     );
     console.log(`[Invite] Welcome email dispatch result for ${cleanEmail}:`, emailDelivery);
@@ -980,16 +981,15 @@ const bulkImportEmployees = async (organizationId, employeesList, actorRole = "C
     }
     takenEmails.add(r.email); // also catches duplicate rows inside the file
 
-    let employeeCode = r.rawCode || `EMP-${stamp}${r.row}`;
-    if (takenCodes.has(employeeCode)) employeeCode = `EMP-${stamp}${r.row}`;
-    takenCodes.add(employeeCode);
-
     try {
       r.userRole = resolveAssignableRole(r.rawRole === "MANAGER" ? "MANAGER" : "EMPLOYEE", actorRole);
     } catch (err) {
       results.push({ row: r.row, email: r.email, status: "FAILED", reason: err.message });
       continue;
     }
+    let employeeCode = r.rawCode || `${organizationPrefix(org?.name)}-${r.userRole === "MANAGER" ? "HR" : "EMP"}-${stamp}${r.row}`;
+    if (takenCodes.has(employeeCode)) employeeCode = `${organizationPrefix(org?.name)}-${r.userRole === "MANAGER" ? "HR" : "EMP"}-${stamp}${r.row}`;
+    takenCodes.add(employeeCode);
     r.employeeCode = employeeCode;
     // A name that matches an existing record links to it. A name that does not
     // is created during the import. Only a blank cell uses the workspace default.

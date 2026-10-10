@@ -433,7 +433,7 @@ class EmailService {
    * 6. Employee Welcome Email — sent when admin invites an employee by email.
    * Contains their auto-generated login credentials.
    */
-  async sendEmployeeWelcomeEmail(to, firstName, { organizationName, tempPassword, loginUrl, role, companyLogoUrl }) {
+  async sendEmployeeWelcomeEmail(to, firstName, { organizationName, tempPassword, loginUrl, role, employeeCode, companyLogoUrl }) {
     const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
     firstName = esc(firstName);
     const rawOrganizationName = organizationName;
@@ -448,6 +448,7 @@ class EmailService {
       </p>
       <div class="info-card">
         <div class="info-row"><span class="info-label">Login Email:</span><span class="info-value" style="font-family: monospace;">${to}</span></div>
+        <div class="info-row"><span class="info-label">Login ID:</span><span class="info-value" style="font-family: monospace;">${esc(employeeCode || to)}</span></div>
         <div class="info-row">
           <span class="info-label">Temporary Password:</span>
           <span class="info-value" style="font-family: monospace; color: #dc2626; background: #fef2f2; padding: 2px 8px; border-radius: 6px; border: 1px solid #fecaca;">
