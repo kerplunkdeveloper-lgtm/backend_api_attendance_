@@ -12,7 +12,7 @@ const { normalizeIndianPhone } = require("../utils/phone");
 const PORTAL_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const CLOSED_PORTAL_STATUSES = new Set(["ACTIVATED", "REJECTED", "OFFER_REJECTED"]);
 
-const assertPortalCandidate = (candidate) => {
+const assertPortalCandidate = (candidate, { allowClosedReadOnly = false } = {}) => {
   if (!candidate) {
     const error = new Error("Invalid or expired onboarding invitation link");
     error.statusCode = 404;
@@ -33,7 +33,7 @@ const assertPortalCandidate = (candidate) => {
     error.statusCode = 410;
     throw error;
   }
-  if (CLOSED_PORTAL_STATUSES.has(candidate.status)) {
+  if (!allowClosedReadOnly && CLOSED_PORTAL_STATUSES.has(candidate.status)) {
     const error = new Error("This onboarding invitation is no longer active");
     error.statusCode = 410;
     throw error;
@@ -219,7 +219,10 @@ class OnboardingService {
       throw error;
     }
 
-    const live = assertPortalCandidate(candidate);
+    // Activated candidates can still open the original offer link to see the
+    // final status. Mutating portal actions remain blocked by the default
+    // assertion used by profile, upload, and offer-response endpoints.
+    const live = assertPortalCandidate(candidate, { allowClosedReadOnly: true });
     return {
       ...live,
       documents: (live.documents || []).map((doc) => ({
