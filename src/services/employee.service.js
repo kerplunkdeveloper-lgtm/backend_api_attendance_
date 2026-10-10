@@ -4,6 +4,7 @@ const emailService = require("./email.service");
 const { generateTempPassword, resolveAssignableRole, assertRoleAssignment } = require("../utils/password");
 const { resolveAvatarUrl } = require("../utils/avatar");
 const { assertSeatAvailable, assertBranchAvailable } = require("./entitlement.service");
+const { getNextEmployeeCode } = require("../utils/employeeCode");
 
 const SENSITIVE_EMPLOYEE_FIELDS = [
   "panNumber",
@@ -83,7 +84,7 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
 
   // Generate or validate employeeCode
   const finalEmployeeCode =
-    employeeCode?.trim() || `EMP-${Date.now().toString().slice(-6)}`;
+    employeeCode?.trim() || await getNextEmployeeCode(organizationId, prisma);
 
   const existingCode = await prisma.employee.findUnique({
     where: {
@@ -669,7 +670,7 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
   const passwordHash = await bcrypt.hash(tempPassword, salt);
 
   // Determine employee code
-  const employeeCode = data.employeeCode?.trim() || `EMP-${Date.now().toString().slice(-6)}`;
+  const employeeCode = data.employeeCode?.trim() || await getNextEmployeeCode(organizationId, prisma);
   const userRole = resolveAssignableRole(role, actorRole);
   const avatarUrl = resolveAvatarUrl({
     avatarUrl: data.avatarUrl,

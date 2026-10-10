@@ -8,6 +8,7 @@ const { generateTempPassword, resolveAssignableRole } = require("../utils/passwo
 const { resolveAvatarUrl } = require("../utils/avatar");
 const { assertSeatAvailable } = require("./entitlement.service");
 const { normalizeIndianPhone } = require("../utils/phone");
+const { getNextEmployeeCode } = require("../utils/employeeCode");
 
 const PORTAL_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const CLOSED_PORTAL_STATUSES = new Set(["ACTIVATED", "REJECTED", "OFFER_REJECTED"]);
@@ -604,7 +605,7 @@ class OnboardingService {
     const passwordHash = await bcrypt.hash(tempPassword, 10);
     const assignedRole = resolveAssignableRole(role, actorRole);
     const finalEmployeeCode =
-      employeeCode?.trim() || `EMP-${Date.now().toString().slice(-6)}`;
+      employeeCode?.trim() || await getNextEmployeeCode(organizationId, prisma);
 
     // Prepare Offer Letter data compilation
     const offerLetterRef = `WP-OFF-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -1030,7 +1031,7 @@ class OnboardingService {
     if (!employeeId) {
       const tempPassword = generateTempPassword();
       const passwordHash = await bcrypt.hash(tempPassword, 10);
-      const finalEmployeeCode = `EMP-${Date.now().toString().slice(-6)}`;
+      const finalEmployeeCode = await getNextEmployeeCode(candidate.organizationId, prisma);
       const salaryVal = candidate.proposedSalary ? Number(candidate.proposedSalary) : 50000;
       const basic = Math.round(salaryVal * 0.5);
       const hra = Math.round(salaryVal * 0.3);

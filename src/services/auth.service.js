@@ -11,6 +11,7 @@ const {
 const emailService = require("./email.service");
 const { organizationWithSubscription, WITH_SECRETS } = require("../utils/prismaSelects");
 const { resolveAvatarUrl } = require("../utils/avatar");
+const { getNextEmployeeCode } = require("../utils/employeeCode");
 
 const { PLAN_CONFIGS, SUBSCRIPTION_PLANS, isPaidPlan, addBillingPeriod } = require("../config/plans");
 const { presentAuthUser } = require("./entitlement.service");
@@ -208,8 +209,7 @@ const register = async ({
             employee: {
               create: {
                 organizationId: finalOrgId,
-                employeeCode:
-                  employeeCode || `EMP-${Date.now().toString().slice(-6)}`,
+                employeeCode: employeeCode || await getNextEmployeeCode(finalOrgId, prisma),
                 firstName,
                 lastName: lastName || null,
                 avatarUrl: registerAvatar,
