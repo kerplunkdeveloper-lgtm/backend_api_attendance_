@@ -1,4 +1,5 @@
 const holidayService = require("../services/holiday.service");
+const { sendControllerError } = require("../utils/controllerError");
 
 class HolidayController {
   /**
@@ -16,12 +17,7 @@ class HolidayController {
         message: "Holiday created successfully",
         data: holiday,
       });
-    } catch (error) {
-      return res.status(error.statusCode || 500).json({
-        success: false,
-        message: error.message,
-      });
-    }
+    } catch (error) { return sendControllerError(res, error); }
   }
 
   /**
@@ -40,12 +36,7 @@ class HolidayController {
         message: `Successfully imported ${results.created} holiday(s). Skipped: ${results.skipped}`,
         data: results,
       });
-    } catch (error) {
-      return res.status(error.statusCode || 500).json({
-        success: false,
-        message: error.message,
-      });
-    }
+    } catch (error) { return sendControllerError(res, error); }
   }
 
   /**
@@ -62,12 +53,7 @@ class HolidayController {
         success: true,
         data: holidays,
       });
-    } catch (error) {
-      return res.status(error.statusCode || 500).json({
-        success: false,
-        message: error.message,
-      });
-    }
+    } catch (error) { return sendControllerError(res, error); }
   }
 
   /**
@@ -87,12 +73,7 @@ class HolidayController {
         message: "Holiday updated successfully",
         data: updated,
       });
-    } catch (error) {
-      return res.status(error.statusCode || 500).json({
-        success: false,
-        message: error.message,
-      });
-    }
+    } catch (error) { return sendControllerError(res, error); }
   }
 
   /**
@@ -104,12 +85,7 @@ class HolidayController {
       const { id } = req.params;
       const result = await holidayService.deleteHoliday(organizationId, id);
       return res.status(200).json(result);
-    } catch (error) {
-      return res.status(error.statusCode || 500).json({
-        success: false,
-        message: error.message,
-      });
-    }
+    } catch (error) { return sendControllerError(res, error); }
   }
 
   /**
@@ -129,12 +105,7 @@ class HolidayController {
         success: true,
         data: holidays,
       });
-    } catch (error) {
-      return res.status(error.statusCode || 500).json({
-        success: false,
-        message: error.message,
-      });
-    }
+    } catch (error) { return sendControllerError(res, error); }
   }
 }
 

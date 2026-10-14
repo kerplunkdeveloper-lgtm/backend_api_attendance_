@@ -1,7 +1,7 @@
 const permissionService = require("../services/permission.service");
 
-const sendError = (res, error) =>
-  res.status(error.statusCode || 500).json({ success: false, message: error.message });
+const { sendControllerError } = require("../utils/controllerError");
+const sendError = (res, error) => sendControllerError(res, error);
 
 const my = async (req, res) => {
   try {

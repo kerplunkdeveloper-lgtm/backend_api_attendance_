@@ -1,4 +1,6 @@
 const prisma = require("../config/database");
+const { ADMIN_ROLES, assertCanReview } = require("../utils/approvalChain");
+const webhookService = require("./webhook.service");
 
 class CompOffService {
   /**
@@ -202,7 +204,7 @@ class CompOffService {
     });
   }
 
-  async listPendingRedemptions(organizationId) {
+  async listPendingRedemptions(organizationId, reviewerRole) {
     const balances = await prisma.compOffBalance.findMany({
       where: { organizationId },
       select: { id: true },
@@ -210,22 +212,24 @@ class CompOffService {
     const balanceIds = balances.map((b) => b.id);
     if (!balanceIds.length) return [];
 
-    return prisma.compOffTransaction.findMany({
+    const records = await prisma.compOffTransaction.findMany({
       where: { compOffBalanceId: { in: balanceIds }, type: "PENDING_DEBIT" },
       include: {
         compOffBalance: {
           include: {
             employee: {
-              select: { id: true, firstName: true, lastName: true, employeeCode: true },
+              select: { id: true, firstName: true, lastName: true, employeeCode: true, user: { select: { role: true } } },
             },
           },
         },
       },
       orderBy: { createdAt: "desc" },
     });
+    if (ADMIN_ROLES.includes(reviewerRole)) return records;
+    return records.filter((record) => record.compOffBalance?.employee?.user?.role === "EMPLOYEE");
   }
 
-  async reviewRedemption(organizationId, transactionId, reviewerUserId, { status, reviewNote }) {
+  async reviewRedemption(organizationId, transactionId, reviewerUserId, { status, reviewNote, reviewerRole }) {
     const action = String(status || "").toUpperCase();
     if (!["APPROVED", "REJECTED"].includes(action)) {
       const error = new Error("status must be APPROVED or REJECTED");
@@ -251,6 +255,7 @@ class CompOffService {
     }
 
     const employee = transaction.compOffBalance.employee;
+    assertCanReview(employee?.user?.role, reviewerRole);
     const numDays = Number(transaction.days);
     const startDate = transaction.referenceDate
       ? new Date(transaction.referenceDate)
@@ -270,10 +275,11 @@ class CompOffService {
           createdBy: reviewerUserId,
         },
       });
+      await this._notifyReview(employee, action, reviewNote, transaction.id);
       return { success: true, message: "Comp-off request rejected", transaction: updated };
     }
 
-    return await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       const current = await tx.compOffBalance.findUnique({
         where: { id: transaction.compOffBalanceId },
       });
@@ -346,6 +352,31 @@ class CompOffService {
         },
       };
     });
+    await this._notifyReview(employee, action, reviewNote, transaction.id);
+    return result;
+  }
+
+  async _notifyReview(employee, status, reviewNote, transactionId) {
+    if (!employee?.userId || !prisma.notification?.create) return;
+    try {
+      await prisma.notification.create({
+        data: {
+          organizationId: employee.organizationId,
+          userId: employee.userId,
+          title: `Comp-off request ${status.toLowerCase()}`,
+          message: `Your comp-off request was ${status.toLowerCase()}${reviewNote ? `: ${reviewNote}` : "."}`,
+          type: "COMPOFF",
+        },
+      });
+    } catch (error) {
+      console.warn("[CompOffNotification] Dispatch failed:", error.message);
+    }
+    webhookService.dispatch(employee.organizationId, "compoff.updated", {
+      compOffTransactionId: transactionId,
+      employeeId: employee.id,
+      status,
+      reviewNote: reviewNote || null,
+    }).catch((error) => console.warn("[CompOffNotification:Webhook] Dispatch failed:", error.message));
   }
 
   /**

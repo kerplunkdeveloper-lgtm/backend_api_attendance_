@@ -1,5 +1,6 @@
 const { uploadImage, uploadBuffer } = require("../config/cloudinary");
 const { assertSniffedType } = require("../middleware/upload.middleware");
+const { sendControllerError } = require("../utils/controllerError");
 
 // Clients may pick a sub-folder but not an arbitrary path — everything is
 // rooted under the caller's own organization so one tenant can never write
@@ -82,10 +83,7 @@ class UploadController {
       });
     } catch (error) {
       console.error("Cloudinary upload error:", error);
-      return res.status(error.statusCode || 500).json({
-        success: false,
-        message: error.message || "Failed to upload file",
-      });
+      return sendControllerError(res, error, { fallbackStatus: 500, fallbackMessage: "Failed to upload file" });
     }
   }
 }

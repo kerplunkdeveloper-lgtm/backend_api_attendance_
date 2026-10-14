@@ -16,7 +16,7 @@ mockPrisma({
   },
 });
 
-const { bindClient, canJoinThread } = require("../src/realtime/chatWs");
+const { bindClient, canJoinThread, getSocketsByUser, onlineUserIds, broadcastPresenceLocal } = require("../src/realtime/chatWs");
 
 describe("chat websocket", () => {
   it("registers a pong handler that marks the socket alive", () => {
@@ -50,5 +50,18 @@ describe("chat websocket", () => {
     });
     assert.equal(ws.subscribedThreads.has("thread-b"), false);
     assert.equal(sent[0]?.error, "Not a member of this thread");
+  });
+
+  it("keeps presence tenant-scoped and broadcasts only to the same organization", () => {
+    const home = { readyState: 1, organizationId: "org-a", send: (frame) => home.frames.push(JSON.parse(frame)), frames: [] };
+    const foreign = { readyState: 1, organizationId: "org-b", send: (frame) => foreign.frames.push(JSON.parse(frame)), frames: [] };
+    getSocketsByUser().set("user-a", new Set([home]));
+    getSocketsByUser().set("user-b", new Set([foreign]));
+    assert.deepEqual(onlineUserIds("org-a"), ["user-a"]);
+    broadcastPresenceLocal({ organizationId: "org-a", userId: "user-c", online: true });
+    assert.equal(home.frames[0].type, "chat:presence");
+    assert.equal(home.frames[0].userId, "user-c");
+    assert.equal(foreign.frames.length, 0);
+    getSocketsByUser().clear();
   });
 });

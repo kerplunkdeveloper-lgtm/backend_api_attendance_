@@ -1,5 +1,6 @@
 const prisma = require("../config/database");
 const { PLAN_INR, BILLING_OFFERS, PLAN_KEYS, BILLING_CYCLES } = require("./billing.service");
+const { getPlan } = require("../config/plans");
 
 const normalizePlan = (value) => String(value || "").trim().toUpperCase();
 const normalizeCycle = (value) => String(value || "").trim().toUpperCase();
@@ -59,6 +60,32 @@ async function upsertPlanPrice({ plan, billingCycle, priceInr, isActive = true, 
   return serializePrice(row);
 }
 
+const serializeLimit = (row) => ({ ...row });
+
+async function listPlanLimits() {
+  const rows = await prisma.billingPlanLimit.findMany({ orderBy: { plan: "asc" } });
+  const byPlan = new Map(rows.map((row) => [row.plan, row]));
+  return PLAN_KEYS.map((plan) => serializeLimit(byPlan.get(plan) || {
+    id: null, plan, maxEmployees: getPlan(plan).maxEmployees, maxBranches: getPlan(plan).maxBranches,
+    hasGeofence: getPlan(plan).hasGeofence, hasPayroll: getPlan(plan).hasPayroll,
+    hasShiftPlanner: getPlan(plan).hasShiftPlanner, hasApiAccess: getPlan(plan).hasApiAccess,
+    updatedByUserId: null, createdAt: null, updatedAt: null,
+  }));
+}
+
+async function upsertPlanLimit({ plan, maxEmployees, maxBranches, hasGeofence, hasPayroll, hasShiftPlanner, hasApiAccess, userId }) {
+  const normalizedPlan = normalizePlan(plan);
+  assertPlan(normalizedPlan);
+  const seats = Number(maxEmployees); const branches = Number(maxBranches);
+  if (!Number.isInteger(seats) || seats < 1 || seats > 10000000) throw Object.assign(new Error("Employee limit must be a whole number between 1 and 10,000,000"), { statusCode: 400 });
+  if (!Number.isInteger(branches) || branches < 1 || branches > 100000) throw Object.assign(new Error("Branch limit must be a whole number between 1 and 100,000"), { statusCode: 400 });
+  return serializeLimit(await prisma.billingPlanLimit.upsert({
+    where: { plan: normalizedPlan },
+    update: { maxEmployees: seats, maxBranches: branches, hasGeofence: Boolean(hasGeofence), hasPayroll: Boolean(hasPayroll), hasShiftPlanner: Boolean(hasShiftPlanner), hasApiAccess: Boolean(hasApiAccess), updatedByUserId: userId || null },
+    create: { plan: normalizedPlan, maxEmployees: seats, maxBranches: branches, hasGeofence: Boolean(hasGeofence), hasPayroll: Boolean(hasPayroll), hasShiftPlanner: Boolean(hasShiftPlanner), hasApiAccess: Boolean(hasApiAccess), updatedByUserId: userId || null },
+  }));
+}
+
 async function listOffers() {
   const rows = await prisma.billingOffer.findMany({ orderBy: { createdAt: "desc" } });
   return rows.map(serializeOffer);
@@ -110,4 +137,4 @@ async function deactivateOffer(id, userId) {
   return serializeOffer(row);
 }
 
-module.exports = { listPlanPrices, upsertPlanPrice, listOffers, createOffer, updateOffer, deactivateOffer, BILLING_OFFERS };
+module.exports = { listPlanPrices, upsertPlanPrice, listPlanLimits, upsertPlanLimit, listOffers, createOffer, updateOffer, deactivateOffer, BILLING_OFFERS };

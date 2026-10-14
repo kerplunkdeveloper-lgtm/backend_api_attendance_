@@ -117,6 +117,7 @@ class ExpenseController {
       const claims = await expenseService.getOrganizationExpenses(
         organizationId,
         req.query,
+        req.user.role,
       );
 
       return res.status(200).json({

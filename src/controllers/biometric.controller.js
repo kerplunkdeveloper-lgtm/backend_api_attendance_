@@ -1,4 +1,5 @@
 const biometricService = require("../services/biometric.service");
+const { sendControllerError } = require("../utils/controllerError");
 
 module.exports = {
   async create(req, res) {
@@ -13,9 +14,7 @@ module.exports = {
         message: "Copy the apiKey now. It is shown only once.",
       });
     } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
+      return sendControllerError(res, err);
     }
   },
   async list(req, res) {
@@ -23,9 +22,7 @@ module.exports = {
       const data = await biometricService.listDevices(req.user.organizationId);
       return res.json({ success: true, data });
     } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
+      return sendControllerError(res, err);
     }
   },
   async revoke(req, res) {
@@ -36,9 +33,7 @@ module.exports = {
       );
       return res.json({ success: true, data });
     } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
+      return sendControllerError(res, err);
     }
   },
   async punch(req, res) {
@@ -52,9 +47,7 @@ module.exports = {
       });
       return res.json({ success: true, data });
     } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
+      return sendControllerError(res, err);
     }
   },
 };

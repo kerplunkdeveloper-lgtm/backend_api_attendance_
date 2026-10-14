@@ -2,7 +2,9 @@ const crypto = require("crypto");
 const { createClient } = require("redis");
 
 let client = null;
+let subscriber = null;
 let connectPromise = null;
+let subscriberConnectPromise = null;
 let lastErrorLogAt = 0;
 
 const logRedisError = (error) => {
@@ -26,6 +28,41 @@ const getRedis = async () => {
     await connectPromise;
   }
   return client;
+};
+
+/**
+ * Redis clients cannot issue normal commands after SUBSCRIBE, so realtime
+ * consumers use a duplicated connection. The duplicate is created lazily so
+ * applications that only need rate limiting do not open an extra connection.
+ */
+const getRedisSubscriber = async () => {
+  const url = String(process.env.REDIS_URL || "").trim();
+  if (!url) return null;
+  const redis = await getRedis();
+  if (!redis) return null;
+  if (!subscriber) {
+    subscriber = redis.duplicate();
+    subscriber.on("error", logRedisError);
+  }
+  if (!subscriber.isOpen) {
+    subscriberConnectPromise ||= subscriber.connect().finally(() => {
+      subscriberConnectPromise = null;
+    });
+    await subscriberConnectPromise;
+  }
+  return subscriber;
+};
+
+const publishRedis = async (channel, payload) => {
+  try {
+    const redis = await getRedis();
+    if (!redis) return false;
+    await redis.publish(channel, JSON.stringify(payload));
+    return true;
+  } catch (error) {
+    logRedisError(error);
+    return false;
+  }
 };
 
 const withRedisLock = async (key, ttlMs, task) => {
@@ -52,6 +89,14 @@ const withRedisLock = async (key, ttlMs, task) => {
 
 const disconnectRedis = async () => {
   if (client?.isOpen) await client.close();
+  if (subscriber?.isOpen) await subscriber.close();
 };
 
-module.exports = { disconnectRedis, getRedis, logRedisError, withRedisLock };
+module.exports = {
+  disconnectRedis,
+  getRedis,
+  getRedisSubscriber,
+  logRedisError,
+  publishRedis,
+  withRedisLock,
+};

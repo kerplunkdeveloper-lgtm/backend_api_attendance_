@@ -1,4 +1,5 @@
 const chatService = require("../services/chat.service");
+const { sendControllerError } = require("../utils/controllerError");
 
 module.exports = {
   async teammates(req, res) {
@@ -10,9 +11,7 @@ module.exports = {
       );
       return res.json({ success: true, data });
     } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
+      return sendControllerError(res, err);
     }
   },
   async threads(req, res) {
@@ -24,9 +23,7 @@ module.exports = {
       );
       return res.json({ success: true, data });
     } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
+      return sendControllerError(res, err);
     }
   },
   async open(req, res) {
@@ -38,9 +35,7 @@ module.exports = {
       );
       return res.json({ success: true, data });
     } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
+      return sendControllerError(res, err);
     }
   },
   async createGroup(req, res) {
@@ -52,9 +47,7 @@ module.exports = {
       );
       return res.status(201).json({ success: true, data });
     } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
+      return sendControllerError(res, err);
     }
   },
   async messages(req, res) {
@@ -67,9 +60,7 @@ module.exports = {
       );
       return res.json({ success: true, data });
     } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
+      return sendControllerError(res, err);
     }
   },
   async send(req, res) {
@@ -82,9 +73,7 @@ module.exports = {
       );
       return res.status(201).json({ success: true, data });
     } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
+      return sendControllerError(res, err);
     }
   },
 };

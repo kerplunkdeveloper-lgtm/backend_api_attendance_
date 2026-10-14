@@ -1,6 +1,13 @@
 const prisma = require("../config/database");
 const { uploadBuffer } = require("../config/cloudinary");
 const { assertRealImage } = require("../middleware/upload.middleware");
+const ssoService = require("./sso.service");
+
+const presentOrganization = (organization) => {
+  if (!organization) return organization;
+  const { ssoClientSecretCiphertext, ...safe } = organization;
+  return { ...safe, sso: ssoService.getConfiguration(organization) };
+};
 
 async function getSettings(organizationId) {
   const org = await prisma.organization.findUnique({
@@ -12,7 +19,7 @@ async function getSettings(organizationId) {
     err.statusCode = 404;
     throw err;
   }
-  return org;
+  return presentOrganization(org);
 }
 
 async function updateSettings(organizationId, payload) {
@@ -32,11 +39,18 @@ async function updateSettings(organizationId, payload) {
     }
     data.logoUrl = url;
   }
-  return prisma.organization.update({
+  const updated = await prisma.organization.update({
     where: { id: organizationId },
     data,
     include: { subscription: true },
   });
+  if (payload.sso !== undefined) {
+    await ssoService.updateConfiguration(organizationId, payload.sso || {});
+  }
+  const current = payload.sso !== undefined
+    ? await prisma.organization.findUnique({ where: { id: organizationId }, include: { subscription: true } })
+    : updated;
+  return presentOrganization(current);
 }
 
 /** Stores an uploaded company logo and returns the updated organization. */
@@ -51,15 +65,17 @@ async function uploadLogo(organizationId, file) {
     error.statusCode = cause?.statusCode === 503 ? 503 : 502;
     throw error;
   }
-  return prisma.organization.update({
+  const updated = await prisma.organization.update({
     where: { id: organizationId },
     data: { logoUrl: result.secure_url || result.url },
     include: { subscription: true },
   });
+  return presentOrganization(updated);
 }
 
 async function removeLogo(organizationId) {
-  return prisma.organization.update({ where: { id: organizationId }, data: { logoUrl: null }, include: { subscription: true } });
+  const updated = await prisma.organization.update({ where: { id: organizationId }, data: { logoUrl: null }, include: { subscription: true } });
+  return presentOrganization(updated);
 }
 
 module.exports = { getSettings, updateSettings, uploadLogo, removeLogo };

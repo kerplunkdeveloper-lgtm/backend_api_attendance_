@@ -120,133 +120,45 @@ const evaluateAttendanceAgainstShift = (
   breakMinutes = 0,
   options = {}
 ) => {
-  const { timeZone = DEFAULT_TIMEZONE, halfDayThresholdMinutes = null } = options;
+  const { timeZone = DEFAULT_TIMEZONE, halfDayThresholdMinutes = null, lunchMinutes = 0 } = options;
   const scheduledMinutes = getScheduledDurationMinutes(shift.startTime, shift.endTime);
-
-  let workingMinutes = 0;
-  let overtimeMinutes = 0;
-  let earlyMinutes = 0;
-  let lateMinutes = 0;
-  let status = "PRESENT";
-
-  if (checkInTime) {
-    lateMinutes = calculateLateMinutes(shift.startTime, shift.graceMinutes, checkInTime, timeZone);
-    if (lateMinutes > 0) {
-      status = "LATE";
-    }
-  } else {
-    return {
-      scheduledMinutes,
-      workingMinutes: 0,
-      breakMinutes: 0,
-      lateMinutes: 0,
-      earlyMinutes: 0,
-      overtimeMinutes: 0,
-      status: "ABSENT",
-    };
-  }
-
-  if (checkInTime && checkOutTime) {
-    // If both are full Date objects or timestamps
-    const inMs = new Date(checkInTime).getTime();
-    const outMs = new Date(checkOutTime).getTime();
-    let elapsedMinutes = 0;
-
-    if (!isNaN(inMs) && !isNaN(outMs) && outMs >= inMs) {
-      elapsedMinutes = Math.floor((outMs - inMs) / (1000 * 60));
-    } else {
-      // If passed as "HH:mm" time strings
-      const inMins = parseTimeToMinutes(checkInTime, timeZone);
-      const outMins = parseTimeToMinutes(checkOutTime, timeZone);
-      elapsedMinutes = outMins >= inMins ? outMins - inMins : 1440 - inMins + outMins;
-    }
-
-    // Deduct break duration from total elapsed working minutes
-    const validBreak = Math.max(0, parseInt(breakMinutes) || 0);
-    workingMinutes = Math.max(0, elapsedMinutes - validBreak);
-
-    earlyMinutes = calculateEarlyMinutes(shift.endTime, checkOutTime, shift.startTime, timeZone);
-
-    if (workingMinutes > scheduledMinutes) {
-      overtimeMinutes = workingMinutes - scheduledMinutes;
-    }
-
-    // Half-day threshold comes from org policy when configured; otherwise it
-    // falls back to half the scheduled shift.
-    const halfDayThreshold =
-      Number.isFinite(halfDayThresholdMinutes) && halfDayThresholdMinutes > 0
-        ? halfDayThresholdMinutes
-        : Math.floor(scheduledMinutes / 2);
-
-    // 8-Hour Full-Day Completion Policy:
-    // When employee checks out, if total working time completes 8 hours (480 mins) or scheduled shift duration,
-    // they have completed their full work obligation -> Late arrival is waived and status is marked as PRESENT.
-    const fullDayThresholdMinutes = Math.min(480, scheduledMinutes > 0 ? scheduledMinutes : 480);
-    const isCompletedFullDay = workingMinutes >= fullDayThresholdMinutes;
-    const isLateWaived = lateMinutes > 0 && isCompletedFullDay;
-
-    let effectiveLateMinutes = lateMinutes;
-
-    if (isCompletedFullDay) {
-      status = "PRESENT";
-      effectiveLateMinutes = 0; // Late waived because full 8 hours completed
-    } else if (workingMinutes < halfDayThreshold) {
-      status = "HALF_DAY";
-    } else if (lateMinutes > 0) {
-      status = "LATE";
-    } else {
-      status = "PRESENT";
-    }
-
-    return {
-      scheduledMinutes,
-      scheduledHours: (scheduledMinutes / 60).toFixed(1),
-      scheduledFormatted: formatMinutes(scheduledMinutes),
-      workingMinutes,
-      workingHours: (workingMinutes / 60).toFixed(1),
-      workingFormatted: formatMinutes(workingMinutes),
-      breakMinutes: Math.max(0, parseInt(breakMinutes) || 0),
-      breakFormatted: formatMinutes(Math.max(0, parseInt(breakMinutes) || 0)),
-      lateMinutes: effectiveLateMinutes,
-      originalLateMinutes: lateMinutes,
-      lateArrivalWaived: isLateWaived,
-      isCompletedFullDay,
-      lateFormatted: formatMinutes(effectiveLateMinutes),
-      earlyMinutes,
-      earlyFormatted: formatMinutes(earlyMinutes),
-      overtimeMinutes,
-      overtimeHours: (overtimeMinutes / 60).toFixed(1),
-      overtimeFormatted: formatMinutes(overtimeMinutes),
-      status,
-    };
-  }
-
-  return {
-    scheduledMinutes,
-    scheduledHours: (scheduledMinutes / 60).toFixed(1),
-    scheduledFormatted: formatMinutes(scheduledMinutes),
-    workingMinutes,
-    workingHours: (workingMinutes / 60).toFixed(1),
-    workingFormatted: formatMinutes(workingMinutes),
-    breakMinutes: Math.max(0, parseInt(breakMinutes) || 0),
-    breakFormatted: formatMinutes(Math.max(0, parseInt(breakMinutes) || 0)),
-    lateMinutes,
-    originalLateMinutes: lateMinutes,
-    lateArrivalWaived: false,
-    isCompletedFullDay: false,
-    lateFormatted: formatMinutes(lateMinutes),
-    earlyMinutes,
-    earlyFormatted: formatMinutes(earlyMinutes),
-    overtimeMinutes,
-    overtimeHours: (overtimeMinutes / 60).toFixed(1),
-    overtimeFormatted: formatMinutes(overtimeMinutes),
-    status,
+  const configuredBreakMinutes = shift.breakIncluded === false ? 0 : Math.max(0, Number(shift.breakMinutes) || 0);
+  const configuredLunchMinutes = shift.lunchIncluded === false ? 0 : Math.max(0, Number(shift.lunchMinutes) || 0);
+  const scheduledWorkMinutes = Math.max(0, scheduledMinutes - configuredBreakMinutes - configuredLunchMinutes);
+  const actualBreakMinutes = Math.max(0, parseInt(breakMinutes, 10) || 0);
+  const actualLunchMinutes = Math.max(0, parseInt(lunchMinutes, 10) || 0);
+  const totalPauseMinutes = actualBreakMinutes + actualLunchMinutes;
+  const base = {
+    scheduledMinutes, scheduledHours: (scheduledMinutes / 60).toFixed(1), scheduledFormatted: formatMinutes(scheduledMinutes),
+    scheduledWorkMinutes, scheduledWorkHours: (scheduledWorkMinutes / 60).toFixed(1), scheduledWorkFormatted: formatMinutes(scheduledWorkMinutes),
+    configuredBreakMinutes, configuredLunchMinutes, breakMinutes: actualBreakMinutes, breakFormatted: formatMinutes(actualBreakMinutes),
+    lunchMinutes: actualLunchMinutes, lunchFormatted: formatMinutes(actualLunchMinutes), totalPauseMinutes, totalPauseFormatted: formatMinutes(totalPauseMinutes),
   };
-};
+  if (!checkInTime) return { ...base, workingMinutes: 0, workingHours: "0.0", workingFormatted: formatMinutes(0), lateMinutes: 0, earlyMinutes: 0, overtimeMinutes: 0, overtimeHours: "0.0", overtimeFormatted: formatMinutes(0), status: "ABSENT" };
 
-/**
- * Formats minutes into readable text like "9 hr 10 min", "45 min", "8 hr".
- */
+  const lateMinutes = calculateLateMinutes(shift.startTime, shift.graceMinutes, checkInTime, timeZone);
+  if (!checkOutTime) return { ...base, workingMinutes: 0, workingHours: "0.0", workingFormatted: formatMinutes(0), lateMinutes, originalLateMinutes: lateMinutes, lateFormatted: formatMinutes(lateMinutes), earlyMinutes: 0, earlyFormatted: formatMinutes(0), overtimeMinutes: 0, overtimeHours: "0.0", overtimeFormatted: formatMinutes(0), status: lateMinutes > 0 ? "LATE" : "PRESENT" };
+
+  const inMs = new Date(checkInTime).getTime();
+  const outMs = new Date(checkOutTime).getTime();
+  let elapsedMinutes;
+  if (!isNaN(inMs) && !isNaN(outMs) && outMs >= inMs) elapsedMinutes = Math.floor((outMs - inMs) / 60000);
+  else {
+    const inMins = parseTimeToMinutes(checkInTime, timeZone);
+    const outMins = parseTimeToMinutes(checkOutTime, timeZone);
+    elapsedMinutes = outMins >= inMins ? outMins - inMins : 1440 - inMins + outMins;
+  }
+  const workingMinutes = Math.max(0, elapsedMinutes - totalPauseMinutes);
+  const earlyMinutes = calculateEarlyMinutes(shift.endTime, checkOutTime, shift.startTime, timeZone);
+  const overtimeMinutes = Math.max(0, workingMinutes - scheduledWorkMinutes);
+  const halfDayThreshold = Number.isFinite(halfDayThresholdMinutes) && halfDayThresholdMinutes > 0 ? halfDayThresholdMinutes : Math.floor(scheduledWorkMinutes / 2);
+  const fullDayThresholdMinutes = scheduledWorkMinutes > 0 ? scheduledWorkMinutes : Math.min(480, scheduledMinutes || 480);
+  const isCompletedFullDay = workingMinutes >= fullDayThresholdMinutes;
+  const isLateWaived = lateMinutes > 0 && isCompletedFullDay;
+  const effectiveLateMinutes = isLateWaived ? 0 : lateMinutes;
+  const status = isCompletedFullDay ? "PRESENT" : workingMinutes < halfDayThreshold ? "HALF_DAY" : lateMinutes > 0 ? "LATE" : "PRESENT";
+  return { ...base, workingMinutes, workingHours: (workingMinutes / 60).toFixed(1), workingFormatted: formatMinutes(workingMinutes), lateMinutes: effectiveLateMinutes, originalLateMinutes: lateMinutes, lateArrivalWaived: isLateWaived, isCompletedFullDay, lateFormatted: formatMinutes(effectiveLateMinutes), earlyMinutes, earlyFormatted: formatMinutes(earlyMinutes), overtimeMinutes, overtimeHours: (overtimeMinutes / 60).toFixed(1), overtimeFormatted: formatMinutes(overtimeMinutes), status };
+};
 const formatMinutes = (minutes) => {
   const total = Math.round(Number(minutes) || 0);
   if (total <= 0) return "0 min";

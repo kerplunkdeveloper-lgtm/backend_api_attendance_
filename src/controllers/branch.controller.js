@@ -1,4 +1,5 @@
 const branchService = require("../services/branch.service");
+const { sendControllerError } = require("../utils/controllerError");
 
 const create = async (req, res) => {
   try {
@@ -13,10 +14,7 @@ const create = async (req, res) => {
       data: branch,
     });
   } catch (error) {
-    return res.status(400).json({
-      success: false,
-      message: error.message,
-    });
+    return sendControllerError(res, error);
   }
 };
 
@@ -30,10 +28,7 @@ const list = async (req, res) => {
       data: branches,
     });
   } catch (error) {
-    return res.status(400).json({
-      success: false,
-      message: error.message,
-    });
+    return sendControllerError(res, error);
   }
 };
 
@@ -51,10 +46,7 @@ const getById = async (req, res) => {
       data: branch,
     });
   } catch (error) {
-    return res.status(404).json({
-      success: false,
-      message: error.message,
-    });
+    return sendControllerError(res, error, { fallbackStatus: 404 });
   }
 };
 
@@ -73,10 +65,7 @@ const update = async (req, res) => {
       data: updated,
     });
   } catch (error) {
-    return res.status(400).json({
-      success: false,
-      message: error.message,
-    });
+    return sendControllerError(res, error);
   }
 };
 
@@ -90,10 +79,7 @@ const remove = async (req, res) => {
       message: "Branch deleted successfully",
     });
   } catch (error) {
-    return res.status(400).json({
-      success: false,
-      message: error.message,
-    });
+    return sendControllerError(res, error);
   }
 };
 

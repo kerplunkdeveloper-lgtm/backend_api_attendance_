@@ -1,4 +1,5 @@
 const employeeService = require("../services/employee.service");
+const { sendControllerError } = require("../utils/controllerError");
 
 const create = async (req, res) => {
   try {
@@ -13,12 +14,7 @@ const create = async (req, res) => {
       message: "Employee and user account created successfully",
       data: employee,
     });
-  } catch (error) {
-    return res.status(error.statusCode || 500).json({
-      success: false,
-      message: error.message,
-    });
-  }
+  } catch (error) { return sendControllerError(res, error); }
 };
 
 const list = async (req, res) => {
@@ -38,12 +34,7 @@ const list = async (req, res) => {
       limit: result.limit,
       totalPages: result.totalPages,
     });
-  } catch (error) {
-    return res.status(error.statusCode || 500).json({
-      success: false,
-      message: error.message,
-    });
-  }
+  } catch (error) { return sendControllerError(res, error); }
 };
 
 const getById = async (req, res) => {
@@ -60,12 +51,7 @@ const getById = async (req, res) => {
       message: "Employee details fetched successfully",
       data: employee,
     });
-  } catch (error) {
-    return res.status(error.statusCode || 404).json({
-      success: false,
-      message: error.message,
-    });
-  }
+  } catch (error) { return sendControllerError(res, error, { fallbackStatus: 404 }); }
 };
 
 const update = async (req, res) => {
@@ -83,12 +69,7 @@ const update = async (req, res) => {
       message: "Employee updated successfully",
       data: updated,
     });
-  } catch (error) {
-    return res.status(error.statusCode || 500).json({
-      success: false,
-      message: error.message,
-    });
-  }
+  } catch (error) { return sendControllerError(res, error); }
 };
 
 const bulkSetAccess = async (req, res) => {
@@ -106,12 +87,7 @@ const bulkSetAccess = async (req, res) => {
         ? `${verb} ${result.changedCount} employee(s). ${result.failedCount} could not be updated.`
         : `${verb} ${result.changedCount} employee(s).`;
     return res.json({ success: true, message, data: result });
-  } catch (error) {
-    return res.status(error.statusCode || 500).json({
-      success: false,
-      message: error.message,
-    });
-  }
+  } catch (error) { return sendControllerError(res, error); }
 };
 
 const remove = async (req, res) => {
@@ -123,12 +99,7 @@ const remove = async (req, res) => {
       success: true,
       message: "Employee and account removed successfully",
     });
-  } catch (error) {
-    return res.status(error.statusCode || 500).json({
-      success: false,
-      message: error.message,
-    });
-  }
+  } catch (error) { return sendControllerError(res, error); }
 };
 
 const invite = async (req, res) => {
@@ -140,12 +111,18 @@ const invite = async (req, res) => {
       req.user.role,
     );
     return res.status(201).json(result);
-  } catch (error) {
-    return res.status(error.statusCode || 400).json({
-      success: false,
-      message: error.message,
-    });
-  }
+  } catch (error) { return sendControllerError(res, error); }
+};
+
+const resendInvite = async (req, res) => {
+  try {
+    const result = await employeeService.resendEmployeeInvite(
+      req.user.organizationId,
+      req.user.id,
+      req.params.id,
+    );
+    return res.json(result);
+  } catch (error) { return sendControllerError(res, error); }
 };
 
 const getMe = async (req, res) => {
@@ -155,11 +132,7 @@ const getMe = async (req, res) => {
       req.user.id,
     );
     return res.json({ success: true, data });
-  } catch (error) {
-    return res
-      .status(error.statusCode || 400)
-      .json({ success: false, message: error.message });
-  }
+  } catch (error) { return sendControllerError(res, error); }
 };
 
 const updateMe = async (req, res) => {
@@ -170,11 +143,7 @@ const updateMe = async (req, res) => {
       req.body,
     );
     return res.json({ success: true, message: "Profile updated", data });
-  } catch (error) {
-    return res
-      .status(error.statusCode || 400)
-      .json({ success: false, message: error.message });
-  }
+  } catch (error) { return sendControllerError(res, error); }
 };
 
 const uploadMyAvatar = async (req, res) => {
@@ -192,11 +161,7 @@ const uploadMyAvatar = async (req, res) => {
       data: user,
       user,
     });
-  } catch (error) {
-    return res
-      .status(error.statusCode || 500)
-      .json({ success: false, message: error.message || "Failed to upload photo" });
-  }
+  } catch (error) { return sendControllerError(res, error, { fallbackMessage: "Failed to upload photo" }); }
 };
 
 const uploadEmployeeAvatar = async (req, res) => {
@@ -213,11 +178,7 @@ const uploadEmployeeAvatar = async (req, res) => {
       message: "Employee photo updated",
       data: employee,
     });
-  } catch (error) {
-    return res
-      .status(error.statusCode || 500)
-      .json({ success: false, message: error.message || "Failed to upload photo" });
-  }
+  } catch (error) { return sendControllerError(res, error, { fallbackMessage: "Failed to upload photo" }); }
 };
 
 
@@ -243,12 +204,7 @@ const bulkImport = async (req, res) => {
     );
 
     return res.status(200).json(result);
-  } catch (error) {
-    return res.status(error.statusCode || 500).json({
-      success: false,
-      message: error.message || "Failed to process bulk import",
-    });
-  }
+  } catch (error) { return sendControllerError(res, error, { fallbackMessage: "Failed to process bulk import" }); }
 };
 
 module.exports = {
@@ -260,6 +216,7 @@ module.exports = {
   update,
   remove,
   invite,
+  resendInvite,
   getMe,
   updateMe,
   uploadMyAvatar,

@@ -14,12 +14,7 @@ class CorrectionController {
         message: "Attendance correction request submitted successfully",
         data: result,
       });
-    } catch (error) {
-      return res.status(error.statusCode || 400).json({
-        success: false,
-        message: error.message,
-      });
-    }
+    } catch (error) { return fail(res, error); }
   }
 
   async getMyRequests(req, res) {
@@ -32,12 +27,7 @@ class CorrectionController {
         success: true,
         data: result,
       });
-    } catch (error) {
-      return res.status(error.statusCode || 500).json({
-        success: false,
-        message: error.message,
-      });
-    }
+    } catch (error) { return fail(res, error); }
   }
 
   async getAllRequests(req, res) {
@@ -69,12 +59,7 @@ class CorrectionController {
         message: `Correction request ${result.status.toLowerCase()} successfully`,
         data: result,
       });
-    } catch (error) {
-      return res.status(error.statusCode || 400).json({
-        success: false,
-        message: error.message,
-      });
-    }
+    } catch (error) { return fail(res, error); }
   }
 }
 

@@ -41,6 +41,8 @@ router.post(
 // Break management
 router.post("/break-start", attendanceController.startBreak);
 router.post("/break-end", attendanceController.endBreak);
+router.post("/lunch-start", attendanceController.startLunch);
+router.post("/lunch-end", attendanceController.endLunch);
 
 // Offline sync — batch sync locally-queued punches when internet is restored
 router.post("/sync-offline", attendanceController.syncOfflinePunches);

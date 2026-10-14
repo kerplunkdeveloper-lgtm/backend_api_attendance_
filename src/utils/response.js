@@ -37,12 +37,9 @@ const paginated = (res, result, extra = {}) => {
   });
 };
 
+const { sendControllerError } = require("./controllerError");
+
 const fail = (res, error, fallbackStatus = 500) =>
-  res.status(error?.statusCode || fallbackStatus).json({
-    success: false,
-    message: error?.message || "Unexpected error",
-    ...(error?.code && { code: error.code }),
-    ...(res.req?.requestId && { requestId: res.req.requestId }),
-  });
+  sendControllerError(res, error, { fallbackStatus, fallbackMessage: "Unexpected error" });
 
 module.exports = { ok, created, paginated, fail };

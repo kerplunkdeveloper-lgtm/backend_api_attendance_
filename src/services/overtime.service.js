@@ -1,5 +1,7 @@
 const prisma = require("../config/database");
 const { getOrgDateOnly } = require("./attendance.service");
+const { assertCanReview, visibleToReviewer } = require("../utils/approvalChain");
+const webhookService = require("./webhook.service");
 
 class OvertimeService {
   /**
@@ -121,7 +123,7 @@ class OvertimeService {
   /**
    * Manager/Admin reviews (approve/reject) an overtime request
    */
-  async reviewOvertimeRequest(organizationId, requestId, reviewerUserId, { status, approvedMinutes, reviewNote }) {
+  async reviewOvertimeRequest(organizationId, requestId, reviewerUserId, { status, approvedMinutes, reviewNote, reviewerRole }) {
     if (!["APPROVED", "REJECTED"].includes(status)) {
       const error = new Error("Status must be APPROVED or REJECTED");
       error.statusCode = 400;
@@ -130,7 +132,7 @@ class OvertimeService {
 
     const request = await prisma.overtimeRequest.findFirst({
       where: { id: requestId, organizationId },
-      include: { attendance: true, employee: { select: { userId: true } } },
+      include: { attendance: true, employee: { select: { userId: true, user: { select: { role: true } } } } },
     });
 
     if (!request) {
@@ -148,6 +150,7 @@ class OvertimeService {
       error.statusCode = 403;
       throw error;
     }
+    assertCanReview(request.employee?.user?.role, reviewerRole);
 
     const finalOtMinutes =
       approvedMinutes !== undefined && approvedMinutes !== null
@@ -160,7 +163,7 @@ class OvertimeService {
       throw error;
     }
 
-    return await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       if (status === "APPROVED") {
         await tx.attendance.update({
           where: { id: request.attendanceId },
@@ -195,14 +198,42 @@ class OvertimeService {
 
       return { success: true, message: `Overtime request ${status.toLowerCase()}`, request: updated };
     });
+    if (request.employee?.userId && prisma.notification?.create) {
+      try {
+        await prisma.notification.create({
+          data: {
+            organizationId,
+            userId: request.employee.userId,
+            title: `Overtime request ${status.toLowerCase()}`,
+            message: `Your overtime request was ${status.toLowerCase()}${reviewNote ? `: ${reviewNote}` : "."}`,
+            type: "OVERTIME",
+          },
+        });
+      } catch (error) {
+        console.warn("[OvertimeNotification] Dispatch failed:", error.message);
+      }
+    }
+    webhookService.dispatch(organizationId, "attendance.updated", {
+      overtimeRequestId: requestId,
+      employeeId: request.employeeId,
+      status,
+      approvedMinutes: status === "APPROVED" ? finalOtMinutes : null,
+    }).catch((error) => console.warn("[OvertimeNotification:Webhook] Dispatch failed:", error.message));
+    return result;
   }
 
   /**
    * Get all overtime requests for the organization (admin/manager view)
    */
-  async getOvertimeRequests(organizationId, query = {}) {
+  async getOvertimeRequests(organizationId, query = {}, reviewerRole) {
     const { status, employeeId, page = 1, limit = 50 } = query;
-    const where = { organizationId };
+    // Authenticated requests always carry a role. Keep the service usable by
+    // legacy callers/tests that do not provide one, while still enforcing the
+    // visibility rule whenever a role is known.
+    const where = {
+      organizationId,
+      ...(reviewerRole == null ? {} : visibleToReviewer(reviewerRole)),
+    };
     if (status && status !== "ALL") where.status = status;
     if (employeeId) where.employeeId = employeeId;
 

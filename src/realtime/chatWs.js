@@ -1,7 +1,9 @@
 const prisma = require("../config/database");
 const { verifyAccessToken } = require("../utils/jwt");
+const { getRedisSubscriber, publishRedis, logRedisError } = require("../config/redis");
 
-const tokenCache = new Map();
+const CHAT_CHANNEL = "workpulse:chat:messages";
+const PRESENCE_CHANNEL = "workpulse:chat:presence";
 
 function getWs() {
   try {
@@ -13,6 +15,7 @@ function getWs() {
 }
 
 let wss = null;
+let redisChatSubscriberStarted = false;
 const socketsByUser = new Map();
 
 async function assertLiveUser(userId) {
@@ -41,6 +44,30 @@ async function canJoinThread(userId, organizationId, threadId) {
     select: { id: true },
   });
   return Boolean(member);
+}
+
+function onlineUserIds(organizationId) {
+  const ids = [];
+  for (const [userId, pool] of socketsByUser.entries()) {
+    if ([...pool].some((ws) => ws.readyState === 1 && ws.organizationId === organizationId)) ids.push(userId);
+  }
+  return ids;
+}
+
+function broadcastPresenceLocal(event) {
+  if (!event?.organizationId || !event.userId) return;
+  const frame = JSON.stringify({ type: "chat:presence", userId: event.userId, online: Boolean(event.online) });
+  for (const pool of socketsByUser.values()) {
+    for (const ws of pool) {
+      if (ws.readyState === 1 && ws.organizationId === event.organizationId) ws.send(frame);
+    }
+  }
+}
+
+function publishPresence(event) {
+  publishRedis(PRESENCE_CHANNEL, event).then((published) => {
+    if (!published) broadcastPresenceLocal(event);
+  });
 }
 
 function tokenExpired(payload) {
@@ -96,9 +123,13 @@ function bindClient(ws, payload) {
 
   ws.on("close", () => {
     const pool = socketsByUser.get(userId);
+    const organizationId = ws.organizationId;
     if (pool) {
       pool.delete(ws);
-      if (pool.size === 0) socketsByUser.delete(userId);
+      if (pool.size === 0) {
+        socketsByUser.delete(userId);
+        publishPresence({ organizationId, userId, online: false });
+      }
     }
   });
 }
@@ -112,6 +143,8 @@ function attachChatWebSocket(server) {
   }
 
   wss = new Ws.WebSocketServer({ noServer: true });
+
+  startRedisChatSubscriber();
 
   server.on("upgrade", (req, socket, head) => {
     let pathname;
@@ -154,9 +187,12 @@ function attachChatWebSocket(server) {
       return;
     }
     payload.organizationId = live.organizationId;
+    const wasOffline = !onlineUserIds(live.organizationId).includes(live.id);
     if (!socketsByUser.has(live.id)) socketsByUser.set(live.id, new Set());
     socketsByUser.get(live.id).add(ws);
     bindClient(ws, payload);
+    ws.send(JSON.stringify({ type: "chat:presence:snapshot", userIds: onlineUserIds(live.organizationId) }));
+    if (wasOffline) publishPresence({ organizationId: live.organizationId, userId: live.id, online: true });
   });
 
   const heartbeat = setInterval(async () => {
@@ -186,7 +222,30 @@ function attachChatWebSocket(server) {
   heartbeat.unref?.();
 }
 
-function broadcastToThread(threadId, message) {
+async function startRedisChatSubscriber() {
+  if (redisChatSubscriberStarted) return;
+  redisChatSubscriberStarted = true;
+  try {
+    const subscriber = await getRedisSubscriber();
+    if (!subscriber) return;
+    await subscriber.subscribe(CHAT_CHANNEL, (raw) => {
+      try {
+        const event = JSON.parse(raw);
+        broadcastLocalToThread(event.threadId, event.message);
+      } catch (error) {
+        logRedisError(error);
+      }
+    });
+    await subscriber.subscribe(PRESENCE_CHANNEL, (raw) => {
+      try { broadcastPresenceLocal(JSON.parse(raw)); } catch (error) { logRedisError(error); }
+    });
+  } catch (error) {
+    redisChatSubscriberStarted = false;
+    logRedisError(error);
+  }
+}
+
+function broadcastLocalToThread(threadId, message) {
   if (!wss || !threadId) return;
   const orgId = message?.organizationId;
   const frame = JSON.stringify({ type: "chat:message", message });
@@ -198,6 +257,16 @@ function broadcastToThread(threadId, message) {
       ws.send(frame);
     }
   }
+}
+
+function broadcastToThread(threadId, message) {
+  if (!threadId) return;
+  // Publish once; every API replica, including this one, receives the event.
+  // Without Redis, publishRedis returns false and we retain single-process
+  // WebSocket behavior for local development.
+  publishRedis(CHAT_CHANNEL, { threadId, message }).then((published) => {
+    if (!published) broadcastLocalToThread(threadId, message);
+  });
 }
 
 function revokeUserSockets(userId) {
@@ -215,6 +284,9 @@ function revokeUserSockets(userId) {
 module.exports = {
   attachChatWebSocket,
   broadcastToThread,
+  broadcastLocalToThread,
+  broadcastPresenceLocal,
+  onlineUserIds,
   getSocketsByUser: () => socketsByUser,
   bindClient,
   canJoinThread,

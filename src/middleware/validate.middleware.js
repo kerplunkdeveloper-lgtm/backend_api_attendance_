@@ -120,12 +120,18 @@ const schemas = {
       message: "Email or employeeCode is required",
     }),
 
+  twoFactorCode: z.object({ code: z.string().trim().min(6).max(20) }).strict(),
+  twoFactorLogin: z.object({ challengeToken: z.string().min(20).max(4000), code: z.string().trim().min(6).max(20) }).strict(),
+
   googleLogin: z
     .object({
       idToken: z.string().min(20).max(10000),
       client: z.enum(["web", "mobile"]).optional(),
     })
     .strict(),
+
+  ssoDiscover: z.object({ email: EMAIL }).strict(),
+  ssoExchange: z.object({ code: z.string().trim().min(20).max(500) }).strict(),
 
   sessionMutation: z
     .object({
@@ -176,10 +182,12 @@ const schemas = {
 
   billingVerify: z
     .object({
-      razorpay_order_id: z.string().trim().min(5).max(100),
+      razorpay_order_id: z.string().trim().min(5).max(100).optional(),
+      razorpay_subscription_id: z.string().trim().min(5).max(100).optional(),
       razorpay_payment_id: z.string().trim().min(5).max(100),
       razorpay_signature: z.string().trim().length(64).regex(/^[a-f0-9]+$/i),
     })
+    .refine((value) => Boolean(value.razorpay_order_id || value.razorpay_subscription_id), { message: "A Razorpay order or subscription is required" })
     .strict(),
 
   billingPlanPrice: z

@@ -681,24 +681,17 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
 
   const isNonWorkingDay = isOffDay || Boolean(holiday) || Boolean(approvedLeave);
 
-  // Auto-close unclosed break
-  let autoClosedBreakDuration = 0;
-  const lastEvent = attendance.events?.[0];
-  const isOnActiveBreak = lastEvent && lastEvent.type === "BREAK_START";
-  if (isOnActiveBreak) {
-    autoClosedBreakDuration = Math.max(
-      Math.floor((checkOutTime.getTime() - new Date(lastEvent.timestamp).getTime()) / 60000)
-    );
-  }
-
-  const totalBreakMinutes = (attendance.breakMinutes || 0) + autoClosedBreakDuration;
-  const elapsedMinutes = Math.max(
-    0,
-    Math.floor((checkOutTime.getTime() - new Date(attendance.checkIn).getTime()) / 60000)
-  );
-
-  const calculatedWorkingMinutes = Math.max(0, elapsedMinutes - totalBreakMinutes);
-
+  // Auto-close either kind of pause at checkout and keep break/lunch totals separate.
+  const activePauseStart = attendance.events?.[0];
+  const activePauseType = activePauseStart?.type === "BREAK_START" ? "BREAK" : activePauseStart?.type === "LUNCH_START" ? "LUNCH" : null;
+  const autoClosedPauseDuration = activePauseType
+    ? Math.max(0, Math.floor((checkOutTime.getTime() - new Date(activePauseStart.timestamp).getTime()) / 60000))
+    : 0;
+  const totalBreakMinutes = (attendance.breakMinutes || 0) + (activePauseType === "BREAK" ? autoClosedPauseDuration : 0);
+  const totalLunchMinutes = (attendance.lunchMinutes || 0) + (activePauseType === "LUNCH" ? autoClosedPauseDuration : 0);
+  const totalPauseMinutes = totalBreakMinutes + totalLunchMinutes;
+  const elapsedMinutes = Math.max(0, Math.floor((checkOutTime.getTime() - new Date(attendance.checkIn).getTime()) / 60000));
+  const calculatedWorkingMinutes = Math.max(0, elapsedMinutes - totalPauseMinutes);
   let metrics;
   if (isNonWorkingDay) {
     // 100% of working time on a rest day / holiday / leave day is logged as Overtime (OT)
@@ -711,7 +704,11 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
       workingFormatted: formatMinutes(calculatedWorkingMinutes),
       breakMinutes: totalBreakMinutes,
       breakFormatted: formatMinutes(totalBreakMinutes),
-      lateMinutes: 0,
+      lunchMinutes: totalLunchMinutes,
+      lunchFormatted: formatMinutes(totalLunchMinutes),
+      totalPauseMinutes,
+      totalPauseFormatted: formatMinutes(totalPauseMinutes),
+        lateMinutes: 0,
       lateFormatted: "0m",
       earlyMinutes: 0,
       earlyFormatted: "0m",
@@ -725,6 +722,7 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
     const policy = await getPolicy(organizationId);
     metrics = evaluateAttendanceAgainstShift(shift, attendance.checkIn, checkOutTime, totalBreakMinutes, {
       timeZone: timezone,
+      lunchMinutes: totalLunchMinutes,
       halfDayThresholdMinutes: policy.halfDayThresholdMinutes,
     });
 
@@ -745,7 +743,11 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
       workingFormatted: formatMinutes(calculatedWorkingMinutes),
       breakMinutes: totalBreakMinutes,
       breakFormatted: formatMinutes(totalBreakMinutes),
-      lateMinutes: attendance.lateMinutes || 0,
+      lunchMinutes: totalLunchMinutes,
+      lunchFormatted: formatMinutes(totalLunchMinutes),
+      totalPauseMinutes,
+      totalPauseFormatted: formatMinutes(totalPauseMinutes),
+        lateMinutes: attendance.lateMinutes || 0,
       lateFormatted: formatMinutes(attendance.lateMinutes || 0),
       earlyMinutes: 0,
       earlyFormatted: "0m",
@@ -770,11 +772,11 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
   });
 
   const updatedAttendance = await prisma.$transaction(async (tx) => {
-    if (isOnActiveBreak) {
+    if (activePauseType) {
       await tx.attendanceEvent.create({
         data: {
           attendanceId: attendance.id,
-          type: "BREAK_END",
+          type: activePauseType === "LUNCH" ? "LUNCH_END" : "BREAK_END",
           timestamp: checkOutTime,
           latitude: latitude ? String(latitude) : null,
           longitude: longitude ? String(longitude) : null,
@@ -792,6 +794,7 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
         checkOutLocation,
         workingMinutes: metrics.workingMinutes,
         breakMinutes: totalBreakMinutes,
+        lunchMinutes: totalLunchMinutes,
         lateMinutes: metrics.lateMinutes !== undefined ? metrics.lateMinutes : (attendance.lateMinutes || 0),
         earlyMinutes: metrics.earlyMinutes || 0,
         overtimeMinutes: metrics.overtimeMinutes || 0,
@@ -917,192 +920,76 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
 // Break Start / End
 // ─────────────────────────────────────────────────────────────────────────────
 
-const startBreak = async ({ userId, employeeId, organizationId, latitude, longitude, timestamp, actorRole = null }) => {
-  const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
-  const eventTime = assertPunchTimestamp(timestamp, { actorRole, source: "WEB" });
-
-  const attendance = await findOpenAttendance(employee.id, organizationId, eventTime, {
-    events: { orderBy: { timestamp: "desc" } },
-  });
-
-  if (!attendance?.checkIn) {
-    const error = new Error("You must check in before taking a break");
-    error.statusCode = 400;
-    throw error;
-  }
-  if (attendance.checkOut) {
-    const error = new Error("Cannot take a break after checking out");
-    error.statusCode = 400;
-    throw error;
-  }
-
-  const lastEvent = attendance.events[0];
-  if (lastEvent?.type === "BREAK_START") {
-    const error = new Error("You are already on a break");
-    error.statusCode = 400;
-    throw error;
-  }
-
-  const breakStartTime = eventTime;
-  const event = await prisma.attendanceEvent.create({
-    data: {
-      attendanceId: attendance.id,
-      type: "BREAK_START",
-      timestamp: breakStartTime,
-      latitude: latitude ? String(latitude) : null,
-      longitude: longitude ? String(longitude) : null,
-      isBypassed: false,
-    },
-  });
-
-  return {
-    success: true,
-    message: `Break started at ${breakStartTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
-    event,
-    attendance,
-  };
+const pauseTypes = {
+  BREAK: { start: "BREAK_START", end: "BREAK_END", field: "breakMinutes", label: "Break" },
+  LUNCH: { start: "LUNCH_START", end: "LUNCH_END", field: "lunchMinutes", label: "Lunch" },
 };
 
-const endBreak = async ({ userId, employeeId, organizationId, latitude, longitude, timestamp, actorRole = null }) => {
+const startPause = async ({ userId, employeeId, organizationId, latitude, longitude, timestamp, actorRole = null, pauseType = "BREAK" }) => {
+  const config = pauseTypes[pauseType] || pauseTypes.BREAK;
   const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
   const eventTime = assertPunchTimestamp(timestamp, { actorRole, source: "WEB" });
+  const attendance = await findOpenAttendance(employee.id, organizationId, eventTime, { events: { orderBy: { timestamp: "desc" } } });
+  if (!attendance?.checkIn) { const error = new Error(`You must check in before taking ${config.label.toLowerCase()}`); error.statusCode = 400; throw error; }
+  if (attendance.checkOut) { const error = new Error(`Cannot take ${config.label.toLowerCase()} after checking out`); error.statusCode = 400; throw error; }
+  const lastEvent = attendance.events[0];
+  if (lastEvent && (lastEvent.type === "BREAK_START" || lastEvent.type === "LUNCH_START")) { const error = new Error(`You are already on ${lastEvent.type === "LUNCH_START" ? "lunch" : "a break"}`); error.statusCode = 400; throw error; }
+  const event = await prisma.attendanceEvent.create({ data: { attendanceId: attendance.id, type: config.start, timestamp: eventTime, latitude: latitude ? String(latitude) : null, longitude: longitude ? String(longitude) : null, isBypassed: false } });
+  return { success: true, message: `${config.label} started at ${eventTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`, event, attendance };
+};
 
-  const attendance = await findOpenAttendance(employee.id, organizationId, eventTime, {
-    events: { orderBy: { timestamp: "desc" } },
-  });
-
-  if (!attendance?.checkIn) {
-    const error = new Error("No active attendance record found for today");
-    error.statusCode = 400;
-    throw error;
-  }
-
-  const lastBreakStart = attendance.events.find((e) => e.type === "BREAK_START");
-  const lastBreakEnd = attendance.events.find((e) => e.type === "BREAK_END");
-
-  if (!lastBreakStart || (lastBreakEnd && new Date(lastBreakEnd.timestamp) >= new Date(lastBreakStart.timestamp))) {
-    const error = new Error("No active break to end");
-    error.statusCode = 400;
-    throw error;
-  }
-
-  const breakEndTime = eventTime;
-  const durationSeconds = Math.max(
-    0,
-    Math.floor((breakEndTime.getTime() - new Date(lastBreakStart.timestamp).getTime()) / 1000)
-  );
-  const durationMinutes = Math.max(
-    0,
-    Math.floor(durationSeconds / 60)
-  );
-
+const endPause = async ({ userId, employeeId, organizationId, latitude, longitude, timestamp, actorRole = null, pauseType = "BREAK" }) => {
+  const config = pauseTypes[pauseType] || pauseTypes.BREAK;
+  const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
+  const eventTime = assertPunchTimestamp(timestamp, { actorRole, source: "WEB" });
+  const attendance = await findOpenAttendance(employee.id, organizationId, eventTime, { events: { orderBy: { timestamp: "desc" } } });
+  if (!attendance?.checkIn) { const error = new Error("No active attendance record found for today"); error.statusCode = 400; throw error; }
+  const lastStart = attendance.events.find((e) => e.type === config.start);
+  const lastEnd = attendance.events.find((e) => e.type === config.end);
+  if (!lastStart || (lastEnd && new Date(lastEnd.timestamp) >= new Date(lastStart.timestamp))) { const error = new Error(`No active ${config.label.toLowerCase()} to end`); error.statusCode = 400; throw error; }
+  const durationSeconds = Math.max(0, Math.floor((eventTime.getTime() - new Date(lastStart.timestamp).getTime()) / 1000));
+  const durationMinutes = Math.max(0, Math.floor(durationSeconds / 60));
   const updatedAttendance = await prisma.$transaction(async (tx) => {
-    const record = await tx.attendance.update({
-      where: { id: attendance.id },
-      data: { breakMinutes: (attendance.breakMinutes || 0) + durationMinutes },
-    });
-
-    const event = await tx.attendanceEvent.create({
-      data: {
-        attendanceId: attendance.id,
-        type: "BREAK_END",
-        timestamp: breakEndTime,
-        latitude: latitude ? String(latitude) : null,
-        longitude: longitude ? String(longitude) : null,
-        isBypassed: false,
-      },
-    });
-
+    const record = await tx.attendance.update({ where: { id: attendance.id }, data: { [config.field]: (attendance[config.field] || 0) + durationMinutes } });
+    const event = await tx.attendanceEvent.create({ data: { attendanceId: attendance.id, type: config.end, timestamp: eventTime, latitude: latitude ? String(latitude) : null, longitude: longitude ? String(longitude) : null, isBypassed: false } });
     return { ...record, event };
   });
-
-  return {
-    success: true,
-    message: `Break ended. Duration: ${formatDurationSeconds(durationSeconds)}`,
-    durationMinutes,
-    durationSeconds,
-    totalBreakMinutes: updatedAttendance.breakMinutes,
-    attendance: updatedAttendance,
-  };
+  return { success: true, message: `${config.label} ended. Duration: ${formatDurationSeconds(durationSeconds)}`, durationMinutes, durationSeconds, totalBreakMinutes: updatedAttendance.breakMinutes, totalLunchMinutes: updatedAttendance.lunchMinutes, attendance: updatedAttendance };
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Break Detail (structured break pairs from events)
-// ─────────────────────────────────────────────────────────────────────────────
+const startBreak = (args) => startPause({ ...args, pauseType: "BREAK" });
+const endBreak = (args) => endPause({ ...args, pauseType: "BREAK" });
+const startLunch = (args) => startPause({ ...args, pauseType: "LUNCH" });
+const endLunch = (args) => endPause({ ...args, pauseType: "LUNCH" });
 
 const getBreakDetails = async ({ userId, employeeId, organizationId, attendanceId }) => {
   let attendance;
-
-  if (attendanceId) {
-    attendance = await prisma.attendance.findFirst({
-      where: { id: attendanceId, organizationId },
-      include: { events: { orderBy: { timestamp: "asc" } } },
-    });
-  } else {
+  if (attendanceId) attendance = await prisma.attendance.findFirst({ where: { id: attendanceId, organizationId }, include: { events: { orderBy: { timestamp: "asc" } } } });
+  else {
     const employee = await resolveEmployee(userId, employeeId, organizationId);
-    attendance = await findOpenAttendance(employee.id, organizationId, new Date(), {
-      events: { orderBy: { timestamp: "asc" } },
-    });
+    attendance = await findOpenAttendance(employee.id, organizationId, new Date(), { events: { orderBy: { timestamp: "asc" } } });
   }
-
-  if (!attendance) {
-    const error = new Error("Attendance record not found");
-    error.statusCode = 404;
-    throw error;
-  }
-
-  // Pair BREAK_START with next BREAK_END
-  const breaks = [];
-  const events = attendance.events;
-  let openBreak = null;
-
-  for (const event of events) {
-    if (event.type === "BREAK_START") {
-      openBreak = event;
-    } else if (event.type === "BREAK_END" && openBreak) {
-      const durationSeconds = Math.max(
-        0,
-        Math.floor((new Date(event.timestamp).getTime() - new Date(openBreak.timestamp).getTime()) / 1000)
-      );
-      const durationMinutes = Math.floor(
-        durationSeconds / 60
-      );
-      breaks.push({
-        startTime: openBreak.timestamp,
-        endTime: event.timestamp,
-        durationMinutes,
-        durationSeconds,
-        durationFormatted: formatDurationSeconds(durationSeconds),
-      });
-      openBreak = null;
+  if (!attendance) { const error = new Error("Attendance record not found"); error.statusCode = 404; throw error; }
+  const grouped = { BREAK: [], LUNCH: [] };
+  const open = { BREAK: null, LUNCH: null };
+  for (const event of attendance.events) {
+    const kind = event.type === "BREAK_START" || event.type === "BREAK_END" ? "BREAK" : event.type === "LUNCH_START" || event.type === "LUNCH_END" ? "LUNCH" : null;
+    if (!kind) continue;
+    if (event.type === pauseTypes[kind].start) open[kind] = event;
+    else if (event.type === pauseTypes[kind].end && open[kind]) {
+      const durationSeconds = Math.max(0, Math.floor((new Date(event.timestamp).getTime() - new Date(open[kind].timestamp).getTime()) / 1000));
+      grouped[kind].push({ startTime: open[kind].timestamp, endTime: event.timestamp, durationMinutes: Math.floor(durationSeconds / 60), durationSeconds, durationFormatted: formatDurationSeconds(durationSeconds) });
+      open[kind] = null;
     }
   }
-
-  // Unclosed break (employee still on break)
-  if (openBreak) {
-    const durationSeconds = Math.max(0, Math.floor((Date.now() - new Date(openBreak.timestamp).getTime()) / 1000));
-    const durationMinutes = Math.floor(durationSeconds / 60);
-    breaks.push({
-      startTime: openBreak.timestamp,
-      endTime: null,
-      durationMinutes,
-      durationSeconds,
-      durationFormatted: formatDurationSeconds(durationSeconds),
-      isActive: true,
-    });
+  for (const kind of ["BREAK", "LUNCH"]) if (open[kind]) {
+    const durationSeconds = Math.max(0, Math.floor((Date.now() - new Date(open[kind].timestamp).getTime()) / 1000));
+    grouped[kind].push({ startTime: open[kind].timestamp, endTime: null, durationMinutes: Math.floor(durationSeconds / 60), durationSeconds, durationFormatted: formatDurationSeconds(durationSeconds), isActive: true });
   }
-
-  return {
-    success: true,
-    attendanceId: attendance.id,
-    totalBreakMinutes: attendance.breakMinutes,
-    totalBreakFormatted: formatMinutes(attendance.breakMinutes),
-    breakCount: breaks.length,
-    breaks,
-  };
+  const totalBreakMinutes = attendance.breakMinutes || 0;
+  const totalLunchMinutes = attendance.lunchMinutes || 0;
+  return { success: true, attendanceId: attendance.id, totalBreakMinutes, totalBreakFormatted: formatMinutes(totalBreakMinutes), totalLunchMinutes, totalLunchFormatted: formatMinutes(totalLunchMinutes), totalPauseMinutes: totalBreakMinutes + totalLunchMinutes, totalPauseFormatted: formatMinutes(totalBreakMinutes + totalLunchMinutes), breakCount: grouped.BREAK.length, lunchCount: grouped.LUNCH.length, breaks: grouped.BREAK, lunches: grouped.LUNCH };
 };
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Admin Direct Mark (no GPS needed, bypasses all checks)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1240,7 +1127,13 @@ const getTodayStatus = async (userId, organizationId) => {
   const hasCheckedIn = Boolean(attendance?.checkIn);
   const hasCheckedOut = Boolean(attendance?.checkOut);
   const clockedIn = hasCheckedIn && !hasCheckedOut;
-  const isOnBreak = Boolean(clockedIn && attendance?.events?.[0]?.type === "BREAK_START");
+  const activePauseEvent = attendance?.events?.[0];
+  const activePauseType = activePauseEvent?.type === "LUNCH_START"
+    ? "LUNCH"
+    : activePauseEvent?.type === "BREAK_START"
+    ? "BREAK"
+    : null;
+  const isOnBreak = Boolean(clockedIn && activePauseType);
   const isWorkFromHome = Boolean(
     attendance?.status === "WORK_FROM_HOME" ||
     (attendance?.wfhNote && attendance.wfhNote.toLowerCase().includes("home"))
@@ -1253,8 +1146,11 @@ const getTodayStatus = async (userId, organizationId) => {
     hasCheckedOut,
     clockedIn,
     isOnBreak,
+    activePauseType,
     isWorkFromHome,
     totalBreakMinutes: attendance?.breakMinutes || 0,
+    totalLunchMinutes: attendance?.lunchMinutes || 0,
+    totalPauseMinutes: (attendance?.breakMinutes || 0) + (attendance?.lunchMinutes || 0),
     employee: {
       id: employee.id,
       name: `${employee.firstName} ${employee.lastName || ""}`.trim(),
@@ -1595,6 +1491,14 @@ const syncOfflinePunches = async (userId, organizationId, punches) => {
           result = await endBreak({ userId, organizationId, latitude, longitude, timestamp });
           break;
 
+        case "LUNCH_START":
+          result = await startLunch({ userId, organizationId, latitude, longitude, timestamp });
+          break;
+
+        case "LUNCH_END":
+          result = await endLunch({ userId, organizationId, latitude, longitude, timestamp });
+          break;
+
         default:
           results.push({ localId, status: "FAILED", reason: `Unknown punch type: ${type}` });
           failed++;
@@ -1638,6 +1542,8 @@ module.exports = {
   checkOut,
   startBreak,
   endBreak,
+  startLunch,
+  endLunch,
   getBreakDetails,
   adminMarkAttendance,
   getTodayStatus,

@@ -1,8 +1,8 @@
 const prisma = require("../config/database");
 const { parsePagination, paginationMeta } = require("../utils/pagination");
-const { applyPaidPlan, PLAN_KEYS, BILLING_CYCLES } = require("./billing.service");
-const { getPlan } = require("../config/plans");
+const { applyPaidPlan, getConfiguredLimits, PLAN_KEYS, BILLING_CYCLES } = require("./billing.service");
 const { SEAT_STATUSES: SEATS } = require("../config/plans");
+const authService = require("./auth.service");
 
 const PLANS = ["FREE_TRIAL", "STARTER", "PROFESSIONAL", "ENTERPRISE"];
 const STATUSES = ["TRIALING", "ACTIVE", "PAST_DUE", "CANCELED", "EXPIRED"];
@@ -143,6 +143,38 @@ async function overview() {
       amountInr: Math.round(num(o.amountInr)),
       paidAt: o.paidAt,
     })),
+  };
+}
+
+/** Paid revenue grouped by UTC calendar day for the platform owner chart. */
+async function revenueHistory(query = {}) {
+  const requestedDays = Number(query.days);
+  const days = Number.isInteger(requestedDays) ? Math.min(366, Math.max(7, requestedDays)) : 30;
+  const start = new Date();
+  start.setUTCHours(0, 0, 0, 0);
+  start.setUTCDate(start.getUTCDate() - (days - 1));
+
+  const rows = await prisma.billingOrder.findMany({
+    where: { status: "PAID", paidAt: { gte: start } },
+    select: { amountInr: true, paidAt: true },
+    orderBy: { paidAt: "asc" },
+    take: 10000,
+  });
+  const totals = new Map();
+  for (let i = 0; i < days; i += 1) {
+    const day = new Date(start);
+    day.setUTCDate(start.getUTCDate() + i);
+    totals.set(day.toISOString().slice(0, 10), 0);
+  }
+  for (const row of rows) {
+    if (!row.paidAt) continue;
+    const key = new Date(row.paidAt).toISOString().slice(0, 10);
+    if (totals.has(key)) totals.set(key, totals.get(key) + num(row.amountInr));
+  }
+  return {
+    days,
+    totalInr: Math.round([...totals.values()].reduce((sum, value) => sum + value, 0)),
+    points: [...totals.entries()].map(([date, amountInr]) => ({ date, amountInr: Math.round(amountInr) })),
   };
 }
 
@@ -321,7 +353,7 @@ async function applyAction(id, actor, body = {}) {
       }
       if (reason.length < 5) throw fail("Add a short reason for the plan change.");
 
-      const meta = getPlan(plan);
+      const meta = await getConfiguredLimits(plan, tx);
       const [seats, branches] = await Promise.all([
         tx.employee.count({ where: { organizationId: id, deletedAt: null, status: { in: SEATS } } }),
         tx.branch.count({ where: { organizationId: id } }),
@@ -449,7 +481,39 @@ const ACTION_LABELS = {
   PLAN_CHANGED: "Plan changed",
   SUSPENDED: "Workspace suspended",
   REACTIVATED: "Workspace reactivated",
+  ADMIN_PASSWORD_RESET_SENT: "Admin password reset sent",
 };
+
+async function sendAdminPasswordReset(id, actor) {
+  if (id === actor.organizationId) throw fail("You cannot support-reset your own platform workspace.");
+  const org = await prisma.organization.findFirst({
+    where: { id, ...liveOrgs() },
+    include: {
+      users: {
+        where: { role: "COMPANY_ADMIN", isActive: true },
+        orderBy: { createdAt: "asc" },
+        take: 1,
+        select: { id: true, email: true },
+      },
+    },
+  });
+  const admin = org?.users?.[0];
+  if (!admin) throw fail("No active company admin exists for this workspace.", 404);
+
+  const result = await authService.sendAdminPasswordReset(id, admin.id);
+  await prisma.auditLog.create({
+    data: {
+      organizationId: id,
+      userId: actor.userId || null,
+      action: "ADMIN_PASSWORD_RESET_SENT",
+      entity: "PLATFORM",
+      entityId: id,
+      details: JSON.stringify({ adminEmail: admin.email }),
+      ipAddress: actor.ip || null,
+    },
+  });
+  return { ...result, client: org.name };
+}
 
 /** Every owner action across all clients, newest first. */
 async function activityLog(query = {}) {
@@ -494,4 +558,4 @@ async function activityLog(query = {}) {
   return { records, ...paginationMeta(total, page, limit) };
 }
 
-module.exports = { overview, listClients, getClient, applyAction, attention, activityLog, monthlyValue };
+module.exports = { overview, revenueHistory, listClients, getClient, applyAction, sendAdminPasswordReset, attention, activityLog, monthlyValue };

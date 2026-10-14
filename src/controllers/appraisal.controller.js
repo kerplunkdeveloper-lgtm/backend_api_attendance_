@@ -1,4 +1,5 @@
 const appraisalService = require("../services/appraisal.service");
+const { sendControllerError } = require("../utils/controllerError");
 
 module.exports = {
   async createCycle(req, res) {
@@ -9,9 +10,7 @@ module.exports = {
       );
       return res.status(201).json({ success: true, data });
     } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
+      return sendControllerError(res, err);
     }
   },
   async list(req, res) {
@@ -19,9 +18,7 @@ module.exports = {
       const data = await appraisalService.listCycles(req.user.organizationId);
       return res.json({ success: true, data });
     } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
+      return sendControllerError(res, err);
     }
   },
   async get(req, res) {
@@ -32,9 +29,7 @@ module.exports = {
       );
       return res.json({ success: true, data });
     } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
+      return sendControllerError(res, err);
     }
   },
   async mine(req, res) {
@@ -45,9 +40,7 @@ module.exports = {
       );
       return res.json({ success: true, data });
     } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
+      return sendControllerError(res, err);
     }
   },
   async submitSelf(req, res) {
@@ -60,9 +53,7 @@ module.exports = {
       );
       return res.json({ success: true, data });
     } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
+      return sendControllerError(res, err);
     }
   },
   async submitManager(req, res) {
@@ -75,9 +66,7 @@ module.exports = {
       );
       return res.json({ success: true, data });
     } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
+      return sendControllerError(res, err);
     }
   },
 };

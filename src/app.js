@@ -48,6 +48,7 @@ const orgRoutes = require("./routes/org.routes");
 const loanRoutes = require("./routes/loan.routes");
 const appraisalRoutes = require("./routes/appraisal.routes");
 const apikeyRoutes = require("./routes/apikey.routes");
+const webhookRoutes = require("./routes/webhook.routes");
 const billingWebhookRoutes = require("./routes/billing.webhook.routes");
 const { apiRateLimiter } = require("./middleware/rateLimiter.middleware");
 const { auditLogger } = require("./middleware/audit.middleware");
@@ -182,6 +183,7 @@ app.use("/api/organization", orgRoutes);
 app.use("/api/loans", loanRoutes);
 app.use("/api/appraisals", appraisalRoutes);
 app.use("/api/api-keys", apikeyRoutes);
+app.use("/api/webhooks", webhookRoutes);
 app.use("/offboarding", offboardingRoutes);
 app.use("/assets", assetRoutes);
 app.use("/auth", authRoutes);
@@ -216,6 +218,7 @@ app.use("/organization", orgRoutes);
 app.use("/loans", loanRoutes);
 app.use("/appraisals", appraisalRoutes);
 app.use("/api-keys", apikeyRoutes);
+app.use("/webhooks", webhookRoutes);
 app.get(["/", "/api"], (req, res) => {
   res.json({
     success: true,

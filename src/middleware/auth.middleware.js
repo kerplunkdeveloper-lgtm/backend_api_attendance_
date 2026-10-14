@@ -191,6 +191,7 @@ const authenticate = async (req, res, next) => {
       email: user.email,
       role: user.role,
       organizationId: user.organizationId,
+      twoFactorEnabled: Boolean(user.twoFactorEnabledAt),
       organization: user.organization,
       employee: user.employee,
     };

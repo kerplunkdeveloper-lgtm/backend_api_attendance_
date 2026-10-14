@@ -1,4 +1,5 @@
 const shiftOverrideService = require("../services/shiftoverride.service");
+const { sendControllerError } = require("../utils/controllerError");
 
 class ShiftOverrideController {
   async setOverride(req, res) {
@@ -11,11 +12,7 @@ class ShiftOverrideController {
       return res
         .status(200)
         .json({ ...result, data: result.override || result });
-    } catch (error) {
-      return res
-        .status(error.statusCode || 500)
-        .json({ success: false, message: error.message });
-    }
+    } catch (error) { return sendControllerError(res, error); }
   }
 
   async deleteOverride(req, res) {
@@ -35,11 +32,7 @@ class ShiftOverrideController {
         date,
       );
       return res.status(200).json(result);
-    } catch (error) {
-      return res
-        .status(error.statusCode || 500)
-        .json({ success: false, message: error.message });
-    }
+    } catch (error) { return sendControllerError(res, error); }
   }
 
   async getEmployeeOverrides(req, res) {
@@ -68,11 +61,7 @@ class ShiftOverrideController {
       return res
         .status(200)
         .json({ success: true, overrides: result, data: result });
-    } catch (error) {
-      return res
-        .status(error.statusCode || 500)
-        .json({ success: false, message: error.message });
-    }
+    } catch (error) { return sendControllerError(res, error); }
   }
 
   async getOrganizationOverrides(req, res) {
@@ -84,11 +73,7 @@ class ShiftOverrideController {
       return res
         .status(200)
         .json({ success: true, overrides: result, data: result });
-    } catch (error) {
-      return res
-        .status(error.statusCode || 500)
-        .json({ success: false, message: error.message });
-    }
+    } catch (error) { return sendControllerError(res, error); }
   }
 }
 

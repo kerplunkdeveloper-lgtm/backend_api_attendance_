@@ -1,4 +1,5 @@
 const payslipTemplateService = require("../services/payslip-template.service");
+const { sendControllerError } = require("../utils/controllerError");
 
 class PayslipTemplateController {
   async getPresets(req, res) {
@@ -6,7 +7,7 @@ class PayslipTemplateController {
       const presets = payslipTemplateService.getPresets();
       return res.status(200).json({ success: true, data: presets });
     } catch (err) {
-      return res.status(500).json({ success: false, message: err.message });
+      return sendControllerError(res, err, { fallbackStatus: 500 });
     }
   }
 
@@ -17,7 +18,7 @@ class PayslipTemplateController {
       );
       return res.status(200).json({ success: true, data: template });
     } catch (err) {
-      return res.status(500).json({ success: false, message: err.message });
+      return sendControllerError(res, err, { fallbackStatus: 500 });
     }
   }
 
@@ -33,7 +34,7 @@ class PayslipTemplateController {
         data: updated,
       });
     } catch (err) {
-      return res.status(400).json({ success: false, message: err.message });
+      return sendControllerError(res, err);
     }
   }
 
@@ -50,7 +51,7 @@ class PayslipTemplateController {
         data: updated,
       });
     } catch (err) {
-      return res.status(400).json({ success: false, message: err.message });
+      return sendControllerError(res, err);
     }
   }
 
@@ -86,7 +87,7 @@ class PayslipTemplateController {
         data: { url: dataUri, template: updated },
       });
     } catch (err) {
-      return res.status(500).json({ success: false, message: err.message });
+      return sendControllerError(res, err, { fallbackStatus: 500 });
     }
   }
 
@@ -121,7 +122,7 @@ class PayslipTemplateController {
         data: updated,
       });
     } catch (err) {
-      return res.status(500).json({ success: false, message: err.message });
+      return sendControllerError(res, err, { fallbackStatus: 500 });
     }
   }
 }

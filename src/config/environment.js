@@ -22,6 +22,22 @@ const validateUrl = (name) => {
   }
 };
 
+const rejectLocalProductionOrigins = () => {
+  const origins = String(process.env.CORS_ALLOWED_ORIGINS || "")
+    .split(",").map((value) => value.trim()).filter(Boolean);
+  for (const origin of origins) {
+    try {
+      const hostname = new URL(origin).hostname.toLowerCase();
+      if (hostname === "localhost" || hostname === "127.0.0.1" || /^10\.|^192\.168\.|^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname)) {
+        throw new Error("CORS_ALLOWED_ORIGINS cannot contain localhost or private LAN addresses in production");
+      }
+    } catch (error) {
+      if (error.message.includes("cannot contain")) throw error;
+      throw new Error("CORS_ALLOWED_ORIGINS must contain only absolute HTTP(S) origins");
+    }
+  }
+};
+
 const validateEnvironment = () => {
   requiredOneOf(["DATABASE_URL"]);
   if (process.env.NODE_ENV !== "production") return;
@@ -31,6 +47,12 @@ const validateEnvironment = () => {
   // while still allowing an environment override for future custom domains.
   process.env.FRONTEND_URL ||= DEFAULT_PRODUCTION_FRONTEND_URL;
   validateUrl("FRONTEND_URL");
+  requiredOneOf(["BACKEND_PUBLIC_URL", "BACKEND_URL"]);
+  if (process.env.BACKEND_PUBLIC_URL || process.env.BACKEND_URL) {
+    const backendUrlName = process.env.BACKEND_PUBLIC_URL ? "BACKEND_PUBLIC_URL" : "BACKEND_URL";
+    validateUrl(backendUrlName);
+  }
+  rejectLocalProductionOrigins();
 
   // Auth secrets
   requiredOneOf(["ACCESS_TOKEN_SECRET", "JWT_SECRET"]);
@@ -49,10 +71,10 @@ const validateEnvironment = () => {
   requiredOneOf(["RAZORPAY_KEY_ID"]);
   requiredOneOf(["RAZORPAY_KEY_SECRET"]);
   requiredOneOf(["RAZORPAY_WEBHOOK_SECRET"]);
+  requiredOneOf(["BREVO_API_KEY"]);
+  requiredOneOf(["BREVO_FROM_EMAIL"]);
   if (/^rzp_test_/.test(String(process.env.RAZORPAY_KEY_ID || ""))) {
-    console.warn(
-      "[config] WARNING: production is running with Razorpay TEST keys; real payments will not be collected.",
-    );
+    throw new Error("RAZORPAY_KEY_ID must use a live key in production; test payments are not allowed.");
   }
 };
 

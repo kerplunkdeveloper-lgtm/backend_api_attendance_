@@ -1,5 +1,6 @@
 const express = require("express");
 const authController = require("../controllers/auth.controller");
+const ssoController = require("../controllers/sso.controller");
 const {
   authenticate,
   authorizeRoles,
@@ -35,6 +36,7 @@ router.post(
   validate(schemas.login),
   authController.login,
 );
+router.post("/2fa/verify-login", authRateLimiter, validate(schemas.twoFactorLogin), authController.verifyTwoFactorLogin);
 router.post(
   "/verify-email",
   authRateLimiter,
@@ -48,6 +50,10 @@ router.post(
   authController.resendVerification,
 );
 router.post("/google", authRateLimiter, validate(schemas.googleLogin), authController.loginWithGoogle);
+router.post("/sso/discover", authRateLimiter, validate(schemas.ssoDiscover), ssoController.discover);
+router.get("/sso/start/:organizationId", authRateLimiter, ssoController.start);
+router.get("/sso/callback", ssoController.callback);
+router.post("/sso/exchange", authRateLimiter, validate(schemas.ssoExchange), ssoController.exchange);
 router.post(
   "/refresh-token",
   sessionRateLimiter,
@@ -117,5 +123,8 @@ router.post(
   validate(schemas.changePassword),
   authController.changePassword,
 );
+router.post("/2fa/setup", authenticate, authorizeRoles("SUPER_ADMIN"), authController.beginTwoFactorSetup);
+router.post("/2fa/confirm", authenticate, authorizeRoles("SUPER_ADMIN"), validate(schemas.twoFactorCode), authController.confirmTwoFactorSetup);
+router.post("/2fa/disable", authenticate, authorizeRoles("SUPER_ADMIN"), validate(schemas.twoFactorCode), authController.disableTwoFactor);
 
 module.exports = router;

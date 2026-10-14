@@ -10,11 +10,7 @@ class OvertimeController {
         req.body,
       );
       return res.status(201).json(result);
-    } catch (error) {
-      return res
-        .status(error.statusCode || 500)
-        .json({ success: false, message: error.message });
-    }
+    } catch (error) { return fail(res, error); }
   }
 
   async getMyRequests(req, res) {
@@ -36,6 +32,7 @@ class OvertimeController {
       const result = await overtimeService.getOvertimeRequests(
         req.user.organizationId,
         req.pendingOnly ? { ...req.query, status: "PENDING" } : req.query,
+        req.user.role,
       );
       // `overtimeRequests` is the key the approvals inbox reads.
       return paginated(res, result, { overtimeRequests: result.records ?? [] });
@@ -50,14 +47,10 @@ class OvertimeController {
         req.user.organizationId,
         req.params.id,
         req.user.id,
-        req.body,
+        { ...req.body, reviewerRole: req.user.role },
       );
       return res.status(200).json(result);
-    } catch (error) {
-      return res
-        .status(error.statusCode || 500)
-        .json({ success: false, message: error.message });
-    }
+    } catch (error) { return fail(res, error); }
   }
 }
 

@@ -1,5 +1,6 @@
 const shiftService = require("../services/shift.service");
 const { evaluateAttendanceAgainstShift } = require("../utils/shiftCalculator");
+const { sendControllerError } = require("../utils/controllerError");
 
 const create = async (req, res) => {
   try {
@@ -14,10 +15,7 @@ const create = async (req, res) => {
       data: shift,
     });
   } catch (error) {
-    return res.status(400).json({
-      success: false,
-      message: error.message,
-    });
+    return sendControllerError(res, error);
   }
 };
 
@@ -31,10 +29,7 @@ const list = async (req, res) => {
       data: shifts,
     });
   } catch (error) {
-    return res.status(400).json({
-      success: false,
-      message: error.message,
-    });
+    return sendControllerError(res, error);
   }
 };
 
@@ -49,10 +44,7 @@ const getById = async (req, res) => {
       data: shift,
     });
   } catch (error) {
-    return res.status(404).json({
-      success: false,
-      message: error.message,
-    });
+    return sendControllerError(res, error, { fallbackStatus: 404 });
   }
 };
 
@@ -71,10 +63,7 @@ const update = async (req, res) => {
       data: updated,
     });
   } catch (error) {
-    return res.status(400).json({
-      success: false,
-      message: error.message,
-    });
+    return sendControllerError(res, error);
   }
 };
 
@@ -88,10 +77,7 @@ const remove = async (req, res) => {
       message: "Shift deleted successfully",
     });
   } catch (error) {
-    return res.status(400).json({
-      success: false,
-      message: error.message,
-    });
+    return sendControllerError(res, error);
   }
 };
 
@@ -111,10 +97,7 @@ const assign = async (req, res) => {
       data: result,
     });
   } catch (error) {
-    return res.status(400).json({
-      success: false,
-      message: error.message,
-    });
+    return sendControllerError(res, error);
   }
 };
 
@@ -141,10 +124,7 @@ const simulate = async (req, res) => {
       metrics,
     });
   } catch (error) {
-    return res.status(400).json({
-      success: false,
-      message: error.message,
-    });
+    return sendControllerError(res, error);
   }
 };
 

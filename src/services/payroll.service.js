@@ -227,6 +227,7 @@ class PayrollService {
     const y = parseInt(year);
 
     const policy = await policyService.getPolicy(organizationId);
+    const lateComingRules = await policyService.listLateComingRules(organizationId);
     const period = getPayrollPeriod(m, y, policy.payrollCycleStartDay, policy.payrollCycleEndDay);
     const basisDays = resolveDayBasis(policy.payrollDayBasis, period, policy.workingDaysPerMonth);
     const maxLatesBeforeDeduction = policy.maxLatesBeforeDeduction;
@@ -374,8 +375,12 @@ class PayrollService {
     const unpaidLeaveDays = Math.max(0, dayCounts.unpaidLeaveDays);
     const unpaidLeaveDeduction = money.multiply(dailyRate, unpaidLeaveDays);
     const lateCount = dayCounts.lateCount;
-    const lateDeduction =
-      lateCount > maxLatesBeforeDeduction
+    const configuredLateLopDays = lateComingRules
+      .filter((rule) => rule.isActive && rule.lateDays > 0 && rule.lopDays > 0)
+      .reduce((total, rule) => total + Math.floor(lateCount / rule.lateDays) * Number(rule.lopDays), 0);
+    const lateDeduction = lateComingRules.length
+      ? money.multiply(dailyRate, configuredLateLopDays)
+      : lateCount > maxLatesBeforeDeduction
         ? money.multiply(
             money.multiply(dailyRate, lateDeductionPercent),
             lateCount - maxLatesBeforeDeduction
@@ -494,6 +499,7 @@ class PayrollService {
    */
   async getPayrollCycle(organizationId, month, year) {
     const policy = await policyService.getPolicy(organizationId);
+    const lateComingRules = await policyService.listLateComingRules(organizationId);
     const period = getPayrollPeriod(month, year, policy.payrollCycleStartDay, policy.payrollCycleEndDay);
     const today = await getOrgDateOnly(organizationId);
     return {

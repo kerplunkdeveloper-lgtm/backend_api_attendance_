@@ -95,6 +95,12 @@ router.post(
   employeeController.invite,
 );
 
+router.post(
+  "/:id/resend-invite",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
+  employeeController.resendInvite,
+);
+
 // ─── Employee Documents Endpoints ──────────────────────────────────────────────
 
 router.get("/:employeeId/documents", employeeDocumentController.getDocuments);

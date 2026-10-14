@@ -98,6 +98,42 @@ class PolicyService {
       monthlyPermissionHours: Number(policy.monthlyPermissionHours),
     };
   }
+  async listLateComingRules(organizationId) {
+    const rules = await prisma.lateComingLopRule.findMany({ where: { organizationId }, orderBy: [{ lateDays: "asc" }, { createdAt: "asc" }] });
+    return rules.map((rule) => ({ ...rule, lopDays: Number(rule.lopDays) }));
+  }
+
+  async createLateComingRule(organizationId, data) {
+    const lateDays = Number(data.lateDays);
+    const lopDays = Number(data.lopDays);
+    const graceMinutes = Number(data.graceMinutes ?? 0);
+    if (!Number.isInteger(lateDays) || lateDays < 1) throw new Error("Late days must be a positive whole number");
+    if (!Number.isFinite(lopDays) || lopDays <= 0 || lopDays > 31) throw new Error("LOP days must be greater than 0 and no more than 31");
+    if (!Number.isInteger(graceMinutes) || graceMinutes < 0 || graceMinutes > 1440) throw new Error("Grace time must be between 0 and 1440 minutes");
+    const rule = await prisma.lateComingLopRule.create({ data: { organizationId, lateDays, lopDays, graceMinutes, isActive: data.isActive !== false, remarks: String(data.remarks || "").trim() || null } });
+    return { ...rule, lopDays: Number(rule.lopDays) };
+  }
+
+  async updateLateComingRule(organizationId, id, data) {
+    const existing = await prisma.lateComingLopRule.findFirst({ where: { id, organizationId } });
+    if (!existing) throw new Error("Late-coming LOP rule not found");
+    const payload = {};
+    if (data.lateDays !== undefined) payload.lateDays = Number(data.lateDays);
+    if (data.lopDays !== undefined) payload.lopDays = Number(data.lopDays);
+    if (data.graceMinutes !== undefined) payload.graceMinutes = Number(data.graceMinutes);
+    if (data.isActive !== undefined) payload.isActive = parseBoolean(data.isActive);
+    if (data.remarks !== undefined) payload.remarks = String(data.remarks || "").trim() || null;
+    if (payload.lateDays !== undefined && (!Number.isInteger(payload.lateDays) || payload.lateDays < 1)) throw new Error("Late days must be a positive whole number");
+    if (payload.lopDays !== undefined && (!Number.isFinite(payload.lopDays) || payload.lopDays <= 0 || payload.lopDays > 31)) throw new Error("LOP days must be greater than 0 and no more than 31");
+    if (payload.graceMinutes !== undefined && (!Number.isInteger(payload.graceMinutes) || payload.graceMinutes < 0 || payload.graceMinutes > 1440)) throw new Error("Grace time must be between 0 and 1440 minutes");
+    const rule = await prisma.lateComingLopRule.update({ where: { id }, data: payload });
+    return { ...rule, lopDays: Number(rule.lopDays) };
+  }
+
+  async deleteLateComingRule(organizationId, id) {
+    const result = await prisma.lateComingLopRule.deleteMany({ where: { id, organizationId } });
+    if (!result.count) throw new Error("Late-coming LOP rule not found");
+  }
 }
 
 module.exports = new PolicyService();

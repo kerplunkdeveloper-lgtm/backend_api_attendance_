@@ -1,7 +1,7 @@
 const companyLeaveService = require("../services/company-leave.service");
+const { sendControllerError } = require("../utils/controllerError");
 
-const sendError = (res, error) =>
-  res.status(error.statusCode || 500).json({ success: false, message: error.message });
+const sendError = (res, error) => sendControllerError(res, error);
 
 const list = async (req, res) => {
   try {

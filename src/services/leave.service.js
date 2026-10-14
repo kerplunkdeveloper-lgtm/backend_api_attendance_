@@ -6,6 +6,7 @@ const emailService = require("./email.service");
 const whatsappService = require("./whatsapp.service");
 const notificationService = require("./notification.service");
 const policyService = require("./policy.service");
+const webhookService = require("./webhook.service");
 
 const ADMIN_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"];
 
@@ -692,6 +693,15 @@ class LeaveService {
         })
         .catch((err) => console.warn("[LeaveNotification:WhatsApp] Error:", err.message));
     }
+
+    webhookService.dispatch(organizationId, "leave.updated", {
+      leaveRequestId: requestId,
+      employeeId: request.employeeId,
+      status,
+      startDate: request.startDate,
+      endDate: request.endDate,
+      totalDays: Number(request.totalDays),
+    }).catch((err) => console.warn("[LeaveNotification:Webhook] Error:", err.message));
 
     return result;
   }

@@ -12,9 +12,15 @@ mockPrisma({
     },
     count: async () => 0,
   },
+  billingOrder: {
+    findMany: async () => [
+      { amountInr: 1200, paidAt: new Date() },
+      { amountInr: 800, paidAt: new Date() },
+    ],
+  },
 });
 
-const { monthlyValue, listClients } = require("../src/services/platform-admin.service");
+const { monthlyValue, listClients, revenueHistory } = require("../src/services/platform-admin.service");
 
 describe("platform admin console", () => {
   it("counts only active paid subscriptions toward MRR, normalising annual plans", () => {
@@ -33,6 +39,14 @@ describe("platform admin console", () => {
     assert.equal(lastWhere.subscriptionPlan, undefined);
     assert.equal(lastWhere.subscriptionStatus, undefined);
     assert.equal(lastWhere.OR[0].name.contains, "acme");
+  });
+
+  it("returns a zero-filled, bounded daily revenue series", async () => {
+    const result = await revenueHistory({ days: 2 });
+    assert.equal(result.days, 7);
+    assert.equal(result.points.length, 7);
+    assert.equal(result.totalInr, 2000);
+    assert.ok(result.points.every((point) => Number.isInteger(point.amountInr)));
   });
 
   it("is mounted behind the SUPER_ADMIN-only guard", () => {

@@ -63,6 +63,10 @@ const prisma = {
       activations += 1;
       return orgState;
     },
+    updateMany: async ({ data }) => {
+      Object.assign(orgState, data);
+      return { count: 1 };
+    },
   },
   subscription: {
     upsert: async ({ create, update }) => {
@@ -168,6 +172,33 @@ describe("billing activation", () => {
     );
     assert.equal(orders.get("ord-provider-error").status, "CREATED");
     global.fetch = previousFetch;
+  });
+
+  it("records failed payment webhooks without deleting current access", async () => {
+    orders.set("ord-failed", {
+      id: "ord-failed",
+      organizationId: "org-a",
+      plan: "STARTER",
+      billingCycle: "MONTHLY",
+      amountInr: 2499,
+      razorpayOrderId: "order_failed",
+      status: "CREATED",
+      paidAt: null,
+    });
+    orgState.subscriptionStatus = "ACTIVE";
+    const raw = Buffer.from(JSON.stringify({
+      id: "evt_failed_1",
+      event: "payment.failed",
+      payload: { payment: { entity: { id: "pay_failed", order_id: "order_failed", status: "failed" } } },
+    }));
+    const signature = crypto.createHmac("sha256", "test_webhook_secret").update(raw).digest("hex");
+    const previousSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+    process.env.RAZORPAY_WEBHOOK_SECRET = "test_webhook_secret";
+    const result = await billingService.handleWebhook(raw, signature);
+    assert.equal(result.paymentFailed, true);
+    assert.equal(orders.get("ord-failed").status, "FAILED");
+    assert.equal(orgState.subscriptionStatus, "PAST_DUE");
+    process.env.RAZORPAY_WEBHOOK_SECRET = previousSecret;
   });
 
   it("reuses an existing order for the same checkout idempotency key", async () => {

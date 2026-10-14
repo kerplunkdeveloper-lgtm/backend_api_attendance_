@@ -17,5 +17,6 @@ router.post("/verify", validate(schemas.billingVerify), billingController.verify
 router.post("/verify-payment", validate(schemas.billingVerify), billingController.verify);
 router.post("/cancel", billingController.cancel);
 router.get("/orders", billingController.list);
+router.get("/orders/:id/invoice", billingController.invoice);
 
 module.exports = router;

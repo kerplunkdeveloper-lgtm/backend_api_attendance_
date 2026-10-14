@@ -155,6 +155,41 @@ class EmailService {
     };
   }
 
+  async sendBillingPaymentFailedEmail(to, { companyName, plan, billingCycle, amountInr, companyLogoUrl } = {}) {
+    const safeCompanyName = escapeHtml(companyName || "your workspace");
+    const safePlan = escapeHtml(plan || "paid plan");
+    const safeCycle = escapeHtml(String(billingCycle || "MONTHLY").toLowerCase());
+    const amount = Number(amountInr);
+    const amountText = Number.isFinite(amount)
+      ? new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(amount)
+      : "the subscription amount";
+    const billingUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/settings?billing=1`;
+    const html = await this.buildHtmlTemplate({
+      title: "Payment needs your attention",
+      badge: "Payment failed",
+      badgeColor: "#dc2626",
+      companyName,
+      companyLogoUrl,
+      ctaText: "Update billing",
+      ctaUrl: billingUrl,
+      contentHtml: `
+        <p class="text">Hello <strong>${safeCompanyName}</strong>,</p>
+        <p class="text">We could not complete the latest payment for your <strong>${safePlan}</strong> ${safeCycle} subscription.</p>
+        <div class="info-card">
+          <div class="info-row"><span class="info-label">Amount:</span><span class="info-value">${amountText}</span></div>
+          <div class="info-row"><span class="info-label">Workspace status:</span><span class="info-value">Payment due</span></div>
+        </div>
+        <p class="text">Please update your billing details or retry payment to keep the workspace active after its grace period.</p>
+      `,
+    });
+    return this.sendEmail({
+      to,
+      subject: "Action required: WorkPulse payment failed",
+      html,
+      text: `The latest WorkPulse payment for ${companyName || "your workspace"} failed. Update billing at ${billingUrl}.`,
+    });
+  }
+
   /**
    * 1. Leave Request Status Email (Approved or Rejected)
    */

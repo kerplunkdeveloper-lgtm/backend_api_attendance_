@@ -5,6 +5,7 @@ const { generateTempPassword, resolveAssignableRole, assertRoleAssignment } = re
 const { resolveAvatarUrl } = require("../utils/avatar");
 const { assertSeatAvailable, assertBranchAvailable } = require("./entitlement.service");
 const { getNextEmployeeCode, organizationPrefix } = require("../utils/employeeCode");
+const webhookService = require("./webhook.service");
 
 const SENSITIVE_EMPLOYEE_FIELDS = [
   "panNumber",
@@ -242,6 +243,13 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
       role: userRole,
     }
   ).catch((err) => console.warn("[CreateEmployee] Welcome email dispatch failed:", err.message));
+
+  webhookService.dispatch(organizationId, "employee.created", {
+    employeeId: createdEmployee.id,
+    employeeCode: createdEmployee.employeeCode,
+    role: userRole,
+    workEmail: cleanEmail,
+  }).catch((err) => console.warn("[CreateEmployee] Webhook dispatch failed:", err.message));
 
   return createdEmployee;
 };
@@ -482,7 +490,7 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
         ...(address !== undefined ? { address: address ? String(address).trim() : null } : {}),
       },
       include: {
-        user: { select: { id: true, email: true, role: true, avatarUrl: true } },
+        user: { select: { id: true, email: true, role: true, avatarUrl: true, mustChangePassword: true } },
         branch: true,
         department: true,
         shift: true,
@@ -793,9 +801,53 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
     success: true,
     message: `Invitation processed for ${cleanEmail}. Login credentials dispatched.`,
     employee,
-    tempPassword, // returned in response so admin can share it manually if email fails
     emailDelivery,
   };
+};
+
+/** Resend credentials only while the invited user still has the forced-password state. */
+const resendEmployeeInvite = async (organizationId, invitedByUserId, employeeId) => {
+  const employee = await prisma.employee.findFirst({
+    where: { id: employeeId, organizationId, deletedAt: null },
+    include: { user: true, organization: { select: { name: true, logoUrl: true } } },
+  });
+  if (!employee?.user) throw Object.assign(new Error("Employee account not found in this organization."), { statusCode: 404 });
+  if (!employee.user.isActive || employee.status === "TERMINATED") throw Object.assign(new Error("Credentials cannot be resent for an inactive employee."), { statusCode: 400 });
+  if (!employee.user.mustChangePassword) throw Object.assign(new Error("This employee has already set a password. Use the password reset flow instead."), { statusCode: 409 });
+
+  const tempPassword = generateTempPassword();
+  const passwordHash = await bcrypt.hash(tempPassword, await bcrypt.genSalt(10));
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+  await prisma.$transaction(async (tx) => {
+    await tx.user.update({ where: { id: employee.user.id }, data: { passwordHash, mustChangePassword: true } });
+    if (tx.refreshToken?.deleteMany) await tx.refreshToken.deleteMany({ where: { userId: employee.user.id } });
+    const existingInvite = await tx.employeeInvite.findFirst({ where: { organizationId, userId: employee.user.id } });
+    if (existingInvite) {
+      await tx.employeeInvite.update({ where: { id: existingInvite.id }, data: { tempPassword: passwordHash, status: "ACCEPTED", invitedBy: invitedByUserId, expiresAt } });
+    } else {
+      await tx.employeeInvite.create({ data: { organizationId, email: employee.user.email, firstName: employee.firstName, lastName: employee.lastName, role: employee.user.role, tempPassword: passwordHash, employeeId: employee.id, userId: employee.user.id, status: "ACCEPTED", invitedBy: invitedByUserId, expiresAt } });
+    }
+  });
+
+  let emailDelivery = null;
+  try {
+    emailDelivery = await emailService.sendEmployeeWelcomeEmail(
+      employee.user.email,
+      employee.firstName,
+      {
+        organizationName: employee.organization.name,
+        companyLogoUrl: employee.organization.logoUrl,
+        tempPassword,
+        loginUrl: `${process.env.FRONTEND_URL || "http://localhost:3000"}/login`,
+        role: employee.user.role,
+        employeeCode: employee.employeeCode,
+      },
+    );
+  } catch (error) {
+    console.warn("[ResendInvite] Welcome email failed:", error.message);
+  }
+  return { success: true, message: `Credentials resent to ${employee.user.email}.`, employee: { id: employee.id, email: employee.user.email }, emailDelivery };
 };
 
 const getMyEmployee = async (organizationId, userId) => {
@@ -1211,6 +1263,7 @@ module.exports = {
   updateEmployee,
   deleteEmployee,
   inviteEmployee,
+  resendEmployeeInvite,
   getMyEmployee,
   updateMyProfile,
 };

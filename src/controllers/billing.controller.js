@@ -1,4 +1,6 @@
 const billingService = require("../services/billing.service");
+const invoiceService = require("../services/invoice.service");
+const { sendControllerError } = require("../utils/controllerError");
 
 module.exports = {
   async createOrder(req, res) {
@@ -9,22 +11,18 @@ module.exports = {
       );
       return res.json({ success: true, data });
     } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
+      return sendControllerError(res, err);
     }
   },
   async verify(req, res) {
     try {
-      const data = await billingService.verifyPayment(
+      const data = await (req.body.razorpay_subscription_id ? billingService.verifySubscription : billingService.verifyPayment)(
         req.user.organizationId,
         req.body,
       );
       return res.json({ success: true, data });
     } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
+      return sendControllerError(res, err);
     }
   },
   async cancel(req, res) {
@@ -34,9 +32,7 @@ module.exports = {
       );
       return res.json({ success: true, data });
     } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
+      return sendControllerError(res, err);
     }
   },
   async webhook(req, res) {
@@ -48,9 +44,7 @@ module.exports = {
       const data = await billingService.handleWebhook(raw, signature);
       return res.json({ success: true, data });
     } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
+      return sendControllerError(res, err);
     }
   },
   async list(req, res) {
@@ -58,9 +52,20 @@ module.exports = {
       const data = await billingService.listOrders(req.user.organizationId);
       return res.json({ success: true, data });
     } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
+      return sendControllerError(res, err);
+      }
+  },
+  async invoice(req, res) {
+    try {
+      const { invoice, pdf } = await invoiceService.createInvoicePdf(req.user.organizationId, req.params.id);
+      res.set({
+        "Content-Type": "application/pdf",
+        "Content-Disposition": `attachment; filename="${invoice.invoiceNumber}.pdf"`,
+        "Content-Length": pdf.length,
+      });
+      return res.send(pdf);
+    } catch (err) {
+      return sendControllerError(res, err);
     }
   },
 };

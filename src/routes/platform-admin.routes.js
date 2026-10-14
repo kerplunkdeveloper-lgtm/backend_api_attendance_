@@ -1,16 +1,19 @@
 const express = require("express");
 const controller = require("../controllers/platform-admin.controller");
 const { authenticate, authorizeRoles } = require("../middleware/auth.middleware");
+const { requireOwnerTwoFactor } = require("../middleware/twoFactor.middleware");
 
 const router = express.Router();
 
 // Platform owner only. Read-only, company-level data; never employee records.
-router.use(authenticate, authorizeRoles("SUPER_ADMIN"));
+router.use(authenticate, authorizeRoles("SUPER_ADMIN"), requireOwnerTwoFactor);
 router.get("/overview", controller.overview);
+router.get("/revenue", controller.revenueHistory);
 router.get("/attention", controller.attention);
 router.get("/activity", controller.activity);
 router.get("/clients", controller.listClients);
 router.get("/clients/:id", controller.getClient);
 router.post("/clients/:id/actions", controller.applyAction);
+router.post("/clients/:id/admin-password-reset", controller.sendAdminPasswordReset);
 
 module.exports = router;

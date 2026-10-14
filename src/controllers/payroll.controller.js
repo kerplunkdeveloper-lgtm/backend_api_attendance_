@@ -1,5 +1,6 @@
 const payrollService = require("../services/payroll.service");
 const prisma = require("../config/database");
+const { fail } = require("../utils/response");
 
 async function resolvePeriod(req) {
   let { month, year, batchId } = req.body || {};
@@ -30,11 +31,7 @@ class PayrollController {
           message: "Salary structure updated",
           data: result,
         });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async getPayrollCycle(req, res) {
@@ -44,9 +41,7 @@ class PayrollController {
       const year = parseInt(req.query.year, 10) || now.getFullYear();
       const data = await payrollService.getPayrollCycle(req.user.organizationId, month, year);
       return res.json({ success: true, data });
-    } catch (err) {
-      return res.status(err.statusCode || 400).json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async bulkUpsertSalaryStructures(req, res) {
@@ -60,11 +55,7 @@ class PayrollController {
         message: `Salary updated for ${result.updated} employee(s)${result.failed.length ? `, ${result.failed.length} failed` : ""}`,
         data: result,
       });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async getSalaryStructure(req, res) {
@@ -75,11 +66,7 @@ class PayrollController {
         employeeId,
       );
       return res.status(200).json({ success: true, data: result });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 500)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async calculate(req, res) {
@@ -103,11 +90,7 @@ class PayrollController {
             year,
           );
       return res.status(200).json({ success: true, data: result });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async generate(req, res) {
@@ -130,11 +113,7 @@ class PayrollController {
           message: "Payslips generated successfully",
           data: result,
         });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async getPayslips(req, res) {
@@ -144,11 +123,7 @@ class PayrollController {
         req.query,
       );
       return res.status(200).json({ success: true, data: result });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 500)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async getMyPayslips(req, res) {
@@ -158,11 +133,7 @@ class PayrollController {
         req.user.organizationId,
       );
       return res.status(200).json({ success: true, data: result });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 500)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async requestPayslip(req, res) {
@@ -199,9 +170,7 @@ class PayrollController {
         })),
       });
       return res.status(201).json({ success: true, message: "Payslip request sent to HR and payroll." });
-    } catch (err) {
-      return res.status(err.statusCode || 500).json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async approveBatch(req, res) {
@@ -226,11 +195,7 @@ class PayrollController {
           message: `Payroll batch approved for ${month}/${year}`,
           data: result,
         });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async disburseBatch(req, res) {
@@ -255,11 +220,7 @@ class PayrollController {
           message: `Payroll batch marked as disbursed for ${month}/${year}`,
           data: result,
         });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async updateStatus(req, res) {
@@ -285,11 +246,7 @@ class PayrollController {
           message: "Payslip status updated",
           data: result,
         });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async getPayslipDetails(req, res) {
@@ -314,11 +271,7 @@ class PayrollController {
         restrictToEmployeeId,
       );
       return res.status(200).json({ success: true, data: result });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 500)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async getReports(req, res) {
@@ -338,11 +291,7 @@ class PayrollController {
         year,
       );
       return res.status(200).json({ success: true, data: result });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 500)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async getSalaryHistory(req, res) {
@@ -353,11 +302,7 @@ class PayrollController {
         employeeId,
       );
       return res.status(200).json({ success: true, data: result });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 500)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async recordSalaryRevision(req, res) {
@@ -374,11 +319,7 @@ class PayrollController {
           message: "Salary revision recorded successfully",
           data: result,
         });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 }
 

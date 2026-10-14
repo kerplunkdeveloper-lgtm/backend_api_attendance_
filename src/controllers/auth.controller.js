@@ -1,4 +1,5 @@
 const authService = require("../services/auth.service");
+const { sendControllerError } = require("../utils/controllerError");
 
 const isWebClient = (req) => {
   const platform = String(
@@ -68,7 +69,7 @@ const getCookieOptions = () => {
     secure: isHttps,
     sameSite: isHttps ? "none" : "lax",
     path: "/",
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+    maxAge: 30 * 24 * 60 * 60 * 1000, // absolute 30-day session
   };
 };
 
@@ -121,12 +122,7 @@ const register = async (req, res) => {
         ...(result.verificationCode ? { verificationCode: result.verificationCode, simulated: result.simulated } : {}),
       },
     });
-  } catch (error) {
-    return res.status(error.statusCode || 400).json({
-      success: false,
-      message: error.message,
-    });
-  }
+  } catch (error) { return sendControllerError(res, error); }
 };
 
 /**
@@ -148,12 +144,7 @@ const verifyEmail = async (req, res) => {
         user: result.user,
       },
     });
-  } catch (error) {
-    return res.status(error.statusCode || 400).json({
-      success: false,
-      message: error.message,
-    });
-  }
+  } catch (error) { return sendControllerError(res, error); }
 };
 
 /**
@@ -165,12 +156,7 @@ const resendVerification = async (req, res) => {
     const { email } = req.body;
     const result = await authService.resendVerificationCode(email);
     return res.status(200).json(result);
-  } catch (error) {
-    return res.status(error.statusCode || 400).json({
-      success: false,
-      message: error.message,
-    });
-  }
+  } catch (error) { return sendControllerError(res, error); }
 };
 
 const loginWithGoogle = async (req, res) => {
@@ -189,12 +175,7 @@ const loginWithGoogle = async (req, res) => {
         user: result.user,
       },
     });
-  } catch (error) {
-    return res.status(error.statusCode || 401).json({
-      success: false,
-      message: error.message,
-    });
-  }
+  } catch (error) { return sendControllerError(res, error, { fallbackStatus: 401 }); }
 };
 
 const login = async (req, res) => {
@@ -215,6 +196,14 @@ const login = async (req, res) => {
       clientPlatform,
       employeeCode,
     );
+    if (result.twoFactorRequired) {
+      return res.status(200).json({
+        success: true,
+        twoFactorRequired: true,
+        message: result.message,
+        data: { twoFactorRequired: true, challengeToken: result.challengeToken, user: result.user },
+      });
+    }
     res.cookie("refreshToken", result.refreshToken, getCookieOptions());
 
     return res.json({
@@ -235,6 +224,29 @@ const login = async (req, res) => {
       message: response.message,
     });
   }
+};
+
+const verifyTwoFactorLogin = async (req, res) => {
+  try {
+    const result = await authService.verifyTwoFactorLogin(req.body.challengeToken, req.body.code);
+    res.cookie("refreshToken", result.refreshToken, getCookieOptions());
+    return res.json({ success: true, message: "Login successful", data: { accessToken: result.accessToken, token: result.accessToken, ...refreshTokenForClient(req, result.refreshToken), user: result.user } });
+  } catch (error) { return sendControllerError(res, error, { fallbackStatus: 401 }); }
+};
+
+const beginTwoFactorSetup = async (req, res) => {
+  try { return res.json({ success: true, data: await authService.beginTwoFactorSetup(req.user.id) }); }
+  catch (error) { return sendControllerError(res, error); }
+};
+
+const confirmTwoFactorSetup = async (req, res) => {
+  try { return res.json({ success: true, data: await authService.confirmTwoFactorSetup(req.user.id, req.body.code) }); }
+  catch (error) { return sendControllerError(res, error); }
+};
+
+const disableTwoFactor = async (req, res) => {
+  try { return res.json({ success: true, data: await authService.disableTwoFactor(req.user.id, req.body.code) }); }
+  catch (error) { return sendControllerError(res, error); }
 };
 
 const refreshToken = async (req, res) => {
@@ -265,12 +277,7 @@ const refreshToken = async (req, res) => {
         user: result.user,
       },
     });
-  } catch (error) {
-    return res.status(401).json({
-      success: false,
-      message: error.message || "Invalid or expired refresh token",
-    });
-  }
+  } catch (error) { return sendControllerError(res, error, { fallbackStatus: 401, fallbackMessage: "Invalid or expired refresh token" }); }
 };
 
 const logout = async (req, res) => {
@@ -281,14 +288,7 @@ const logout = async (req, res) => {
     res.clearCookie("refreshToken", getClearCookieOptions());
 
     return res.json({ success: true, message: "Logged out successfully" });
-  } catch (error) {
-    return res
-      .status(500)
-      .json({
-        success: false,
-        message: error.message || "Error during logout",
-      });
-  }
+  } catch (error) { return sendControllerError(res, error, { fallbackStatus: 500, fallbackMessage: "Error during logout" }); }
 };
 
 const getMe = async (req, res) => {
@@ -301,12 +301,7 @@ const getMe = async (req, res) => {
       data: result,
       user: result,
     });
-  } catch (error) {
-    return res.status(400).json({
-      success: false,
-      message: error.message,
-    });
-  }
+  } catch (error) { return sendControllerError(res, error, { fallbackStatus: 400 }); }
 };
 
 const updateMe = async (req, res) => {
@@ -330,12 +325,7 @@ const updateMe = async (req, res) => {
       data: user,
       user,
     });
-  } catch (error) {
-    return res.status(error.statusCode || 400).json({
-      success: false,
-      message: error.message,
-    });
-  }
+  } catch (error) { return sendControllerError(res, error); }
 };
 
 const uploadAvatar = async (req, res) => {
@@ -353,12 +343,7 @@ const uploadAvatar = async (req, res) => {
       data: { ...user, url, avatarUrl: url },
       user,
     });
-  } catch (error) {
-    return res.status(error.statusCode || 500).json({
-      success: false,
-      message: error.message || "Failed to upload photo",
-    });
-  }
+  } catch (error) { return sendControllerError(res, error, { fallbackMessage: "Failed to upload photo" }); }
 };
 
 const getPlans = async (req, res) => {
@@ -369,9 +354,9 @@ const getPlans = async (req, res) => {
       plans,
     });
   } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: error.message || "Failed to fetch subscription plans",
+    return sendControllerError(res, error, {
+      fallbackStatus: 500,
+      fallbackMessage: "Failed to fetch subscription plans",
     });
   }
 };
@@ -388,12 +373,7 @@ const activatePlan = async (req, res) => {
       unlockCode,
     );
     return res.status(200).json(result);
-  } catch (error) {
-    return res.status(error.statusCode || 400).json({
-      success: false,
-      message: error.message,
-    });
-  }
+  } catch (error) { return sendControllerError(res, error); }
 };
 
 /**
@@ -414,12 +394,7 @@ const changePassword = async (req, res) => {
       newPassword,
     );
     return res.status(200).json(result);
-  } catch (error) {
-    return res.status(error.statusCode || 400).json({
-      success: false,
-      message: error.message,
-    });
-  }
+  } catch (error) { return sendControllerError(res, error); }
 };
 
 /**
@@ -444,12 +419,7 @@ const upgradePlan = async (req, res) => {
       { actorRole: req.user.role, actorUserId: req.user.id },
     );
     return res.status(200).json(result);
-  } catch (error) {
-    return res.status(error.statusCode || 400).json({
-      success: false,
-      message: error.message,
-    });
-  }
+  } catch (error) { return sendControllerError(res, error); }
 };
 
 /**
@@ -461,12 +431,7 @@ const forgotPassword = async (req, res) => {
     const { email } = req.body;
     const result = await authService.forgotPassword(email);
     return res.status(200).json(result);
-  } catch (error) {
-    return res.status(error.statusCode || 400).json({
-      success: false,
-      message: error.message,
-    });
-  }
+  } catch (error) { return sendControllerError(res, error); }
 };
 
 /**
@@ -478,12 +443,7 @@ const resetPassword = async (req, res) => {
     const { token, newPassword } = req.body;
     const result = await authService.resetPassword(token, newPassword);
     return res.status(200).json(result);
-  } catch (error) {
-    return res.status(error.statusCode || 400).json({
-      success: false,
-      message: error.message,
-    });
-  }
+  } catch (error) { return sendControllerError(res, error); }
 };
 
 module.exports = {
@@ -503,4 +463,8 @@ module.exports = {
   changePassword,
   forgotPassword,
   resetPassword,
+  verifyTwoFactorLogin,
+  beginTwoFactorSetup,
+  confirmTwoFactorSetup,
+  disableTwoFactor,
 };

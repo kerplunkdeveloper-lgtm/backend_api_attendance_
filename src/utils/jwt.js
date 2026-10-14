@@ -44,7 +44,7 @@ const generateAccessToken = (payload) => {
 
 const generateRefreshToken = (payload) => {
   return jwt.sign(payload, getRefreshSecret(), {
-    expiresIn: "7d",
+    expiresIn: "30d",
     // Without a unique id, tokens created with the same payload in the same
     // second are identical and rotation can accidentally return the old token.
     jwtid: crypto.randomUUID(),
@@ -72,6 +72,18 @@ const verifyPasswordResetToken = (token) => {
   return jwt.verify(token, getResetSecret());
 };
 
+const generateTwoFactorChallengeToken = (payload) => jwt.sign(
+  { ...payload, type: "two_factor_challenge" },
+  getAccessSecret(),
+  { expiresIn: "5m" },
+);
+
+const verifyTwoFactorChallengeToken = (token) => {
+  const decoded = jwt.verify(token, getAccessSecret());
+  if (decoded?.type !== "two_factor_challenge") throw new Error("Invalid two-factor challenge");
+  return decoded;
+};
+
 // Aliases for backwards compatibility
 const generateToken = generateAccessToken;
 const verifyToken = verifyAccessToken;
@@ -83,6 +95,8 @@ module.exports = {
   verifyRefreshToken,
   generatePasswordResetToken,
   verifyPasswordResetToken,
+  generateTwoFactorChallengeToken,
+  verifyTwoFactorChallengeToken,
   generateToken,
   verifyToken,
 };

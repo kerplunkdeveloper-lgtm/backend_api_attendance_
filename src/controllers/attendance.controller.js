@@ -37,14 +37,7 @@ class AttendanceController {
       });
 
       return res.status(201).json(result);
-    } catch (error) {
-      return res.status(error.statusCode || 500).json({
-        success: false,
-        code: error.code,
-        message: error.message,
-        details: error.details,
-      });
-    }
+    } catch (error) { return fail(res, error); }
   }
 
   /**
@@ -82,12 +75,7 @@ class AttendanceController {
       });
 
       return res.status(200).json(result);
-    } catch (error) {
-      return res.status(error.statusCode || 500).json({
-        success: false,
-        message: error.message,
-      });
-    }
+    } catch (error) { return fail(res, error); }
   }
 
   /**
@@ -105,12 +93,7 @@ class AttendanceController {
         timestamp,
       });
       return res.status(200).json(result);
-    } catch (error) {
-      return res.status(error.statusCode || 500).json({
-        success: false,
-        message: error.message,
-      });
-    }
+    } catch (error) { return fail(res, error); }
   }
 
   /**
@@ -128,17 +111,27 @@ class AttendanceController {
         timestamp,
       });
       return res.status(200).json(result);
-    } catch (error) {
-      return res.status(error.statusCode || 500).json({
-        success: false,
-        message: error.message,
-      });
-    }
+    } catch (error) { return fail(res, error); }
   }
 
   /**
    * Get active punch status for current user today
    */
+  async startLunch(req, res) {
+    try {
+      const { latitude, longitude, timestamp } = req.body;
+      const result = await attendanceService.startLunch({ userId: req.user.id, employeeId: req.user.employee?.id, organizationId: req.user.organizationId, latitude, longitude, timestamp });
+      return res.status(200).json(result);
+    } catch (error) { return fail(res, error); }
+  }
+
+  async endLunch(req, res) {
+    try {
+      const { latitude, longitude, timestamp } = req.body;
+      const result = await attendanceService.endLunch({ userId: req.user.id, employeeId: req.user.employee?.id, organizationId: req.user.organizationId, latitude, longitude, timestamp });
+      return res.status(200).json(result);
+    } catch (error) { return fail(res, error); }
+  }
   async getTodayStatus(req, res) {
     try {
       const result = await attendanceService.getTodayStatus(
@@ -146,12 +139,7 @@ class AttendanceController {
         req.user.organizationId,
       );
       return res.status(200).json(result);
-    } catch (error) {
-      return res.status(500).json({
-        success: false,
-        message: error.message,
-      });
-    }
+    } catch (error) { return fail(res, error); }
   }
 
   /**
@@ -254,11 +242,7 @@ class AttendanceController {
         deviceId: deviceId || req.headers["x-device-id"],
       });
       return res.status(201).json(result);
-    } catch (error) {
-      return res
-        .status(error.statusCode || 500)
-        .json({ success: false, message: error.message });
-    }
+    } catch (error) { return fail(res, error); }
   }
 
   /**
@@ -273,11 +257,7 @@ class AttendanceController {
         attendanceId: req.params.attendanceId || req.query.attendanceId,
       });
       return res.status(200).json(result);
-    } catch (error) {
-      return res
-        .status(error.statusCode || 500)
-        .json({ success: false, message: error.message });
-    }
+    } catch (error) { return fail(res, error); }
   }
 
   /**
@@ -305,11 +285,7 @@ class AttendanceController {
         reason,
       });
       return res.status(200).json(result);
-    } catch (error) {
-      return res
-        .status(error.statusCode || 500)
-        .json({ success: false, message: error.message });
-    }
+    } catch (error) { return fail(res, error); }
   }
 
   /**
@@ -322,11 +298,7 @@ class AttendanceController {
         req.user.organizationId,
       );
       return res.status(200).json(result);
-    } catch (error) {
-      return res
-        .status(error.statusCode || 500)
-        .json({ success: false, message: error.message });
-    }
+    } catch (error) { return fail(res, error); }
   }
   /**
    * Sync offline-queued punches (batch) — called when device regains internet
@@ -346,7 +318,7 @@ class AttendanceController {
       if (punches.length > 100) {
         return res.status(400).json({ success: false, message: "A maximum of 100 offline punches can be synced at once" });
       }
-      const allowedTypes = new Set(["CHECK_IN", "CHECK_OUT", "BREAK_START", "BREAK_END", "WFH_CHECK_IN"]);
+      const allowedTypes = new Set(["CHECK_IN", "CHECK_OUT", "BREAK_START", "BREAK_END", "LUNCH_START", "LUNCH_END", "WFH_CHECK_IN"]);
       const now = Date.now();
       const oldestAllowed = now - 31 * 24 * 60 * 60 * 1000;
       for (const punch of punches) {
@@ -370,11 +342,7 @@ class AttendanceController {
         punches,
       );
       return res.status(200).json(result);
-    } catch (error) {
-      return res
-        .status(error.statusCode || 500)
-        .json({ success: false, message: error.message });
-    }
+    } catch (error) { return fail(res, error); }
   }
 }
 

@@ -1,4 +1,5 @@
 const statutoryService = require("../services/statutory.service");
+const { sendControllerError } = require("../utils/controllerError");
 
 function sendFile(res, file) {
   res.setHeader("Content-Type", file.mimeType);
@@ -39,11 +40,7 @@ class StatutoryController {
         success: true,
         data: { declaration, tax: estimate.tax },
       });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return sendControllerError(res, err); }
   }
 
   async saveDeclaration(req, res) {
@@ -73,11 +70,7 @@ class StatutoryController {
         success: true,
         data: { declaration, tax: estimate.tax },
       });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return sendControllerError(res, err); }
   }
 
   async previewTax(req, res) {
@@ -98,11 +91,7 @@ class StatutoryController {
         req.query.financialYear,
       );
       return res.json({ success: true, data });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return sendControllerError(res, err); }
   }
 
   async generateForm16(req, res) {
@@ -121,11 +110,7 @@ class StatutoryController {
         financialYear,
       );
       return res.json({ success: true, data });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return sendControllerError(res, err); }
   }
 
   async downloadForm16(req, res) {
@@ -144,11 +129,7 @@ class StatutoryController {
       );
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       return res.send(data.html);
-    } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return sendControllerError(res, err); }
   }
 
   async exportPf(req, res) {
@@ -160,11 +141,7 @@ class StatutoryController {
         req.user.id,
       );
       return sendFile(res, file);
-    } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return sendControllerError(res, err); }
   }
 
   async exportEsi(req, res) {
@@ -176,22 +153,14 @@ class StatutoryController {
         req.user.id,
       );
       return sendFile(res, file);
-    } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return sendControllerError(res, err); }
   }
 
   async listExports(req, res) {
     try {
       const data = await statutoryService.listExports(req.user.organizationId);
       return res.json({ success: true, data });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return sendControllerError(res, err); }
   }
 
   async downloadSavedExport(req, res) {
@@ -201,11 +170,7 @@ class StatutoryController {
         req.params.id,
       );
       return sendFile(res, file);
-    } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return sendControllerError(res, err); }
   }
 
   async exportNeft(req, res) {
@@ -217,11 +182,7 @@ class StatutoryController {
         req.user.id,
       );
       return sendFile(res, file);
-    } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return sendControllerError(res, err); }
   }
 }
 

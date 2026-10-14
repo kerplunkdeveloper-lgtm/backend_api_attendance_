@@ -7,6 +7,8 @@ const {
   verifyRefreshToken,
   generatePasswordResetToken,
   verifyPasswordResetToken,
+  generateTwoFactorChallengeToken,
+  verifyTwoFactorChallengeToken,
 } = require("../utils/jwt");
 const emailService = require("./email.service");
 const { organizationWithSubscription, WITH_SECRETS } = require("../utils/prismaSelects");
@@ -17,6 +19,15 @@ const { PLAN_CONFIGS, SUBSCRIPTION_PLANS, isPaidPlan, addBillingPeriod } = requi
 const { presentAuthUser } = require("./entitlement.service");
 const auditService = require("./audit.service");
 const billingService = require("./billing.service");
+const {
+  generateSecret,
+  encryptSecret,
+  decryptSecret,
+  verifyTotp,
+  generateBackupCodes,
+  hashBackupCode,
+  otpauthUrl,
+} = require("../utils/totp");
 
 const MIN_PASSWORD_LENGTH = 8;
 const VERIFICATION_CODE_TTL_MS = 15 * 60 * 1000;
@@ -28,13 +39,19 @@ const generateVerificationCode = () => String(crypto.randomInt(0, 1000000)).padS
 const hashRefreshToken = (token) =>
   crypto.createHash("sha256").update(String(token)).digest("hex");
 
+const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
 const issueRefreshToken = async (userId, tokenPayload) => {
-  const refreshToken = generateRefreshToken(tokenPayload);
+  const sessionPayload = {
+    ...tokenPayload,
+    sessionStartedAt: tokenPayload.sessionStartedAt || Date.now(),
+  };
+  const refreshToken = generateRefreshToken(sessionPayload);
   await prisma.refreshToken.create({
     data: {
       userId,
       token: hashRefreshToken(refreshToken),
-      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      expiresAt: new Date(Date.now() + SESSION_MAX_AGE_MS),
     },
   });
   return refreshToken;
@@ -467,6 +484,16 @@ const login = async (email, password, client = null, employeeCode = null) => {
     throw error;
   }
 
+  if (user.twoFactorEnabledAt) {
+    // Password is right, but a second factor must be verified before issuing a session.
+    return {
+      twoFactorRequired: true,
+      challengeToken: generateTwoFactorChallengeToken({ userId: user.id, organizationId: user.organizationId, role: user.role }),
+      user: presentAuthUser(user),
+      message: "This account uses two-step verification. Sign in with your email and password, then enter your authenticator code.",
+    };
+  }
+
   const tokenPayload = {
     userId: user.id,
     organizationId: user.organizationId,
@@ -492,6 +519,84 @@ const login = async (email, password, client = null, employeeCode = null) => {
   };
 };
 
+const beginTwoFactorSetup = async (userId) => {
+  const user = await prisma.user.findUnique({ where: { id: userId }, omit: WITH_SECRETS });
+  if (!user) throw new Error("User not found");
+  const secret = generateSecret();
+  await prisma.user.update({
+    where: { id: userId },
+    data: { twoFactorSecret: encryptSecret(secret), twoFactorEnabledAt: null, twoFactorLastStep: null, twoFactorBackupCodes: [] },
+  });
+  return { secret, otpauthUrl: otpauthUrl({ issuer: "WorkPulse", account: user.email, secret }) };
+};
+
+const confirmTwoFactorSetup = async (userId, code) => {
+  const user = await prisma.user.findUnique({ where: { id: userId }, omit: WITH_SECRETS });
+  if (!user?.twoFactorSecret) throw new Error("Two-step verification setup has not been started");
+  const secret = decryptSecret(user.twoFactorSecret);
+  const step = verifyTotp(secret, code, { afterStep: user.twoFactorLastStep });
+  if (step === null) {
+    const error = new Error("That authenticator code is invalid or has expired.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const backupCodes = generateBackupCodes();
+  await prisma.user.update({
+    where: { id: userId },
+    data: { twoFactorEnabledAt: new Date(), twoFactorLastStep: step, twoFactorBackupCodes: backupCodes.map(hashBackupCode) },
+  });
+  return { enabled: true, backupCodes };
+};
+
+const disableTwoFactor = async (userId, code) => {
+  const user = await prisma.user.findUnique({ where: { id: userId }, omit: WITH_SECRETS });
+  if (!user?.twoFactorEnabledAt || !user.twoFactorSecret) throw new Error("Two-step verification is not enabled");
+  const step = verifyTotp(decryptSecret(user.twoFactorSecret), code, { afterStep: user.twoFactorLastStep });
+  if (step === null) {
+    const error = new Error("That authenticator code is invalid or has expired.");
+    error.statusCode = 400;
+    throw error;
+  }
+  await prisma.user.update({ where: { id: userId }, data: { twoFactorSecret: null, twoFactorEnabledAt: null, twoFactorLastStep: null, twoFactorBackupCodes: [] } });
+  return { enabled: false };
+};
+
+const verifyTwoFactorLogin = async (challengeToken, code) => {
+  let challenge;
+  try { challenge = verifyTwoFactorChallengeToken(challengeToken); } catch {
+    const error = new Error("This two-step verification request has expired. Please sign in again.");
+    error.statusCode = 401;
+    error.code = "TWO_FACTOR_CHALLENGE_EXPIRED";
+    throw error;
+  }
+  const user = await prisma.user.findUnique({
+    where: { id: challenge.userId },
+    omit: WITH_SECRETS,
+    include: { organization: organizationWithSubscription, employee: { include: { branch: true, shift: true, department: true } } },
+  });
+  if (!user?.twoFactorEnabledAt || !user.twoFactorSecret) throw new Error("Two-step verification is not enabled for this account");
+  const secret = decryptSecret(user.twoFactorSecret);
+  let step = verifyTotp(secret, code, { afterStep: user.twoFactorLastStep });
+  let backupCodes = user.twoFactorBackupCodes || [];
+  let usedBackupIndex = -1;
+  if (step === null) {
+    const hash = hashBackupCode(code);
+    usedBackupIndex = backupCodes.indexOf(hash);
+    if (usedBackupIndex < 0) {
+      const error = new Error("The authenticator or backup code is invalid.");
+      error.statusCode = 401;
+      error.code = "TWO_FACTOR_INVALID";
+      throw error;
+    }
+  }
+  if (usedBackupIndex >= 0) backupCodes = backupCodes.filter((_, index) => index !== usedBackupIndex);
+  await prisma.user.update({ where: { id: user.id }, data: { ...(step !== null ? { twoFactorLastStep: step } : {}), twoFactorBackupCodes: backupCodes } });
+  const tokenPayload = { userId: user.id, organizationId: user.organizationId, role: user.role };
+  const accessToken = generateAccessToken(tokenPayload);
+  const refreshToken = await issueRefreshToken(user.id, tokenPayload);
+  return { accessToken, token: accessToken, refreshToken, user: presentAuthUser(user) };
+};
+
 
 const refreshAccessToken = async (refreshToken) => {
   if (!refreshToken) throw new Error("Refresh token is required");
@@ -513,6 +618,15 @@ const refreshAccessToken = async (refreshToken) => {
   if (storedToken.userId !== decoded.userId) {
     throw new Error("Refresh token does not belong to this user. Please log in again.");
   }
+  const sessionStartedAt = Number(decoded.sessionStartedAt) || storedToken.createdAt.getTime();
+  if (Number.isFinite(sessionStartedAt) && Date.now() - sessionStartedAt >= SESSION_MAX_AGE_MS) {
+    await prisma.refreshToken.deleteMany({ where: { token: hashRefreshToken(refreshToken) } });
+    const error = new Error("Your 30-day session has expired. Please log in again.");
+    error.statusCode = 401;
+    error.code = "SESSION_EXPIRED";
+    throw error;
+  }
+
   if (storedToken.expiresAt < new Date()) {
     await prisma.refreshToken.delete({ where: { token: hashRefreshToken(refreshToken) } });
     throw new Error("Refresh token has expired. Please log in again.");
@@ -559,10 +673,10 @@ const refreshAccessToken = async (refreshToken) => {
 
   const newAccessToken = generateAccessToken(tokenPayload);
 
-  // Rotate the refresh token: revoke the presented token and issue a fresh one
-  // so a leaked token is only usable once and replay attempts are rejected.
-  const refreshExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-  const newRefreshToken = generateRefreshToken(tokenPayload);
+  // Rotate the refresh token while preserving the original login timestamp.
+  const sessionPayload = { ...tokenPayload, sessionStartedAt: decoded.sessionStartedAt };
+  const newRefreshToken = generateRefreshToken(sessionPayload);
+  const refreshExpiresAt = new Date(Date.now() + SESSION_MAX_AGE_MS);
   await prisma.$transaction([
     prisma.refreshToken.delete({ where: { token: hashRefreshToken(refreshToken) } }),
     prisma.refreshToken.create({
@@ -858,6 +972,40 @@ const forgotPassword = async (email) => {
   };
 };
 
+/** Platform support flow: send a reset link only to the selected workspace admin. */
+const sendAdminPasswordReset = async (organizationId, userId) => {
+  const user = await prisma.user.findFirst({
+    where: { id: userId, organizationId, role: "COMPANY_ADMIN", isActive: true },
+    omit: WITH_SECRETS,
+    include: { employee: true, organization: organizationWithSubscription },
+  });
+  if (!user) {
+    const error = new Error("Active company admin not found for this workspace.");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const resetToken = generatePasswordResetToken({
+    userId: user.id,
+    email: user.email,
+    type: "PASSWORD_RESET",
+    v: user.passwordHash.slice(-10),
+  });
+  const frontendUrl = (process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/+$/, "");
+  const resetUrl = `${frontendUrl}/reset-password?token=${encodeURIComponent(resetToken)}`;
+  const userName = user.employee
+    ? `${user.employee.firstName} ${user.employee.lastName || ""}`.trim()
+    : user.email.split("@")[0];
+
+  const delivery = await emailService.sendPasswordResetEmail(user.email, userName, {
+    resetUrl,
+    expiresIn: "60 minutes",
+    companyName: user.organization?.name,
+    companyLogoUrl: user.organization?.logoUrl,
+  });
+  return { success: true, email: user.email, delivered: delivery?.success !== false };
+};
+
 /**
  * Completes password reset:
  * 1. Validates and decodes resetToken
@@ -1023,7 +1171,13 @@ module.exports = {
   upgradePlan,
   changePassword,
   forgotPassword,
+  sendAdminPasswordReset,
   resetPassword,
+  beginTwoFactorSetup,
+  confirmTwoFactorSetup,
+  disableTwoFactor,
+  verifyTwoFactorLogin,
   SUBSCRIPTION_PLANS,
   PLAN_CONFIGS,
+  issueRefreshToken,
 };

@@ -20,7 +20,7 @@ const organizationSelect = {
   planLocked: true,
   logoUrl: true,
   suspendedAt: true,
-  subscription: true,
+  subscription: { select: { id: true, organizationId: true, plan: true, status: true, billingCycle: true, price: true, maxEmployees: true, maxBranches: true, hasGeofence: true, hasPayroll: true, hasShiftPlanner: true, hasApiAccess: true, startDate: true, trialEndsAt: true, currentPeriodEnd: true, createdAt: true, updatedAt: true } },
 };
 
 const organizationWithSubscription = { select: organizationSelect };

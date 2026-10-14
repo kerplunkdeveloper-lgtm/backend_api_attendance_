@@ -86,11 +86,7 @@ class CompOffController {
         },
       );
       return res.status(200).json(result);
-    } catch (error) {
-      return res
-        .status(error.statusCode || 500)
-        .json({ success: false, message: error.message });
-    }
+    } catch (error) { return fail(res, error); }
   }
 
   async redeemCompOff(req, res) {
@@ -125,6 +121,7 @@ class CompOffController {
     try {
       const result = await compOffService.listPendingRedemptions(
         req.user.organizationId,
+        req.user.role,
       );
       return res
         .status(200)
@@ -140,7 +137,7 @@ class CompOffController {
         req.user.organizationId,
         req.params.id,
         req.user.id,
-        req.body,
+        { ...req.body, reviewerRole: req.user.role },
       );
       return res.status(200).json(result);
     } catch (error) {

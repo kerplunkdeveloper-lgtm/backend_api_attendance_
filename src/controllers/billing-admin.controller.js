@@ -1,6 +1,7 @@
 const service = require("../services/billing-admin.service");
+const { sendControllerError } = require("../utils/controllerError");
 
-const sendError = (res, err) => res.status(err.statusCode || 400).json({ success: false, message: err.message || "Billing administration failed" });
+const sendError = (res, err) => sendControllerError(res, err, { fallbackMessage: "Billing administration failed" });
 
 module.exports = {
   async listPrices(req, res) {
@@ -8,6 +9,12 @@ module.exports = {
   },
   async updatePrice(req, res) {
     try { return res.json({ success: true, data: await service.upsertPlanPrice({ ...req.body, plan: req.params.plan, billingCycle: req.params.billingCycle, userId: req.user.id }) }); } catch (err) { return sendError(res, err); }
+  },
+  async listLimits(req, res) {
+    try { return res.json({ success: true, data: await service.listPlanLimits() }); } catch (err) { return sendError(res, err); }
+  },
+  async updateLimit(req, res) {
+    try { return res.json({ success: true, data: await service.upsertPlanLimit({ ...req.body, plan: req.params.plan, userId: req.user.id }) }); } catch (err) { return sendError(res, err); }
   },
   async listOffers(req, res) {
     try { return res.json({ success: true, data: await service.listOffers() }); } catch (err) { return sendError(res, err); }

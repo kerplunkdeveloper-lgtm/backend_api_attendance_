@@ -11,22 +11,14 @@ class LeaveController {
       return res
         .status(201)
         .json({ success: true, message: "Leave type created", data: result });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async getLeaveTypes(req, res) {
     try {
       const result = await leaveService.getLeaveTypes(req.user.organizationId);
       return res.status(200).json({ success: true, data: result });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 500)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async getLeaveBalances(req, res) {
@@ -37,20 +29,14 @@ class LeaveController {
         req.query.year,
       );
       return res.status(200).json({ success: true, data: result });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 500)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async getEligibility(req, res) {
     try {
       const result = await leaveService.getEligibility(req.user.id, req.user.organizationId);
       return res.status(200).json({ success: true, data: result });
-    } catch (err) {
-      return res.status(err.statusCode || 500).json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async createLeaveRequest(req, res) {
@@ -68,11 +54,7 @@ class LeaveController {
           message: "Leave request submitted",
           data: result,
         });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async getMyLeaveRequests(req, res) {
@@ -82,11 +64,7 @@ class LeaveController {
         req.user.organizationId,
       );
       return res.status(200).json({ success: true, data: result });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 500)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async getAllLeaveRequests(req, res) {
@@ -120,11 +98,7 @@ class LeaveController {
           message: `Leave request ${result.status.toLowerCase()}`,
           data: result,
         });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async cancelLeaveRequest(req, res) {
@@ -143,11 +117,7 @@ class LeaveController {
           message: "Leave request cancelled",
           data: result,
         });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async updateLeaveType(req, res) {
@@ -162,11 +132,7 @@ class LeaveController {
         message: "Leave type updated",
         data: result,
       });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async deleteLeaveType(req, res) {
@@ -176,11 +142,7 @@ class LeaveController {
         req.params.id,
       );
       return res.json({ success: true, data: result });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async carryForward(req, res) {
@@ -190,11 +152,7 @@ class LeaveController {
         req.body,
       );
       return res.json({ success: true, data: result });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async createHoliday(req, res) {
@@ -206,22 +164,14 @@ class LeaveController {
       return res
         .status(201)
         .json({ success: true, message: "Holiday created", data: result });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 
   async getHolidays(req, res) {
     try {
       const result = await leaveService.getHolidays(req.user.organizationId);
       return res.status(200).json({ success: true, data: result });
-    } catch (err) {
-      return res
-        .status(err.statusCode || 500)
-        .json({ success: false, message: err.message });
-    }
+    } catch (err) { return fail(res, err); }
   }
 }
 

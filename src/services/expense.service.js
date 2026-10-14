@@ -1,5 +1,7 @@
 const prisma = require("../config/database");
 const { uploadImage, uploadBuffer } = require("../config/cloudinary");
+const { assertCanReview, visibleToReviewer } = require("../utils/approvalChain");
+const webhookService = require("./webhook.service");
 
 const VALID_CATEGORIES = [
   "TRAVEL",
@@ -144,10 +146,10 @@ class ExpenseService {
   /**
    * 2. Get Organization-Wide Expense Claims (HR / Manager View)
    */
-  async getOrganizationExpenses(organizationId, filters = {}) {
+  async getOrganizationExpenses(organizationId, filters = {}, reviewerRole) {
     const { status, category, employeeId, startDate, endDate, search } = filters;
 
-    const where = { organizationId };
+    const where = { organizationId, ...visibleToReviewer(reviewerRole) };
 
     if (status) {
       where.status = status;
@@ -274,6 +276,7 @@ class ExpenseService {
       error.statusCode = 403;
       throw error;
     }
+    assertCanReview(claim.employee?.user?.role, reviewData?.reviewerRole);
 
     const updatedClaim = await prisma.expenseClaim.update({
       where: { id: claimId },
@@ -311,6 +314,14 @@ class ExpenseService {
         console.warn("Failed to create expense review notification:", notifyErr.message);
       }
     }
+
+    webhookService.dispatch(organizationId, "expense.updated", {
+      expenseClaimId: claimId,
+      employeeId: claim.employeeId,
+      status,
+      amount: Number(claim.amount),
+      category: claim.category,
+    }).catch((err) => console.warn("Failed to dispatch expense webhook:", err.message));
 
     return updatedClaim;
   }

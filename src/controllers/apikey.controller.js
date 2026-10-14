@@ -1,4 +1,5 @@
 const apikeyService = require("../services/apikey.service");
+const { sendControllerError } = require("../utils/controllerError");
 
 module.exports = {
   async create(req, res) {
@@ -8,17 +9,13 @@ module.exports = {
         req.body.name,
         req.body.scopes,
       );
-      return res
-        .status(201)
-        .json({
-          success: true,
-          message: "Copy the apiKey now. It is shown only once.",
-          data,
-        });
+      return res.status(201).json({
+        success: true,
+        message: "Copy the apiKey now. It is shown only once.",
+        data,
+      });
     } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
+      return sendControllerError(res, err);
     }
   },
   async list(req, res) {
@@ -26,9 +23,7 @@ module.exports = {
       const data = await apikeyService.listKeys(req.user.organizationId);
       return res.json({ success: true, data });
     } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
+      return sendControllerError(res, err);
     }
   },
   async revoke(req, res) {
@@ -39,9 +34,7 @@ module.exports = {
       );
       return res.json({ success: true, data });
     } catch (err) {
-      return res
-        .status(err.statusCode || 400)
-        .json({ success: false, message: err.message });
+      return sendControllerError(res, err);
     }
   },
 };

@@ -1,3 +1,15 @@
+function normalizePgSslMode(connectionString) {
+  const url = new URL(connectionString);
+  const sslmode = url.searchParams.get("sslmode");
+  // pg-connection-string warns about ambiguous libpq modes. Neon uses a
+  // publicly trusted certificate, so verify-full is the explicit secure mode.
+  if (sslmode === "require" || sslmode === "prefer" || sslmode === "verify-ca") {
+    url.searchParams.set("sslmode", "verify-full");
+    return url.toString();
+  }
+  return connectionString;
+}
+
 function parsePostgresUrl(name, value) {
   let connectionString = String(value || "").trim();
   // Railway variables are sometimes pasted as `psql 'postgresql://...'` or
@@ -22,7 +34,7 @@ function parsePostgresUrl(name, value) {
     throw new Error(`${name} must be a postgresql:// connection string.`);
   }
 
-  return { connectionString, url };
+  return { connectionString: normalizePgSslMode(connectionString), url };
 }
 
 function neonEndpointIdentity(hostname) {
@@ -54,4 +66,4 @@ function resolveRuntimeDatabaseUrl(env = process.env, warn = console.warn) {
   return pooled.connectionString;
 }
 
-module.exports = { neonEndpointIdentity, resolveRuntimeDatabaseUrl };
+module.exports = { neonEndpointIdentity, normalizePgSslMode, resolveRuntimeDatabaseUrl };
