@@ -5,6 +5,7 @@ const environment = require("../src/config/environment");
 
 const required = {
   NODE_ENV: "production",
+  APP_ENV: "production",
   DATABASE_URL: "postgresql://user:pass@localhost:5432/workpulse",
   FRONTEND_URL: "https://app.example.com",
   BACKEND_URL: "https://api.example.com",
@@ -50,7 +51,7 @@ describe("production environment validation", () => {
     const previousKey = process.env.RAZORPAY_KEY_ID;
     delete process.env.CORS_ALLOWED_ORIGINS;
     process.env.RAZORPAY_KEY_ID = "rzp_test_local_only";
-    assert.throws(() => environment.validateEnvironment(), /RAZORPAY_KEY_ID must use a live key/);
+    assert.throws(() => environment.validateEnvironment(), /Production must use Razorpay LIVE credentials/);
     process.env.RAZORPAY_KEY_ID = previousKey;
     if (previousCors === undefined) delete process.env.CORS_ALLOWED_ORIGINS; else process.env.CORS_ALLOWED_ORIGINS = previousCors;
     for (const key of Object.keys(required)) { if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key]; }
