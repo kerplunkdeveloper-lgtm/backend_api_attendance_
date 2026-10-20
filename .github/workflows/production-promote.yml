@@ -125,10 +125,13 @@ jobs:
           REGION: ${{ vars.AWS_REGION }}
           BACKUP_BUCKET: ${{ vars.PROD_BACKUP_BUCKET }}
           RELEASE_SHA: ${{ inputs.alpha_sha }}
+          DEPLOY_SCRIPT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          SCRIPT_URL="https://raw.githubusercontent.com/kerplunkdeveloper-lgtm/backend_api_attendance_/$RELEASE_SHA/ops/deploy-production.sh"
-          REMOTE="sudo -iu ubuntu bash -lc 'curl -fsSL $SCRIPT_URL -o /tmp/workpulse-backend-deploy-$RELEASE_SHA.sh && bash /tmp/workpulse-backend-deploy-$RELEASE_SHA.sh $RELEASE_SHA $BACKUP_BUCKET $REGION'"
+          SCRIPT_URL="https://raw.githubusercontent.com/kerplunkdeveloper-lgtm/backend_api_attendance_/$DEPLOY_SCRIPT_SHA/ops/deploy-production.sh"
+          SCRIPT_PATH="/tmp/workpulse-backend-deploy-$RELEASE_SHA.sh"
+          printf -v INNER 'curl -fsSL %q -o %q && bash %q %q %q %q' "$SCRIPT_URL" "$SCRIPT_PATH" "$SCRIPT_PATH" "$RELEASE_SHA" "$BACKUP_BUCKET" "$REGION"
+          printf -v REMOTE 'sudo -iu ubuntu bash -lc %q' "$INNER"
           PARAMETERS=$(jq -nc --arg cmd "$REMOTE" '{commands:[$cmd]}')
           COMMAND_ID=$(aws ssm send-command --instance-ids "$INSTANCE_ID" --document-name AWS-RunShellScript --parameters "$PARAMETERS" --timeout-seconds 2400 --query Command.CommandId --output text)
           for _ in $(seq 1 240); do
