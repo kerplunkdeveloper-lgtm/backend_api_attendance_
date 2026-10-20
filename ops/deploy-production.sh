@@ -17,6 +17,10 @@ HEALTH_URL=http://127.0.0.1:5000/api/health
 command -v pg_dump >/dev/null
 command -v aws >/dev/null
 mkdir -p "$RELEASES" /home/ubuntu/workpulse-prod-backups
+aws s3api get-bucket-encryption --bucket "$BACKUP_BUCKET" --region "$REGION" >/dev/null
+VERSIONING=$(aws s3api get-bucket-versioning --bucket "$BACKUP_BUCKET" --region "$REGION" --query Status --output text)
+[[ "$VERSIONING" == Enabled ]] || { echo 'Backup bucket versioning must be Enabled'; exit 3; }
+aws s3api get-public-access-block --bucket "$BACKUP_BUCKET" --region "$REGION" >/dev/null
 
 PREVIOUS=""
 if [[ -L "$CURRENT" ]]; then PREVIOUS=$(readlink -f "$CURRENT"); fi
@@ -73,12 +77,33 @@ mv -Tf "$CURRENT.next" "$CURRENT"
 restart_from() {
   local dir="$1"
   pm2 delete "$PM2_NAME" >/dev/null 2>&1 || true
-  (cd "$dir" && pm2 start npm --name "$PM2_NAME" -- start)
+  (set -a; source "$ENV_FILE"; set +a; cd "$dir" && pm2 start npm --name "$PM2_NAME" -- start)
 }
+SWITCHED=1
+rollback_on_error() {
+  local rc=$?
+  trap - ERR
+  if [[ "${SWITCHED:-0}" == 1 ]]; then
+    echo 'Deployment step failed; restoring previous application release' >&2
+    pm2 delete "$PM2_NAME" >/dev/null 2>&1 || true
+    if [[ -n "$PREVIOUS" && -d "$PREVIOUS" ]]; then
+      ln -sfn "$PREVIOUS" "$CURRENT.next"; mv -Tf "$CURRENT.next" "$CURRENT"
+      restart_from "$PREVIOUS" || true
+    else
+      rm -f "$CURRENT"
+      restart_from "$APP_ROOT" || true
+    fi
+    pm2 save >/dev/null 2>&1 || true
+  fi
+  exit "$rc"
+}
+trap rollback_on_error ERR
 restart_from "$RELEASE"
 for _ in $(seq 1 30); do
   if curl --fail --silent --show-error "$HEALTH_URL" >/dev/null 2>&1; then
     pm2 save
+    SWITCHED=0
+    trap - ERR
     echo "Backend release $SHA healthy"
     exit 0
   fi
@@ -86,6 +111,7 @@ for _ in $(seq 1 30); do
 done
 
 echo 'Backend health check failed; restoring previous application release'
+trap - ERR
 pm2 delete "$PM2_NAME" >/dev/null 2>&1 || true
 if [[ -n "$PREVIOUS" && -d "$PREVIOUS" ]]; then
   ln -sfn "$PREVIOUS" "$CURRENT.next"; mv -Tf "$CURRENT.next" "$CURRENT"
@@ -95,4 +121,5 @@ else
   restart_from "$APP_ROOT"
 fi
 pm2 save
+SWITCHED=0
 exit 7
