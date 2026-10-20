@@ -66,8 +66,8 @@ DB_USER=$(python3 -c 'import os,urllib.parse;print(urllib.parse.unquote(urllib.p
 export PGHOST="$DB_HOST" PGPORT="$DB_PORT" PGDATABASE="$DB_NAME" PGUSER="$DB_USER"
 BACKUP="/home/ubuntu/workpulse-prod-backups/${SHA}-$(date -u +%Y%m%dT%H%M%SZ).dump"
 pg_dump --format=custom --file "$BACKUP"
-aws s3 cp "$BACKUP" "s3://${BACKUP_BUCKET}/backend/${SHA}/$(basename "$BACKUP")" --region "$REGION" --only-show-errors
-aws s3api head-object --bucket "$BACKUP_BUCKET" --key "backend/${SHA}/$(basename "$BACKUP")" --region "$REGION" >/dev/null
+aws s3 cp "$BACKUP" "s3://${BACKUP_BUCKET}/neon/backend/${SHA}/$(basename "$BACKUP")" --region "$REGION" --only-show-errors
+aws s3api head-object --bucket "$BACKUP_BUCKET" --key "neon/backend/${SHA}/$(basename "$BACKUP")" --region "$REGION" >/dev/null
 pg_restore --list "$BACKUP" >/dev/null
 echo "Verified encrypted-backup object for release $SHA"
 
