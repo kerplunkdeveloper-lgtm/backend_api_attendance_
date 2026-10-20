@@ -102,6 +102,7 @@ restart_from "$RELEASE"
 for _ in $(seq 1 30); do
   if curl --fail --silent --show-error "$HEALTH_URL" >/dev/null 2>&1; then
     pm2 save
+    find "$RELEASES" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | tail -n +6 | cut -d' ' -f2- | while IFS= read -r old; do [[ "$old" == "$CURRENT" ]] || rm -rf -- "$old"; done
     SWITCHED=0
     trap - ERR
     echo "Backend release $SHA healthy"
