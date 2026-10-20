@@ -14,6 +14,7 @@ HEALTH_URL=http://127.0.0.1:5000/api/health
 
 [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid commit SHA'; exit 2; }
 [[ -f "$ENV_FILE" ]] || { echo 'Production env file missing'; exit 3; }
+[[ ! -e "$CURRENT" || -L "$CURRENT" ]] || { echo 'Current release path exists and is not a symlink; refusing migration'; exit 3; }
 command -v pg_dump >/dev/null
 command -v aws >/dev/null
 mkdir -p "$RELEASES" /home/ubuntu/workpulse-prod-backups
