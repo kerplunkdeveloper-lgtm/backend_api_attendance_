@@ -73,8 +73,19 @@ const validateEnvironment = () => {
   requiredOneOf(["RAZORPAY_WEBHOOK_SECRET"]);
   requiredOneOf(["BREVO_API_KEY"]);
   requiredOneOf(["BREVO_FROM_EMAIL"]);
-  if (/^rzp_test_/.test(String(process.env.RAZORPAY_KEY_ID || ""))) {
-    throw new Error("RAZORPAY_KEY_ID must use a live key in production; test payments are not allowed.");
+    const appEnv = String(process.env.APP_ENV || "production").toLowerCase();
+  const razorpayKeyId = String(process.env.RAZORPAY_KEY_ID || "");
+
+  if (!["alpha", "production"].includes(appEnv)) {
+    throw new Error("Invalid APP_ENV: expected alpha or production.");
+  }
+
+  if (appEnv === "alpha" && !/^rzp_test_/.test(razorpayKeyId)) {
+    throw new Error("Alpha must use Razorpay TEST credentials.");
+  }
+
+  if (appEnv === "production" && !/^rzp_live_/.test(razorpayKeyId)) {
+    throw new Error("Production must use Razorpay LIVE credentials.");
   }
 };
 

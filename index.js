@@ -1,4 +1,4 @@
-require("dotenv").config();
+﻿require("dotenv").config();
 require("dotenv").config({ path: ".env.local", override: true });
 const app = require("./src/app");
 const notificationService = require("./src/services/notification.service");
@@ -32,5 +32,6 @@ if (typeof PhusionPassenger !== "undefined") {
   });
 }
   
-// Export Express app for Vercel / serverless runtime
+// Export the Express app for compatible process managers and adapters.
 module.exports = app;
+
