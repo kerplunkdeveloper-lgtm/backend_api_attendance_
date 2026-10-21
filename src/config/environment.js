@@ -5,6 +5,11 @@
   );
 };
 
+// The production frontend is hosted on Vercel. Keep the previous Netlify
+// origin trusted during the transition so existing links do not break.
+const DEFAULT_PRODUCTION_FRONTEND_URL = "https://workpluse-frontend.vercel.app";
+const LEGACY_PRODUCTION_FRONTEND_URL = "https://workplusein.netlify.app";
+
 const validateUrl = (name) => {
   const value = String(process.env[name] || "").trim();
   if (!value) throw new Error(`Missing required environment variable: ${name}`);
@@ -85,6 +90,8 @@ const validateEnvironment = () => {
 };
 
 module.exports = {
+  DEFAULT_PRODUCTION_FRONTEND_URL,
+  LEGACY_PRODUCTION_FRONTEND_URL,
   validateEnvironment,
 };
 
