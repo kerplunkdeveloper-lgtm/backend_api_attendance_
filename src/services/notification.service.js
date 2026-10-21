@@ -1,5 +1,7 @@
 const prisma = require("../config/database");
 const { withRedisLock } = require("../config/redis");
+const { runIfLeader } = require("../utils/jobLease");
+const { processDueDeliveries } = require("./webhook.service");
 const emailService = require("./email.service");
 const whatsappService = require("./whatsapp.service");
 const { getLocalDateOnly, getLocalMinutesOfDay } = require("../utils/datetime");
@@ -339,11 +341,10 @@ class NotificationService {
 
   /**
    * Automated Daily Evaluator
-   * Called periodically by the backend scheduler
+   * Called periodically by the backend scheduler, already protected by job lease
    */
   async evaluateScheduledReminders() {
-    return withRedisLock("workpulse:jobs:scheduled-reminders", 55000, async () => {
-      try {
+    try {
       const now = new Date();
       const hours = getLocalMinutesOfDay(now, FALLBACK_TZ) / 60;
       await this.sendMorningCheckInReminders(null, true);
@@ -352,10 +353,15 @@ class NotificationService {
       if (hours >= 23) {
         await this.markAbsentEmployees();
       }
-      } catch (err) {
-        console.error("[NotificationScheduler] Error evaluating reminders:", err.message);
+
+      // Process webhook deliveries with exponential backoff
+      const processed = await processDueDeliveries(10);
+      if (processed > 0) {
+        console.log(`[WebhookScheduler] Processed ${processed} due deliveries`);
       }
-    });
+    } catch (err) {
+      console.error("[NotificationScheduler] Error evaluating reminders:", err.message);
+    }
   }
 
   /**
@@ -480,8 +486,21 @@ class NotificationService {
    */
   startScheduler() {
     console.log("[NotificationScheduler] Starting scheduler: check-in before shift start, check-out after shift end, absent marking after 23:00...");
-    setTimeout(() => this.evaluateScheduledReminders(), 5000);
-    setInterval(() => this.evaluateScheduledReminders(), 60000);
+    // Every instance may run this timer. The database lease makes exactly one
+    // of them the leader, with or without Redis; a dead leader's lease expires
+    // after 90s and another instance takes over.
+    let running = false;
+    const tick = async () => {
+      if (running) return;
+      running = true;
+      try {
+        await runIfLeader("scheduled-reminders", 90_000, () => this.evaluateScheduledReminders());
+      } finally {
+        running = false;
+      }
+    };
+    setTimeout(tick, 5000);
+    setInterval(tick, 60000);
   }
 }
 

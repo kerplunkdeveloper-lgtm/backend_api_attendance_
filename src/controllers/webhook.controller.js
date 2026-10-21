@@ -15,4 +15,6 @@ module.exports = {
   update: handle((req) => service.updateEndpoint(req.user.organizationId, req.params.id, req.body)),
   remove: handle((req) => service.deleteEndpoint(req.user.organizationId, req.params.id)),
   test: handle((req) => service.sendTest(req.user.organizationId, req.params.id)),
+  listDeliveries: handle((req) => service.listDeliveries(req.user.organizationId, req.params.id, req.query)),
+  redeliver: handle((req) => service.redeliver(req.user.organizationId, req.params.deliveryId)),
 };

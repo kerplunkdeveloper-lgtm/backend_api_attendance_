@@ -236,7 +236,7 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
     cleanEmail,
     firstName.trim(),
     {
-      organizationName: org?.name || "WorkPulse",
+      organizationName: org?.name || "WorkPluse",
       companyLogoUrl: org?.logoUrl,
       tempPassword,
       loginUrl,
@@ -1211,7 +1211,7 @@ const bulkImportEmployees = async (organizationId, employeesList, actorRole = "C
     for (const r of toInsert) {
       try {
         await emailService.sendEmployeeWelcomeEmail(r.email, r.firstName, {
-          organizationName: org?.name || "WorkPulse",
+          organizationName: org?.name || "WorkPluse",
           companyLogoUrl: org?.logoUrl,
           tempPassword: r.tempPassword,
           loginUrl,

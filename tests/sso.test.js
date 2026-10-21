@@ -1,10 +1,12 @@
-const { describe, it } = require("node:test");
+﻿const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
 const sso = require("../src/services/sso.service");
 
 describe("OIDC SSO configuration", () => {
   it("returns only safe configuration metadata and a public callback URL", () => {
     const previous = process.env.BACKEND_URL;
+    const previousPublic = process.env.BACKEND_PUBLIC_URL;
+    delete process.env.BACKEND_PUBLIC_URL;
     process.env.BACKEND_URL = "https://api.example.com";
     const result = sso.getConfiguration({
       ssoEnabled: true,
@@ -23,6 +25,7 @@ describe("OIDC SSO configuration", () => {
     });
     assert.equal(JSON.stringify(result).includes("encrypted-secret"), false);
     if (previous === undefined) delete process.env.BACKEND_URL; else process.env.BACKEND_URL = previous;
+    if (previousPublic === undefined) delete process.env.BACKEND_PUBLIC_URL; else process.env.BACKEND_PUBLIC_URL = previousPublic;
   });
 
   it("does not report incomplete provider settings as configured", () => {
@@ -52,3 +55,6 @@ describe("OIDC SSO configuration", () => {
       sso.exchange = originalExchange;
     }
   });});
+
+
+

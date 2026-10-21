@@ -1,14 +1,9 @@
-const requiredOneOf = (names) => {
+﻿const requiredOneOf = (names) => {
   if (names.some((name) => String(process.env[name] || "").trim())) return;
   throw new Error(
     `Missing required environment variable: ${names.join(" or ")}`,
   );
 };
-
-// The production frontend is now hosted on Vercel. Keep the previous Netlify
-// origin trusted during the transition so existing links do not break.
-const DEFAULT_PRODUCTION_FRONTEND_URL = "https://workpluse-frontend.vercel.app";
-const LEGACY_PRODUCTION_FRONTEND_URL = "https://workplusein.netlify.app";
 
 const validateUrl = (name) => {
   const value = String(process.env[name] || "").trim();
@@ -59,10 +54,10 @@ const validateEnvironment = () => {
   requiredOneOf(["REFRESH_TOKEN_SECRET", "JWT_REFRESH_SECRET", "JWT_SECRET"]);
   requiredOneOf(["RESET_PASSWORD_SECRET", "JWT_SECRET"]);
 
-  // Database — direct URL needed for Prisma migrations over pooled Neon
+  // Database â€” direct URL needed for Prisma migrations over pooled Neon
   requiredOneOf(["DIRECT_URL", "DATABASE_URL"]);
 
-  // File storage — missing this makes all uploads fail silently
+  // File storage â€” missing this makes all uploads fail silently
   requiredOneOf(["CLOUDINARY_CLOUD_NAME"]);
   requiredOneOf(["CLOUDINARY_API_KEY"]);
   requiredOneOf(["CLOUDINARY_API_SECRET"]);
@@ -90,7 +85,6 @@ const validateEnvironment = () => {
 };
 
 module.exports = {
-  DEFAULT_PRODUCTION_FRONTEND_URL,
-  LEGACY_PRODUCTION_FRONTEND_URL,
   validateEnvironment,
 };
+

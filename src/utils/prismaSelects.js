@@ -14,12 +14,14 @@ const organizationSelect = {
   trialEndsAt: true,
   subscriptionExpiresAt: true,
   maxEmployees: true,
-  unlockCode: true,
+  // unlockCode (a bcrypt hash) is deliberately absent: this select is spread
+  // into /auth/me responses. Plan activation reads it with its own query.
   unlockCodeUsedAt: true,
   planActivatedAt: true,
   planLocked: true,
   logoUrl: true,
   suspendedAt: true,
+  requireAdminTwoFactor: true,
   subscription: { select: { id: true, organizationId: true, plan: true, status: true, billingCycle: true, price: true, maxEmployees: true, maxBranches: true, hasGeofence: true, hasPayroll: true, hasShiftPlanner: true, hasApiAccess: true, startDate: true, trialEndsAt: true, currentPeriodEnd: true, createdAt: true, updatedAt: true } },
 };
 

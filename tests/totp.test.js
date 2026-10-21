@@ -60,7 +60,7 @@ describe("totp", () => {
   });
 
   it("builds an otpauth URL authenticator apps understand", () => {
-    const url = t.otpauthUrl({ issuer: "WorkPulse", account: "owner@x.com", secret: "ABC" });
-    assert.equal(url, "otpauth://totp/WorkPulse:owner%40x.com?secret=ABC&issuer=WorkPulse&algorithm=SHA1&digits=6&period=30");
+    const url = t.otpauthUrl({ issuer: "WorkPluse", account: "owner@x.com", secret: "ABC" });
+    assert.equal(url, "otpauth://totp/WorkPluse:owner%40x.com?secret=ABC&issuer=WorkPluse&algorithm=SHA1&digits=6&period=30");
   });
 });

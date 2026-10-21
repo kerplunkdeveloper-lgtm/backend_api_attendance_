@@ -34,7 +34,7 @@ const evaluateEntitlement = (org, now = new Date()) => {
       state: "SUSPENDED",
       allowApp: false,
       code: "ACCOUNT_SUSPENDED",
-      message: "This workspace has been suspended. Please contact WorkPulse support.",
+      message: "This workspace has been suspended. Please contact WorkPluse support.",
     };
   }
 
@@ -113,8 +113,15 @@ const evaluateEntitlement = (org, now = new Date()) => {
     };
   }
 
-  // Unknown/unrecognized status — allow access by default
-  return { state: status, allowApp: true, code: status };
+  // An unrecognized status means billing state is corrupt or from a newer
+  // release; fail closed and let the billing recovery paths fix it.
+  console.warn(`[entitlement] unknown subscription status "${status}" for org ${org.id}`);
+  return {
+    state: "UNKNOWN",
+    allowApp: false,
+    code: "SUBSCRIPTION_UNKNOWN",
+    message: "We could not confirm your subscription. Open billing or contact WorkPluse support.",
+  };
 };
 
 const recoveryPathRe =
@@ -253,6 +260,10 @@ const presentAuthUser = (user) => {
     planLocked: org?.planLocked ?? false,
     mustChangePassword: user.mustChangePassword ?? false,
     emailVerifiedAt: user.emailVerifiedAt || null,
+    twoFactorEnabled: Boolean(user.twoFactorEnabledAt),
+    // True when the workspace policy blocks this admin until 2FA is on.
+    twoFactorSetupRequired:
+      user.role === "COMPANY_ADMIN" && Boolean(org?.requireAdminTwoFactor) && !user.twoFactorEnabledAt,
     entitlement: {
       state: entitlement.state,
       allowApp: entitlement.allowApp,

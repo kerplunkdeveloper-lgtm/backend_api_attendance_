@@ -97,6 +97,10 @@ model Organization {
   suspendedAt   DateTime?
   suspendReason String?
 
+  // When on, company admins must turn on two-step verification before they
+  // can use anything beyond the sign-in and 2FA setup endpoints.
+  requireAdminTwoFactor Boolean @default(false)
+
   // Optional tenant-scoped OpenID Connect single sign-on configuration.
   ssoEnabled                Boolean @default(false)
   ssoIssuer                 String?
@@ -150,6 +154,7 @@ model Organization {
   appraisalReviews     AppraisalReview[]
   apiKeys              OrgApiKey[]
   webhookEndpoints     WebhookEndpoint[]
+  webhookDeliveries    WebhookDelivery[]
   ssoLoginCodes        SsoLoginCode[]
   lateComingLopRules   LateComingLopRule[]
 }
@@ -1757,8 +1762,42 @@ model WebhookEndpoint {
   updatedAt        DateTime  @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  deliveries   WebhookDelivery[]
 
   @@index([organizationId, isActive])
+}
+
+/// Outbox row per (event, endpoint). Retried with backoff until delivered or
+/// out of attempts; eventId stays the same so receivers can de-duplicate.
+model WebhookDelivery {
+  id             String    @id @default(uuid())
+  organizationId String
+  endpointId     String
+  eventId        String
+  event          String
+  payload        Json
+  status         String    @default("PENDING") // PENDING | DELIVERED | FAILED
+  attempts       Int       @default(0)
+  nextAttemptAt  DateTime  @default(now())
+  responseStatus Int?
+  lastError      String?
+  deliveredAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  endpoint     WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt])
+  @@index([endpointId, createdAt])
+}
+
+/// Leader lease for background jobs, so many API instances can run the
+/// scheduler timer while only the current holder does the work.
+model JobLease {
+  name      String   @id
+  holder    String
+  expiresAt DateTime
 }
 
 model BillingEvent {

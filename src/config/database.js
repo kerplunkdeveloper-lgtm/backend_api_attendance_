@@ -2,6 +2,7 @@ require("dotenv").config();
 const { PrismaPg } = require("@prisma/adapter-pg");
 const { PrismaClient } = require("@prisma/client");
 const { resolveRuntimeDatabaseUrl } = require("./databaseUrl");
+const { tenantGuardExtension } = require("./tenantGuard");
 
 const connectionString = resolveRuntimeDatabaseUrl();
 
@@ -44,4 +45,6 @@ const prisma = new PrismaClient({
   transactionOptions: { maxWait: 10000, timeout: 20000 },
 });
 
-module.exports = prisma;
+// Authenticated requests are confined to the caller's organization even when a
+// service forgets its own organizationId filter. See config/tenantGuard.js.
+module.exports = prisma.$extends(tenantGuardExtension);

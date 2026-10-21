@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
+const { getSessionMaxAgeMs } = require("./sessionPolicy");
 
 const isProduction = () => process.env.NODE_ENV === "production";
 
@@ -44,7 +45,7 @@ const generateAccessToken = (payload) => {
 
 const generateRefreshToken = (payload) => {
   return jwt.sign(payload, getRefreshSecret(), {
-    expiresIn: "30d",
+    expiresIn: Math.floor(getSessionMaxAgeMs(payload?.role) / 1000),
     // Without a unique id, tokens created with the same payload in the same
     // second are identical and rotation can accidentally return the old token.
     jwtid: crypto.randomUUID(),

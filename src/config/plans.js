@@ -104,7 +104,7 @@ const SUBSCRIPTION_PLANS = [
     currency: "INR",
     maxEmployees: PLAN_CONFIGS.FREE_TRIAL.maxEmployees,
     maxBranches: PLAN_CONFIGS.FREE_TRIAL.maxBranches,
-    description: "Try WorkPulse core workforce features with your team for 14 days.",
+    description: "Try WorkPluse core workforce features with your team for 14 days.",
     features: [
       "Up to 10 Employees",
       "1 Branch Location",
@@ -192,6 +192,11 @@ const DEFAULT_API_KEY_SCOPES = [
   "write:attendance",
 ];
 
+// Every scope requiredScopeFor (auth.middleware.js) can ask for. Keys are only
+// issued with scopes from this list so a typo cannot silently grant nothing.
+const API_KEY_SCOPES = ["employees", "attendance", "reports", "payroll", "leave", "biometric", "admin"]
+  .flatMap((resource) => [`read:${resource}`, `write:${resource}`]);
+
 const getPlan = (name) => PLAN_CONFIGS[String(name || "").toUpperCase()] || null;
 
 const isPaidPlan = (name) => PAID_PLANS.has(String(name || "").toUpperCase());
@@ -218,6 +223,7 @@ module.exports = {
   PAID_PLANS,
   SEAT_STATUSES,
   DEFAULT_API_KEY_SCOPES,
+  API_KEY_SCOPES,
   getPlan,
   isPaidPlan,
   addBillingPeriod,

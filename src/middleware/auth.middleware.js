@@ -4,6 +4,15 @@ const { verifyAccessToken } = require("../utils/jwt");
 const { organizationWithSubscription } = require("../utils/prismaSelects");
 const { evaluateEntitlement, isRecoveryPath, resolveLimits, assertFeature } = require("../services/entitlement.service");
 const { DEFAULT_API_KEY_SCOPES } = require("../config/plans");
+const { setTenant } = require("../utils/tenantContext");
+const { denyIfTenantTwoFactorMissing } = require("./twoFactor.middleware");
+const { tenantRateLimiter } = require("./rateLimiter.middleware");
+
+// The platform owner's console reads across every workspace, so only tenant
+// roles are confined to their own organization by the Prisma tenant guard.
+const scopeRequestToTenant = (role, organizationId) => {
+  if (role !== "SUPER_ADMIN") setTenant(organizationId);
+};
 
 const parseScopes = (raw) => {
   if (Array.isArray(raw)) return raw;
@@ -14,16 +23,31 @@ const parseScopes = (raw) => {
     .filter(Boolean);
 };
 
+// Keyed by the router a request is mounted on (its first path segment after
+// /api), not by substrings of the full URL, so /reports/attendance-summary needs
+// read:reports rather than read:attendance. Unlisted routers need admin scope.
+const SCOPE_RESOURCE_BY_ROUTER = {
+  employees: "employees",
+  attendance: "attendance",
+  corrections: "attendance",
+  reports: "reports",
+  payroll: "payroll",
+  leaves: "leave",
+  biometric: "biometric",
+};
+
+const routerSegment = (req) => {
+  const mount = String(req.baseUrl || req.originalUrl || req.path || "")
+    .split("?")[0]
+    .toLowerCase()
+    .replace(/^\/(api\/)?(v1\/)?/, "");
+  return mount.split("/")[0];
+};
+
 const requiredScopeFor = (req) => {
-  const path = String(req.originalUrl || req.path || "").toLowerCase();
   const write = !["GET", "HEAD", "OPTIONS"].includes(req.method);
-  if (path.includes("/employees")) return write ? "write:employees" : "read:employees";
-  if (path.includes("/attendance")) return write ? "write:attendance" : "read:attendance";
-  if (path.includes("/reports")) return write ? "write:reports" : "read:reports";
-  if (path.includes("/payroll")) return write ? "write:payroll" : "read:payroll";
-  if (path.includes("/leaves")) return write ? "write:leave" : "read:leave";
-  if (path.includes("/biometric")) return write ? "write:biometric" : "read:biometric";
-  return write ? "write:admin" : "read:admin";
+  const resource = SCOPE_RESOURCE_BY_ROUTER[routerSegment(req)] || "admin";
+  return `${write ? "write" : "read"}:${resource}`;
 };
 
 const extractApiKey = (req) => {
@@ -95,6 +119,18 @@ const authenticateWithApiKey = async (req, res, rawKey) => {
   const blocked = denyIfLocked(req, res, key.organization);
   if (blocked) return blocked;
 
+  // Checked here rather than in authorizeRoles so routes that only call
+  // authenticate cannot be reached by a key without the matching scope.
+  const scopes = parseScopes(key.scopes);
+  const needed = requiredScopeFor(req);
+  if (!scopes.includes(needed)) {
+    return res.status(403).json({
+      success: false,
+      message: `API key is missing scope '${needed}'`,
+      requiredScope: needed,
+    });
+  }
+
   req.user = {
     id: `apikey:${key.id}`,
     email: null,
@@ -106,7 +142,8 @@ const authenticateWithApiKey = async (req, res, rawKey) => {
   };
   req.authType = "api_key";
   req.apiKey = key;
-  req.apiKeyScopes = parseScopes(key.scopes);
+  req.apiKeyScopes = scopes;
+  scopeRequestToTenant("API_KEY", key.organizationId);
 
   prisma.orgApiKey
     .update({ where: { id: key.id }, data: { lastUsedAt: new Date() } })
@@ -116,12 +153,15 @@ const authenticateWithApiKey = async (req, res, rawKey) => {
 };
 
 const authenticate = async (req, res, next) => {
+  // Routers that share a mount path (payroll + statutory on /api/payroll) each
+  // run authenticate; the first pass already loaded and checked the user.
+  if (req.authType && req.user) return next();
   try {
     const apiKey = extractApiKey(req);
     if (apiKey) {
       const rejected = await authenticateWithApiKey(req, res, apiKey);
       if (rejected) return rejected;
-      return next();
+      return tenantRateLimiter(req, res, next);
     }
 
     const authHeader = req.headers.authorization;
@@ -196,11 +236,15 @@ const authenticate = async (req, res, next) => {
       employee: user.employee,
     };
     req.authType = "jwt";
+    scopeRequestToTenant(user.role, user.organizationId);
 
     const blocked = denyIfLocked(req, res, user.organization);
     if (blocked) return blocked;
 
-    next();
+    const needsTwoFactor = denyIfTenantTwoFactorMissing(req, res);
+    if (needsTwoFactor) return needsTwoFactor;
+
+    return tenantRateLimiter(req, res, next);
   } catch (error) {
     return res.status(401).json({
       success: false,
@@ -222,17 +266,8 @@ const authorizeRoles = (...allowedRoles) => {
       });
     }
 
-    if (req.authType === "api_key") {
-      const needed = requiredScopeFor(req);
-      if (!req.apiKeyScopes?.includes(needed)) {
-        return res.status(403).json({
-          success: false,
-          message: `API key is missing scope '${needed}'`,
-          requiredScope: needed,
-        });
-      }
-      return next();
-    }
+    // Scope was already enforced in authenticate.
+    if (req.authType === "api_key") return next();
 
     if (!allowedRoles.includes(req.user.role)) {
       return res.status(403).json({

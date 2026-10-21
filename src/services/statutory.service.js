@@ -130,7 +130,7 @@ function form16Html(estimate) {
 h1{font-size:20px;margin:0}table{width:100%;border-collapse:collapse;margin-top:16px}
 td,th{border:1px solid #e2e8f0;padding:8px;text-align:left;font-size:13px}
 .muted{color:#64748b;font-size:12px}</style></head><body>
-<h1>Form 16 — Part B (WorkPulse)</h1>
+<h1>Form 16 — Part B (WorkPluse)</h1>
 <p class="muted">${e.organizationName || "Organization"} · FY ${estimate.financialYear} · ${t.financialYearNote} · ${t.regime} regime</p>
 <table>
 <tr><th>Employee</th><td>${e.name} (${e.employeeCode || ""})</td></tr>
@@ -221,6 +221,13 @@ async function monthlyTdsForEmployee(organizationId, employeeId) {
 }
 
 async function listPayslipsForMonth(organizationId, month, year) {
+  const m = Number(month);
+  const y = Number(year);
+  if (!Number.isInteger(m) || m < 1 || m > 12 || !Number.isInteger(y) || y < 2000 || y > 2100) {
+    const err = new Error("Choose a valid month (1-12) and year for this export.");
+    err.statusCode = 400;
+    throw err;
+  }
   return prisma.payslip.findMany({
     where: { organizationId, month: Number(month), year: Number(year) },
     include: {

@@ -9,5 +9,8 @@ router.post("/", controller.create);
 router.patch("/:id", controller.update);
 router.delete("/:id", controller.remove);
 router.post("/:id/test", controller.test);
+// Webhook delivery management
+router.get("/:id/deliveries", controller.listDeliveries);
+router.post("/deliveries/:deliveryId/redeliver", controller.redeliver);
 
 module.exports = router;

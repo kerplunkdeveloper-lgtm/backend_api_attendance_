@@ -123,8 +123,14 @@ router.post(
   validate(schemas.changePassword),
   authController.changePassword,
 );
-router.post("/2fa/setup", authenticate, authorizeRoles("SUPER_ADMIN"), authController.beginTwoFactorSetup);
-router.post("/2fa/confirm", authenticate, authorizeRoles("SUPER_ADMIN"), validate(schemas.twoFactorCode), authController.confirmTwoFactorSetup);
-router.post("/2fa/disable", authenticate, authorizeRoles("SUPER_ADMIN"), validate(schemas.twoFactorCode), authController.disableTwoFactor);
+// Any signed-in person may protect their own account; workspaces can make it
+// mandatory for company admins (Organization.requireAdminTwoFactor).
+const humanOnly = (req, res, next) =>
+  req.authType === "api_key"
+    ? res.status(403).json({ success: false, message: "API keys cannot manage two-step verification." })
+    : next();
+router.post("/2fa/setup", authenticate, humanOnly, authController.beginTwoFactorSetup);
+router.post("/2fa/confirm", authenticate, humanOnly, validate(schemas.twoFactorCode), authController.confirmTwoFactorSetup);
+router.post("/2fa/disable", authenticate, humanOnly, validate(schemas.twoFactorCode), authController.disableTwoFactor);
 
 module.exports = router;

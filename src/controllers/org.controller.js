@@ -33,6 +33,7 @@ module.exports = {
       const data = await orgService.updateSettings(
         req.user.organizationId,
         req.body,
+        req.user,
       );
       return res.json({ success: true, message: "Organization updated", data });
     } catch (err) {
