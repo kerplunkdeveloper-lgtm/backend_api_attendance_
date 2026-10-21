@@ -18,6 +18,7 @@
     "db:push": "prisma db push",
     "fix:access": "node scripts/fix_all_access.js",
     "test": "node --test --test-concurrency=1 tests/*.test.js",
+    "test:integration": "node --test --test-concurrency=1 --test-force-exit tests/integration/*.test.js",
     "verify:production": "node scripts/preflight-production.js"
   },
   "keywords": [],

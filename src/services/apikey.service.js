@@ -2,7 +2,7 @@ const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const prisma = require("../config/database");
 
-const { DEFAULT_API_KEY_SCOPES } = require("../config/plans");
+const { DEFAULT_API_KEY_SCOPES, API_KEY_SCOPES } = require("../config/plans");
 const { resolveLimits } = require("./entitlement.service");
 
 async function createKey(organizationId, name, scopes) {
@@ -20,6 +20,12 @@ async function createKey(organizationId, name, scopes) {
   const scopeList = Array.isArray(scopes) && scopes.length
     ? scopes.map((s) => String(s).trim()).filter(Boolean)
     : DEFAULT_API_KEY_SCOPES;
+  const unknown = scopeList.filter((s) => !API_KEY_SCOPES.includes(s));
+  if (unknown.length) {
+    const err = new Error(`Unknown API key scope: ${unknown.join(", ")}. Allowed: ${API_KEY_SCOPES.join(", ")}`);
+    err.statusCode = 400;
+    throw err;
+  }
   const key = await prisma.orgApiKey.create({
     data: {
       organizationId,

@@ -165,6 +165,41 @@ const strictRateLimiter = createRateLimiter({
   message: "Too many requests for this operation. Please try again in an hour.",
 });
 
+const perMinute = (name, fallback) => {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : fallback;
+};
+
+/**
+ * Per-workspace budget, applied after authentication so one noisy company (or
+ * a runaway integration) cannot starve every other tenant behind the same API.
+ * The per-IP limiter above cannot see this: an office NAT is many users, and
+ * one tenant can call from many addresses.
+ */
+const workspaceRateLimiter = createRateLimiter({
+  namespace: "tenant",
+  windowMs: 60 * 1000,
+  max: perMinute("TENANT_RATE_LIMIT_PER_MIN", 3000),
+  subjectFn: (req) => `org:${req.user?.organizationId || "none"}`,
+  message: "Your workspace is sending too many requests. Please slow down.",
+});
+
+const apiKeyRateLimiter = createRateLimiter({
+  namespace: "apikey",
+  windowMs: 60 * 1000,
+  max: perMinute("API_KEY_RATE_LIMIT_PER_MIN", 600),
+  subjectFn: (req) => `key:${req.apiKey?.id || "none"}`,
+  message: "This API key is sending too many requests. Please slow down.",
+});
+
+/** The platform owner works across tenants and is not counted against one. */
+const tenantRateLimiter = (req, res, next) => {
+  if (!req.user || req.user.role === "SUPER_ADMIN") return next();
+  return workspaceRateLimiter(req, res, () =>
+    req.authType === "api_key" ? apiKeyRateLimiter(req, res, next) : next(),
+  );
+};
+
 // Periodically clean up stale entries every 10 minutes to prevent memory leak
 const cleanupTimer = setInterval(
   () => {
@@ -184,4 +219,5 @@ module.exports = {
   sessionRateLimiter,
   apiRateLimiter,
   strictRateLimiter,
+  tenantRateLimiter,
 };

@@ -221,6 +221,13 @@ async function monthlyTdsForEmployee(organizationId, employeeId) {
 }
 
 async function listPayslipsForMonth(organizationId, month, year) {
+  const m = Number(month);
+  const y = Number(year);
+  if (!Number.isInteger(m) || m < 1 || m > 12 || !Number.isInteger(y) || y < 2000 || y > 2100) {
+    const err = new Error("Choose a valid month (1-12) and year for this export.");
+    err.statusCode = 400;
+    throw err;
+  }
   return prisma.payslip.findMany({
     where: { organizationId, month: Number(month), year: Number(year) },
     include: {

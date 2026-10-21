@@ -22,8 +22,20 @@ async function getSettings(organizationId) {
   return presentOrganization(org);
 }
 
-async function updateSettings(organizationId, payload) {
+async function updateSettings(organizationId, payload, actor = {}) {
   const data = {};
+  if (payload.requireAdminTwoFactor !== undefined) {
+    const enable = payload.requireAdminTwoFactor === true || payload.requireAdminTwoFactor === "true";
+    // Turning the policy on would immediately lock out an admin who has not
+    // set up 2FA, including the one flipping the switch.
+    if (enable && actor.role === "COMPANY_ADMIN" && !actor.twoFactorEnabled) {
+      throw Object.assign(
+        new Error("Turn on two-step verification for your own account before requiring it for all admins."),
+        { statusCode: 400 },
+      );
+    }
+    data.requireAdminTwoFactor = enable;
+  }
   if (payload.name !== undefined) data.name = String(payload.name).trim();
   if (payload.email !== undefined) data.email = payload.email ? String(payload.email).trim().toLowerCase() : null;
   if (payload.phone !== undefined) data.phone = payload.phone ? String(payload.phone).trim() : null;

@@ -146,6 +146,8 @@ const schemas = {
     .object({
       email: EMAIL,
       code: z.string().trim().regex(/^\d{6}$/, "Enter the 6-digit code from your email."),
+      // Current web/mobile clients include their platform on auth requests.
+      client: z.enum(["web", "mobile"]).optional(),
     })
     .strict(),
 

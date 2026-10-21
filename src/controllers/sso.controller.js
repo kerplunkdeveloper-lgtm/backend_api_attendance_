@@ -1,5 +1,6 @@
 const ssoService = require("../services/sso.service");
 const { sendControllerError } = require("../utils/controllerError");
+const { getSessionMaxAgeMs } = require("../utils/sessionPolicy");
 
 const frontendUrl = () => String(process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/$/, "");
 const cookieOptions = () => ({
@@ -38,7 +39,7 @@ module.exports = {
   async exchange(req, res) {
     try {
       const result = await ssoService.exchange(req.body.code);
-      if (result.refreshToken) res.cookie("refreshToken", result.refreshToken, cookieOptions());
+      if (result.refreshToken) res.cookie("refreshToken", result.refreshToken, cookieOptions(result.user?.role));
       const { refreshToken, ...safeResult } = result;
       return res.json({ success: true, data: safeResult });
     } catch (error) {

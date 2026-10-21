@@ -14,6 +14,7 @@ const emailService = require("./email.service");
 const { organizationWithSubscription, WITH_SECRETS } = require("../utils/prismaSelects");
 const { resolveAvatarUrl } = require("../utils/avatar");
 const { getNextEmployeeCode } = require("../utils/employeeCode");
+const { getSessionMaxAgeMs, getSessionExpiryMessage } = require("../utils/sessionPolicy");
 
 const { PLAN_CONFIGS, SUBSCRIPTION_PLANS, isPaidPlan, addBillingPeriod } = require("../config/plans");
 const { presentAuthUser } = require("./entitlement.service");
@@ -39,8 +40,6 @@ const generateVerificationCode = () => String(crypto.randomInt(0, 1000000)).padS
 const hashRefreshToken = (token) =>
   crypto.createHash("sha256").update(String(token)).digest("hex");
 
-const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
-
 const issueRefreshToken = async (userId, tokenPayload) => {
   const sessionPayload = {
     ...tokenPayload,
@@ -51,7 +50,7 @@ const issueRefreshToken = async (userId, tokenPayload) => {
     data: {
       userId,
       token: hashRefreshToken(refreshToken),
-      expiresAt: new Date(Date.now() + SESSION_MAX_AGE_MS),
+      expiresAt: new Date(Date.now() + getSessionMaxAgeMs(tokenPayload?.role)),
     },
   });
   return refreshToken;
@@ -543,14 +542,23 @@ const confirmTwoFactorSetup = async (userId, code) => {
   const backupCodes = generateBackupCodes();
   await prisma.user.update({
     where: { id: userId },
-    data: { twoFactorEnabledAt: new Date(), twoFactorLastStep: step, twoFactorBackupCodes: backupCodes.map(hashBackupCode) },
+    // Do not consume the setup code for the first login. Authenticator apps
+    // keep the same code for 30 seconds, so logging out immediately after
+    // setup must still allow that current code. Login replay protection starts
+    // after the first successful 2FA login.
+    data: { twoFactorEnabledAt: new Date(), twoFactorLastStep: null, twoFactorBackupCodes: backupCodes.map(hashBackupCode) },
   });
   return { enabled: true, backupCodes };
 };
 
 const disableTwoFactor = async (userId, code) => {
-  const user = await prisma.user.findUnique({ where: { id: userId }, omit: WITH_SECRETS });
+  const user = await prisma.user.findUnique({ where: { id: userId }, omit: WITH_SECRETS, include: { organization: { select: { requireAdminTwoFactor: true } } } });
   if (!user?.twoFactorEnabledAt || !user.twoFactorSecret) throw new Error("Two-step verification is not enabled");
+  if (user.role === "COMPANY_ADMIN" && user.organization?.requireAdminTwoFactor) {
+    const error = new Error("Your workspace requires two-step verification for admins, so it cannot be turned off.");
+    error.statusCode = 403;
+    throw error;
+  }
   const step = verifyTotp(decryptSecret(user.twoFactorSecret), code, { afterStep: user.twoFactorLastStep });
   if (step === null) {
     const error = new Error("That authenticator code is invalid or has expired.");
@@ -618,20 +626,6 @@ const refreshAccessToken = async (refreshToken) => {
   if (storedToken.userId !== decoded.userId) {
     throw new Error("Refresh token does not belong to this user. Please log in again.");
   }
-  const sessionStartedAt = Number(decoded.sessionStartedAt) || storedToken.createdAt.getTime();
-  if (Number.isFinite(sessionStartedAt) && Date.now() - sessionStartedAt >= SESSION_MAX_AGE_MS) {
-    await prisma.refreshToken.deleteMany({ where: { token: hashRefreshToken(refreshToken) } });
-    const error = new Error("Your 30-day session has expired. Please log in again.");
-    error.statusCode = 401;
-    error.code = "SESSION_EXPIRED";
-    throw error;
-  }
-
-  if (storedToken.expiresAt < new Date()) {
-    await prisma.refreshToken.delete({ where: { token: hashRefreshToken(refreshToken) } });
-    throw new Error("Refresh token has expired. Please log in again.");
-  }
-
   const user = await prisma.user.findUnique({
     where: { id: decoded.userId },
     include: {
@@ -648,6 +642,20 @@ const refreshAccessToken = async (refreshToken) => {
 
   if (!user) {
     throw new Error("User no longer exists");
+  }
+  const sessionMaxAgeMs = getSessionMaxAgeMs(user.role || decoded.role);
+  const sessionStartedAt = Number(decoded.sessionStartedAt) || storedToken.createdAt.getTime();
+  if (Number.isFinite(sessionStartedAt) && Date.now() - sessionStartedAt >= sessionMaxAgeMs) {
+    await prisma.refreshToken.deleteMany({ where: { token: hashRefreshToken(refreshToken) } });
+    const error = new Error(getSessionExpiryMessage(user.role || decoded.role));
+    error.statusCode = 401;
+    error.code = "SESSION_EXPIRED";
+    throw error;
+  }
+
+  if (storedToken.expiresAt < new Date()) {
+    await prisma.refreshToken.delete({ where: { token: hashRefreshToken(refreshToken) } });
+    throw new Error("Refresh token has expired. Please log in again.");
   }
   if (user.isActive === false) {
     const error = new Error("This account has been deactivated.");
@@ -676,7 +684,7 @@ const refreshAccessToken = async (refreshToken) => {
   // Rotate the refresh token while preserving the original login timestamp.
   const sessionPayload = { ...tokenPayload, sessionStartedAt: decoded.sessionStartedAt };
   const newRefreshToken = generateRefreshToken(sessionPayload);
-  const refreshExpiresAt = new Date(Date.now() + SESSION_MAX_AGE_MS);
+  const refreshExpiresAt = new Date(Date.now() + getSessionMaxAgeMs(user.role));
   await prisma.$transaction([
     prisma.refreshToken.delete({ where: { token: hashRefreshToken(refreshToken) } }),
     prisma.refreshToken.create({

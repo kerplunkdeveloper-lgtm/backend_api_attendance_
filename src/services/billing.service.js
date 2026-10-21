@@ -136,7 +136,11 @@ function verifySignature(orderId, paymentId, signature) {
     .createHmac("sha256", secret)
     .update(`${orderId}|${paymentId}`)
     .digest("hex");
-  return expected === signature;
+  const received = String(signature || "");
+  return received.length === expected.length && crypto.timingSafeEqual(
+    Buffer.from(expected),
+    Buffer.from(received),
+  );
 }
 
 function roundMoney(value) {
@@ -384,21 +388,14 @@ async function activateOrder(tx, order, paymentId, paidAt = new Date()) {
     },
   });
 
-  const latest = await tx.billingOrder.findUnique({ where: { id: order.id } });
-  const periodStart = latest.paidAt || paidAt;
-
-  const org = await tx.organization.findUnique({
-    where: { id: order.organizationId },
-    include: { subscription: true },
-  });
-  const alreadyActive =
-    org?.subscriptionPlan === order.plan &&
-    org?.subscriptionStatus === "ACTIVE" &&
-    org?.planLocked === false;
-
-  if (claimed.count === 0 && alreadyActive) {
+  // A paid order is immutable. Replaying an old successful payment must
+  // never re-activate an older plan after a later upgrade or downgrade.
+  if (claimed.count === 0) {
     return { duplicate: true, plan: order.plan, billingCycle: order.billingCycle };
   }
+
+  const latest = await tx.billingOrder.findUnique({ where: { id: order.id } });
+  const periodStart = latest.paidAt || paidAt;
 
   await applyPaidPlan(order.organizationId, order.plan, order.billingCycle, {
     tx,

@@ -3,6 +3,7 @@ const {
   DEFAULT_PRODUCTION_FRONTEND_URL,
   LEGACY_PRODUCTION_FRONTEND_URL,
 } = require("../config/environment");
+const { runWithRequestStore } = require("../utils/tenantContext");
 
 const FORBIDDEN_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
@@ -22,7 +23,7 @@ const requestContext = (req, res, next) => {
     ? incoming
     : crypto.randomUUID();
   res.setHeader("X-Request-Id", req.requestId);
-  next();
+  runWithRequestStore(() => next());
 };
 
 const rejectUnsafePayload = (req, res, next) => {

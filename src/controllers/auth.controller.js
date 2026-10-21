@@ -62,14 +62,14 @@ const loginErrorResponse = (error) => {
   };
 };
 
-const getCookieOptions = () => {
+const getCookieOptions = (role) => {
   const isHttps = process.env.NODE_ENV === "production";
   return {
     httpOnly: true,
     secure: isHttps,
     sameSite: isHttps ? "none" : "lax",
     path: "/",
-    maxAge: 30 * 24 * 60 * 60 * 1000, // absolute 30-day session
+    maxAge: require("../utils/sessionPolicy").getSessionMaxAgeMs(role),
   };
 };
 
@@ -133,7 +133,7 @@ const verifyEmail = async (req, res) => {
   try {
     const { email, code } = req.body;
     const result = await authService.verifyEmail(email, code);
-    res.cookie("refreshToken", result.refreshToken, getCookieOptions());
+    res.cookie("refreshToken", result.refreshToken, getCookieOptions(result.user?.role));
     return res.status(200).json({
       success: true,
       message: "Email verified successfully",
@@ -164,7 +164,7 @@ const loginWithGoogle = async (req, res) => {
     const { idToken, client } = req.body;
     const clientPlatform = client || req.headers["x-client-platform"] || null;
     const result = await authService.loginWithGoogle(idToken, clientPlatform);
-    res.cookie("refreshToken", result.refreshToken, getCookieOptions());
+    res.cookie("refreshToken", result.refreshToken, getCookieOptions(result.user?.role));
     return res.json({
       success: true,
       message: "Google sign-in successful",
@@ -204,7 +204,7 @@ const login = async (req, res) => {
         data: { twoFactorRequired: true, challengeToken: result.challengeToken, user: result.user },
       });
     }
-    res.cookie("refreshToken", result.refreshToken, getCookieOptions());
+    res.cookie("refreshToken", result.refreshToken, getCookieOptions(result.user?.role));
 
     return res.json({
       success: true,
@@ -229,7 +229,7 @@ const login = async (req, res) => {
 const verifyTwoFactorLogin = async (req, res) => {
   try {
     const result = await authService.verifyTwoFactorLogin(req.body.challengeToken, req.body.code);
-    res.cookie("refreshToken", result.refreshToken, getCookieOptions());
+    res.cookie("refreshToken", result.refreshToken, getCookieOptions(result.user?.role));
     return res.json({ success: true, message: "Login successful", data: { accessToken: result.accessToken, token: result.accessToken, ...refreshTokenForClient(req, result.refreshToken), user: result.user } });
   } catch (error) { return sendControllerError(res, error, { fallbackStatus: 401 }); }
 };
@@ -265,7 +265,7 @@ const refreshToken = async (req, res) => {
 
     // The presented refresh token has just been revoked. Persist its rotated
     // replacement for browser clients, which cannot update an HTTP-only cookie.
-    res.cookie("refreshToken", result.refreshToken, getCookieOptions());
+    res.cookie("refreshToken", result.refreshToken, getCookieOptions(result.user?.role));
 
     return res.json({
       success: true,

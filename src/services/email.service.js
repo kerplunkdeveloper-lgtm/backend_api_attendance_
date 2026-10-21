@@ -17,20 +17,9 @@ const getEmailLogoUrl = (value) => {
   return raw;
 };
 
-const getInlineEmailLogo = async (value) => {
+const getEmailLogo = (value) => {
   const url = getEmailLogoUrl(value);
   if (!url) return null;
-  try {
-    const response = await fetch(url);
-    if (!response.ok) return url;
-    const contentType = response.headers.get("content-type") || "image/png";
-    const bytes = Buffer.from(await response.arrayBuffer());
-    if (bytes.length <= 250 * 1024 && contentType.startsWith("image/")) {
-      return `data:${contentType};base64,${bytes.toString("base64")}`;
-    }
-  } catch (error) {
-    console.warn("[EmailService] Logo inline embedding skipped:", error.message);
-  }
   return url;
 };
 
@@ -46,7 +35,10 @@ class EmailService {
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
     const actionUrl = ctaUrl || frontendUrl;
     const displayCompanyName = escapeHtml(companyName || "WorkPluse");
-    const safeLogoUrl = await getInlineEmailLogo(companyLogoUrl);
+    // Use a verified HTTPS image URL. Data-URI images are blocked by many
+    // inboxes, including transactional email clients, so they do not render
+    // reliably in OTP, offer, welcome, or billing messages.
+    const safeLogoUrl = getEmailLogo(companyLogoUrl);
     const escapedLogoUrl = safeLogoUrl ? escapeHtml(safeLogoUrl) : null;
     const brandMark = safeLogoUrl
       ? `<img src="${escapedLogoUrl}" alt="${displayCompanyName} logo" width="240" height="90" style="width: 240px; height: 90px; object-fit: contain; margin: 0 auto 10px; display: block; background: #ffffff; border-radius: 10px; padding: 8px; border: 0;">`
