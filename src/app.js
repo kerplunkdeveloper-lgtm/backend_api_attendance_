@@ -222,7 +222,7 @@ app.use("/webhooks", webhookRoutes);
 app.get(["/", "/api"], (req, res) => {
   res.json({
     success: true,
-    message: "WorkPulse Workforce Backend API is running",
+    message: "WorkPluse Workforce Backend API is running",
     endpoints: {
       health: "/api/health",
       auth: "/api/auth",

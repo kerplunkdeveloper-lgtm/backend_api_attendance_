@@ -34,7 +34,7 @@ const evaluateEntitlement = (org, now = new Date()) => {
       state: "SUSPENDED",
       allowApp: false,
       code: "ACCOUNT_SUSPENDED",
-      message: "This workspace has been suspended. Please contact WorkPulse support.",
+      message: "This workspace has been suspended. Please contact WorkPluse support.",
     };
   }
 

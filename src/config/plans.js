@@ -104,7 +104,7 @@ const SUBSCRIPTION_PLANS = [
     currency: "INR",
     maxEmployees: PLAN_CONFIGS.FREE_TRIAL.maxEmployees,
     maxBranches: PLAN_CONFIGS.FREE_TRIAL.maxBranches,
-    description: "Try WorkPulse core workforce features with your team for 14 days.",
+    description: "Try WorkPluse core workforce features with your team for 14 days.",
     features: [
       "Up to 10 Employees",
       "1 Branch Location",

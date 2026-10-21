@@ -40,12 +40,12 @@ class EmailService {
   }
 
   /**
-   * Generates modern, responsive WorkPulse HTML email template
+   * Generates modern, responsive WorkPluse HTML email template
    */
   async buildHtmlTemplate({ title, badge, badgeColor = "#2563eb", contentHtml, ctaText, ctaUrl, companyName, companyLogoUrl }) {
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
     const actionUrl = ctaUrl || frontendUrl;
-    const displayCompanyName = escapeHtml(companyName || "WorkPulse");
+    const displayCompanyName = escapeHtml(companyName || "WorkPluse");
     const safeLogoUrl = await getInlineEmailLogo(companyLogoUrl);
     const escapedLogoUrl = safeLogoUrl ? escapeHtml(safeLogoUrl) : null;
     const brandMark = safeLogoUrl
@@ -84,7 +84,7 @@ class EmailService {
   <div class="container" style="max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0;">
     <div class="header" style="background: #1e3a8a; padding: 32px 28px; text-align: center; color: #ffffff;">
       ${brandMark}
-      <p class="header-sub" style="font-size: 13px; color: #bfdbfe; margin: 0; font-weight: 500;">${displayCompanyName} · Powered by WorkPulse</p>
+      <p class="header-sub" style="font-size: 13px; color: #bfdbfe; margin: 0; font-weight: 500;">${displayCompanyName} · Powered by WorkPluse</p>
     </div>
     <div class="body" style="padding: 32px 28px;">
       ${badge ? `<div class="badge" style="display: inline-block; padding: 6px 14px; border-radius: 9999px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 20px; background-color: ${badgeColor}15; color: ${badgeColor}; border: 1px solid ${badgeColor}30;">${badge}</div>` : ""}
@@ -93,8 +93,8 @@ class EmailService {
       ${ctaText ? `<div style="text-align: center; margin-top: 28px;"><a href="${actionUrl}" class="btn">${ctaText} &rarr;</a></div>` : ""}
     </div>
     <div class="footer" style="padding: 24px; background: #f8fafc; border-top: 1px solid #e2e8f0; text-align: center; font-size: 12px; color: #94a3b8; line-height: 1.5;">
-      This is an automated notification from WorkPulse Workforce Systems.<br>
-      © ${new Date().getFullYear()} WorkPulse Inc. All rights reserved.
+      This is an automated notification from WorkPluse Workforce Systems.<br>
+      © ${new Date().getFullYear()} WorkPluse Inc. All rights reserved.
     </div>
   </div>
 </body>
@@ -184,9 +184,9 @@ class EmailService {
     });
     return this.sendEmail({
       to,
-      subject: "Action required: WorkPulse payment failed",
+      subject: "Action required: WorkPluse payment failed",
       html,
-      text: `The latest WorkPulse payment for ${companyName || "your workspace"} failed. Update billing at ${billingUrl}.`,
+      text: `The latest WorkPluse payment for ${companyName || "your workspace"} failed. Update billing at ${billingUrl}.`,
     });
   }
 
@@ -235,7 +235,7 @@ class EmailService {
 
     return await this.sendEmail({
       to,
-      subject: `[WorkPulse] Leave Request ${statusText} (${startStr} - ${endStr})`,
+      subject: `[WorkPluse] Leave Request ${statusText} (${startStr} - ${endStr})`,
       html,
     });
   }
@@ -281,7 +281,7 @@ class EmailService {
 
     return await this.sendEmail({
       to,
-      subject: `[WorkPulse] Salary Payslip Disbursed for ${monthName} ${year}`,
+      subject: `[WorkPluse] Salary Payslip Disbursed for ${monthName} ${year}`,
       html,
     });
   }
@@ -320,7 +320,7 @@ class EmailService {
 
     return await this.sendEmail({
       to,
-      subject: `[WorkPulse] Reminder: Your shift starts at ${shiftTime || "09:00 AM"}`,
+      subject: `[WorkPluse] Reminder: Your shift starts at ${shiftTime || "09:00 AM"}`,
       html,
     });
   }
@@ -404,7 +404,7 @@ class EmailService {
 
     return await this.sendEmail({
       to,
-      subject: `[WorkPulse] Job Offer: ${rawDesignation} at WorkPulse`,
+      subject: `[WorkPluse] Job Offer: ${rawDesignation} at WorkPluse`,
       html,
       attachments: [{
         content: pdf.toString("base64"),
@@ -423,7 +423,7 @@ class EmailService {
     const contentHtml = `
       <p class="text">Hello <strong>${adminName || "Admin"}</strong>,</p>
       <p class="text">
-        Welcome to <strong>WorkPulse</strong>! Your organization <strong>${organizationName}</strong> has been registered successfully.
+        Welcome to <strong>WorkPluse</strong>! Your organization <strong>${organizationName}</strong> has been registered successfully.
         To activate your <strong>${plan || "FREE_TRIAL"}</strong> plan and unlock your full dashboard, please enter the activation code below.
       </p>
       <div class="info-card" style="text-align: center; padding: 28px;">
@@ -447,7 +447,7 @@ class EmailService {
     `;
 
     const html = await this.buildHtmlTemplate({
-      title: "Your WorkPulse Plan Unlock Code",
+      title: "Your WorkPluse Plan Unlock Code",
       badge: "Plan Activation Required",
       badgeColor: "#2563eb",
       contentHtml,
@@ -459,7 +459,7 @@ class EmailService {
 
     return await this.sendEmail({
       to,
-      subject: `[WorkPulse] Your Plan Unlock Code — ${unlockCode}`,
+      subject: `[WorkPluse] Your Plan Unlock Code — ${unlockCode}`,
       html,
     });
   }
@@ -477,7 +477,7 @@ class EmailService {
     const contentHtml = `
       <p class="text">Hello <strong>${firstName}</strong>,</p>
       <p class="text">
-        You have been added to <strong>${organizationName}</strong>'s WorkPulse attendance management system
+        You have been added to <strong>${organizationName}</strong>'s WorkPluse attendance management system
         as a <strong>${role || "Employee"}</strong>.
         Your login credentials are ready — please sign in and change your password on first login.
       </p>
@@ -497,16 +497,16 @@ class EmailService {
         ⚠️ You will be prompted to set a new password when you first log in. Your temporary password will expire after first use.
       </p>
       <p class="text" style="font-size: 13px; color: #64748b;">
-        Use the WorkPulse app or web portal to mark your daily attendance, view payslips, apply for leaves, and more.
+        Use the WorkPluse app or web portal to mark your daily attendance, view payslips, apply for leaves, and more.
       </p>
     `;
 
     const html = await this.buildHtmlTemplate({
-      title: `Welcome to ${organizationName} on WorkPulse!`,
+      title: `Welcome to ${organizationName} on WorkPluse!`,
       badge: "Account Created",
       badgeColor: "#10b981",
       contentHtml,
-      ctaText: "Login to WorkPulse",
+      ctaText: "Login to WorkPluse",
       ctaUrl: loginUrl || `${process.env.FRONTEND_URL || "http://localhost:3000"}/login`,
       companyName: rawOrganizationName,
       companyLogoUrl,
@@ -514,7 +514,7 @@ class EmailService {
 
     return await this.sendEmail({
       to,
-      subject: `[WorkPulse] Your login credentials for ${rawOrganizationName}`,
+      subject: `[WorkPluse] Your login credentials for ${rawOrganizationName}`,
       html,
     });
   }
@@ -525,9 +525,9 @@ class EmailService {
   async sendPasswordResetEmail(to, userName, { resetUrl, expiresIn = "60 minutes", companyName, companyLogoUrl }) {
     userName = escapeHtml(userName);
     const contentHtml = `
-      <p class="text" style="font-size: 15px; line-height: 1.6; color: #475569; margin: 0 0 20px 0;">Hello <strong>${userName || "WorkPulse User"}</strong>,</p>
+      <p class="text" style="font-size: 15px; line-height: 1.6; color: #475569; margin: 0 0 20px 0;">Hello <strong>${userName || "WorkPluse User"}</strong>,</p>
       <p class="text" style="font-size: 15px; line-height: 1.6; color: #475569; margin: 0 0 20px 0;">
-        We received a request to reset the password for your WorkPulse enterprise account. If you made this request, click the button below to choose a new password:
+        We received a request to reset the password for your WorkPluse enterprise account. If you made this request, click the button below to choose a new password:
       </p>
       <div style="text-align: center; margin: 28px 0;">
         <a href="${resetUrl}" class="btn" style="background: #4f46e5; color: #ffffff !important; font-weight: 700; padding: 14px 32px; border-radius: 12px; text-decoration: none; display: inline-block;">Reset Password &rarr;</a>
@@ -547,7 +547,7 @@ class EmailService {
     `;
 
     const html = await this.buildHtmlTemplate({
-      title: "Reset Your WorkPulse Password",
+      title: "Reset Your WorkPluse Password",
       badge: "Password Reset",
       badgeColor: "#4f46e5",
       contentHtml,
@@ -561,7 +561,7 @@ class EmailService {
 
     return await this.sendEmail({
       to,
-      subject: `[WorkPulse] Password Reset Request`,
+      subject: `[WorkPluse] Password Reset Request`,
       html,
     });
   }
@@ -590,7 +590,7 @@ class EmailService {
     const contentHtml = `
       <p class="text">Hello <strong>${userName || "there"}</strong>,</p>
       <p class="text">
-        Thanks for signing up for <strong>WorkPulse</strong>! Enter the verification code below to confirm your email address and activate your account.
+        Thanks for signing up for <strong>WorkPluse</strong>! Enter the verification code below to confirm your email address and activate your account.
       </p>
       <div class="info-card" style="text-align: center; padding: 28px;">
         <p style="margin: 0 0 8px; font-size: 13px; color: #64748b; font-weight: 500; text-transform: uppercase; letter-spacing: 1px;">Your Verification Code</p>
@@ -600,7 +600,7 @@ class EmailService {
         <p style="margin: 12px 0 0; font-size: 12px; color: #94a3b8;">This code expires in ${expiresIn}.</p>
       </div>
       <p class="text" style="font-size: 13px; color: #64748b;">
-        If you did not create a WorkPulse account, you can safely ignore this email.
+        If you did not create a WorkPluse account, you can safely ignore this email.
       </p>
     `;
 
@@ -615,7 +615,7 @@ class EmailService {
 
     return await this.sendEmail({
       to,
-      subject: `[WorkPulse] Your verification code is ${code}`,
+      subject: `[WorkPluse] Your verification code is ${code}`,
       html,
     });
   }

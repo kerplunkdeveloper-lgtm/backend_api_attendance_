@@ -18,5 +18,5 @@ test("uses one company-wide sequence for HR and employees", async () => {
 
 test("uses the admin sequence for company admins", async () => {
   assert.equal(prefixForRole("COMPANY_ADMIN"), "ADM");
-  assert.equal(await getNextEmployeeCode("org-1", db([]), "COMPANY_ADMIN", "WorkPulse"), "WP001");
+  assert.equal(await getNextEmployeeCode("org-1", db([]), "COMPANY_ADMIN", "WorkPluse"), "WP001");
 });

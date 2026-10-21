@@ -66,7 +66,7 @@ async function request(path, options = {}) {
 
 async function runAudit() {
   console.log("====================================================");
-  console.log("      WORKPULSE 360° API SUITE AUDIT & HEALTH CHECK");
+  console.log("      WORKPLUSE 360° API SUITE AUDIT & HEALTH CHECK");
   console.log("====================================================\n");
 
   const missingCredentials = Object.entries(credentials)
