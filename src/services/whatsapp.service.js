@@ -104,7 +104,7 @@ class WhatsAppService {
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
 
     const text = [
-      `*WorkPluse Leave Update* ${emoji}`,
+      `*WorkPulse Leave Update* ${emoji}`,
       `Hello ${employeeName},`,
       ``,
       `Your leave request for *${totalDays} day(s)* (${leaveType || "Leave"}) has been *${status}*.`,
@@ -126,7 +126,7 @@ class WhatsAppService {
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
 
     const text = [
-      `*WorkPluse Salary Alert* 💰`,
+      `*WorkPulse Salary Alert* 💰`,
       `Hello ${employeeName},`,
       ``,
       `Your salary for *${monthName} ${year}* has been disbursed!`,
@@ -146,7 +146,7 @@ class WhatsAppService {
     const link = punchUrl || frontendUrl;
 
     const text = [
-      `*WorkPluse Attendance Reminder* ⏰`,
+      `*WorkPulse Attendance Reminder* ⏰`,
       `Good morning ${employeeName} 👋,`,
       ``,
       `Your shift *${shiftName || "General Shift"}* starts at *${shiftTime || "09:00 AM"}*.`,
@@ -166,7 +166,7 @@ class WhatsAppService {
     const link = offerUrl || frontendUrl;
 
     const text = [
-      `*Congratulations from WorkPluse!* 🎉`,
+      `*Congratulations from WorkPulse!* 🎉`,
       `Dear ${candidateName},`,
       ``,
       `We are thrilled to offer you the position of *${designation}*!`,

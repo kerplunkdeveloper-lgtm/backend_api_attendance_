@@ -3,7 +3,7 @@ const prisma = require("../src/config/database");
 
 async function wipeCleanStartFresh() {
   console.log("===============================================================");
-  console.log("  WorkPluse™ — Complete Database Wipe for Fresh Registration   ");
+  console.log("  WorkPulse™ — Complete Database Wipe for Fresh Registration   ");
   console.log("===============================================================\n");
 
   const tables = [

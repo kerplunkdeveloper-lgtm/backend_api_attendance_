@@ -1,5 +1,5 @@
 /**
- * Creates the WorkPluse platform owner (SUPER_ADMIN) in its own workspace.
+ * Creates the WorkPulse platform owner (SUPER_ADMIN) in its own workspace.
  *
  *   node scripts/create-platform-owner.js owner@yourcompany.com
  *
@@ -34,7 +34,7 @@ const prisma = require("../src/config/database");
 
   const org = await prisma.organization.create({
     data: {
-      name: "WorkPluse Platform",
+      name: "WorkPulse Platform",
       email,
       subscriptionPlan: "ENTERPRISE",
       subscriptionStatus: "ACTIVE",

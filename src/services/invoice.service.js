@@ -6,14 +6,14 @@ const date = (value) => new Date(value || Date.now()).toLocaleDateString("en-IN"
 
 function renderInvoicePdf(invoice) {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: "A4", margin: 54, info: { Title: invoice.invoiceNumber, Author: "WorkPluse" } });
+    const doc = new PDFDocument({ size: "A4", margin: 54, info: { Title: invoice.invoiceNumber, Author: "WorkPulse" } });
     const chunks = [];
     doc.on("data", (chunk) => chunks.push(chunk));
     doc.on("end", () => resolve(Buffer.concat(chunks)));
     doc.on("error", reject);
 
     const org = invoice.organization || {};
-    doc.fontSize(24).fillColor("#1e3a8a").text("WorkPluse", { continued: true });
+    doc.fontSize(24).fillColor("#1e3a8a").text("WorkPulse", { continued: true });
     doc.fontSize(10).fillColor("#64748b").text("  Workforce Systems");
     doc.moveDown(1.5);
     doc.fontSize(22).fillColor("#0f172a").text("INVOICE");
@@ -21,7 +21,7 @@ function renderInvoicePdf(invoice) {
     doc.moveDown(1);
 
     doc.fontSize(10).fillColor("#64748b").text("BILLED TO");
-    doc.fontSize(12).fillColor("#0f172a").text(org.name || "WorkPluse customer");
+    doc.fontSize(12).fillColor("#0f172a").text(org.name || "WorkPulse customer");
     doc.fontSize(10).fillColor("#475569").text([org.email, org.phone, org.address, org.taxId ? `Tax ID: ${org.taxId}` : null].filter(Boolean).join("\n"));
     doc.moveDown(1);
     doc.fontSize(10).fillColor("#475569").text(`Issued: ${date(invoice.issuedAt)}`);
@@ -52,7 +52,7 @@ function renderInvoicePdf(invoice) {
     doc.text(money(invoice.amountInr), right - 110, doc.y, { width: 100, align: "right" });
     doc.font("Helvetica");
     doc.moveDown(3);
-    doc.fontSize(9).fillColor("#64748b").text("Thank you for choosing WorkPluse. This invoice confirms a paid subscription order.");
+    doc.fontSize(9).fillColor("#64748b").text("Thank you for choosing WorkPulse. This invoice confirms a paid subscription order.");
     doc.end();
   });
 }

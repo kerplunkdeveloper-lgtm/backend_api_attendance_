@@ -526,7 +526,7 @@ const beginTwoFactorSetup = async (userId) => {
     where: { id: userId },
     data: { twoFactorSecret: encryptSecret(secret), twoFactorEnabledAt: null, twoFactorLastStep: null, twoFactorBackupCodes: [] },
   });
-  return { secret, otpauthUrl: otpauthUrl({ issuer: "WorkPluse", account: user.email, secret }) };
+  return { secret, otpauthUrl: otpauthUrl({ issuer: "WorkPulse", account: user.email, secret }) };
 };
 
 const confirmTwoFactorSetup = async (userId, code) => {
@@ -935,7 +935,7 @@ const forgotPassword = async (email) => {
 
   // Always return identical success message to prevent user enumeration attacks
   const genericMessage =
-    "If that corporate email address is registered in WorkPluse, you will receive password reset instructions shortly.";
+    "If that corporate email address is registered in WorkPulse, you will receive password reset instructions shortly.";
 
   if (!users.length) {
     return {
@@ -1124,7 +1124,7 @@ const loginWithGoogle = async (idToken, client = null) => {
     },
   });
   if (users.length === 0) {
-    const error = new Error("No WorkPluse account uses this Google email. Register or ask HR to invite you first.");
+    const error = new Error("No WorkPulse account uses this Google email. Register or ask HR to invite you first.");
     error.statusCode = 404;
     throw error;
   }

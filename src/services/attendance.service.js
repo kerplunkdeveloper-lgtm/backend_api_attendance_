@@ -346,7 +346,8 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
   // inside a branch radius. Previously a punch without coordinates slipped
   // through as a bypass, so denying location permission defeated the rule.
   const isSpecialWorkMode = SPECIAL_WORK_MODES.includes(workMode);
-  if (policy.geofenceStrict && !skipGeofence && !isSpecialWorkMode) {
+  const officeModeRequiresGeofence = workMode === "OFFICE" && branchesWithCoords.length > 0;
+  if ((policy.geofenceStrict || officeModeRequiresGeofence) && !skipGeofence && !isSpecialWorkMode) {
     const rejection = officeOnlyRejection({ latitude, longitude, accuracy, branches: branchesWithCoords, allowWfh: policy.allowWfh });
     if (rejection) {
       const error = new Error(rejection.message);
@@ -1069,6 +1070,42 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
         overtimeMinutes,
       },
     });
+
+    // Keep direct Admin/HR corrections in the same correction stream used by
+    // the attendance table. The audit log is not queryable as a table reason.
+    if (reason?.trim()) {
+      const existingCorrection = await tx.attendanceCorrection.findFirst({
+        where: { attendanceId: record.id, organizationId },
+        orderBy: { createdAt: "desc" },
+      });
+
+      if (existingCorrection) {
+        await tx.attendanceCorrection.update({
+          where: { id: existingCorrection.id },
+          data: {
+            reason: reason.trim(),
+            status: "APPROVED",
+            reviewedBy: adminUserId,
+            reviewNote: "Directly corrected by Admin/HR",
+          },
+        });
+      } else {
+        await tx.attendanceCorrection.create({
+          data: {
+            organizationId,
+            employeeId,
+            attendanceId: record.id,
+            date: targetDate,
+            requestedCheckIn: checkIn ? new Date(checkIn) : null,
+            requestedCheckOut: checkOut ? new Date(checkOut) : null,
+            reason: reason.trim(),
+            status: "APPROVED",
+            reviewedBy: adminUserId,
+            reviewNote: "Directly corrected by Admin/HR",
+          },
+        });
+      }
+    }
 
     await tx.auditLog.create({
       data: {

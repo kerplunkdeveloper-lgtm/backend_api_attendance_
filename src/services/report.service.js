@@ -137,7 +137,7 @@ class ReportService {
 
     return {
       success: true,
-      organizationName: org?.name || "WorkPluse Workforce",
+      organizationName: org?.name || "WorkPulse Workforce",
       date: dateOnly.toISOString().split("T")[0],
       summary: {
         totalEmployees,
@@ -245,7 +245,7 @@ class ReportService {
 
     return {
       success: true,
-      organizationName: org?.name || "WorkPluse Workforce",
+      organizationName: org?.name || "WorkPulse Workforce",
       month: m,
       year: y,
       totalEmployees: employees.length,
