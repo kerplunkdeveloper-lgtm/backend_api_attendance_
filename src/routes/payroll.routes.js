@@ -1,6 +1,7 @@
 const express = require("express");
 const multer = require("multer");
 const payrollController = require("../controllers/payroll.controller");
+const statutoryRoutes = require("./statutory.routes");
 const payslipTemplateController = require("../controllers/payslip-template.controller");
 const statutoryRoutes = require("./statutory.routes");
 const {
@@ -156,5 +157,8 @@ router.post(
   upload.single("file"),
   payslipTemplateController.uploadHtmlTemplate,
 );
+
+// Keep payroll and statutory endpoints under the same public payroll prefixes.
+router.use(statutoryRoutes);
 
 module.exports = router;
