@@ -1,4 +1,4 @@
-const prisma = require("../config/database");
+  const prisma = require("../config/database");
 const { verifyGeofence, officeOnlyRejection } = require("../utils/geofence");
 
 // Work modes that are, by definition, away from the office. They are exempt
