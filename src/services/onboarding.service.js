@@ -751,7 +751,7 @@ class OnboardingService {
     if (candEmail && result.temporaryPassword) {
       emailService
         .sendEmployeeWelcomeEmail(candEmail, candName, {
-          organizationName: candidate.organization?.name || "WorkPluse",
+          organizationName: candidate.organization?.name || "WorkPulse",
           companyLogoUrl: candidate.organization?.logoUrl,
           tempPassword: result.temporaryPassword,
           loginUrl: `${process.env.FRONTEND_URL || "http://localhost:3000"}/login`,
@@ -1114,7 +1114,7 @@ class OnboardingService {
 
       emailService
         .sendEmployeeWelcomeEmail(candidate.email, `${candidate.firstName} ${candidate.lastName || ""}`.trim(), {
-          organizationName: candidate.organization?.name || "WorkPluse",
+          organizationName: candidate.organization?.name || "WorkPulse",
           companyLogoUrl: candidate.organization?.logoUrl,
           tempPassword,
           loginUrl: `${process.env.FRONTEND_URL || "http://localhost:3000"}/login`,

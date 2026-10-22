@@ -15,7 +15,7 @@ const prefixForRole = (role) => {
 };
 
 const organizationPrefix = (organizationName) => {
-  const words = String(organizationName || "WorkPluse")
+  const words = String(organizationName || "WorkPulse")
     .trim()
     .split(/[^A-Za-z0-9]+/)
     .filter(Boolean);
@@ -34,7 +34,7 @@ const organizationPrefix = (organizationName) => {
  * Legacy timestamp codes (six or more digits) are ignored so they do not
  * permanently pollute the sequence with values such as EMP-519622.
  */
-const getNextEmployeeCode = async (organizationId, db, role = "EMPLOYEE", organizationName = "WorkPluse") => {
+const getNextEmployeeCode = async (organizationId, db, role = "EMPLOYEE", organizationName = "WorkPulse") => {
   const companyPrefix = organizationPrefix(organizationName);
   const employees = await db.employee.findMany({
     where: { organizationId },

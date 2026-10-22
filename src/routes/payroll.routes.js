@@ -2,6 +2,7 @@ const express = require("express");
 const multer = require("multer");
 const payrollController = require("../controllers/payroll.controller");
 const payslipTemplateController = require("../controllers/payslip-template.controller");
+const statutoryRoutes = require("./statutory.routes");
 const {
   authenticate,
   authorizeRoles,
@@ -17,6 +18,10 @@ const router = express.Router();
 
 router.use(authenticate);
 router.use(requireFeature("hasPayroll", "Payroll"));
+
+// Statutory payroll endpoints share this router's public mount points. Keeping
+// them here avoids registering two independent routers at the same app path.
+router.use(statutoryRoutes);
 
 // Personal Payslips for logged-in employee
 router.get("/payslips/my", payrollController.getMyPayslips);

@@ -30,7 +30,7 @@ const fetchLogo = async (logoUrl) => {
 const generateOfferLetterPdf = async ({ offer, companyName, companyLogoUrl }) => {
   const document = new PDFDocument({ size: "A4", margin: 54, info: {
     Title: `Offer Letter - ${offer.candidateName}`,
-    Author: companyName || "WorkPluse",
+    Author: companyName || "WorkPulse",
     Subject: "Employment Offer Letter",
   }});
   const chunks = [];
@@ -46,7 +46,7 @@ const generateOfferLetterPdf = async ({ offer, companyName, companyLogoUrl }) =>
     try { document.image(logo, 54, 42, { fit: [150, 54], align: "left", valign: "center" }); } catch { /* text brand remains */ }
   }
 
-  document.font("Helvetica-Bold").fontSize(20).fillColor("#163b8f").text(companyName || "WorkPluse", 54, 108);
+  document.font("Helvetica-Bold").fontSize(20).fillColor("#163b8f").text(companyName || "WorkPulse", 54, 108);
   document.font("Helvetica").fontSize(9).fillColor("#64748b").text("Workforce Systems", 54, 132);
   document.moveTo(54, 152).lineTo(541, 152).strokeColor("#dbe4f0").stroke();
 
@@ -55,7 +55,7 @@ const generateOfferLetterPdf = async ({ offer, companyName, companyLogoUrl }) =>
 
   document.font("Helvetica").fontSize(11).fillColor("#1f2937").text(`Dear ${offer.candidateName || "Candidate"},`, 54, 264);
   document.moveDown(1);
-  document.text(`We are pleased to offer you employment with ${companyName || "WorkPluse"}. We believe your skills and experience will be a valuable addition to our team.`);
+  document.text(`We are pleased to offer you employment with ${companyName || "WorkPulse"}. We believe your skills and experience will be a valuable addition to our team.`);
 
   const rows = [
     ["Candidate", offer.candidateName],
@@ -93,7 +93,7 @@ const generateOfferLetterPdf = async ({ offer, companyName, companyLogoUrl }) =>
   y += 68;
   document.moveTo(54, y).lineTo(210, y).strokeColor("#94a3b8").stroke();
   document.fontSize(9).fillColor("#64748b").text("Authorized signatory", 54, y + 8);
-  document.font("Helvetica-Bold").fontSize(9).fillColor("#163b8f").text(companyName || "WorkPluse", 380, y + 8, { width: 160, align: "right" });
+  document.font("Helvetica-Bold").fontSize(9).fillColor("#163b8f").text(companyName || "WorkPulse", 380, y + 8, { width: 160, align: "right" });
 
   document.font("Helvetica").fontSize(8).fillColor("#94a3b8").text("This is a digitally generated offer letter. Please retain a copy for your records.", 54, 770, { align: "center", width: 487 });
   document.end();
