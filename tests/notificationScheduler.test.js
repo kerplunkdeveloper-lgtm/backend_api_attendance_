@@ -1,6 +1,7 @@
-const { describe, it, beforeEach } = require("node:test");
+const { describe, it, beforeEach, afterEach, mock } = require("node:test");
 const assert = require("node:assert/strict");
 const { mockPrisma, installModule } = require("./helpers/mockPrisma");
+const { getLocalDateOnly } = require("../src/utils/datetime");
 
 // Stub only the outbound side effects — NOT notification.service itself,
 // which is the module under test (stubSideEffects() would replace it with a
@@ -9,17 +10,11 @@ const noop = new Proxy({}, { get: () => async () => ({}) });
 installModule(require.resolve("../src/services/email.service"), noop);
 installModule(require.resolve("../src/services/whatsapp.service"), noop);
 
-// Mirrors notification.service's own getStartOfToday() + UTC-hour reset
-// exactly, so fixtures line up with whatever `today` the service computes —
-// this depends on the host's local timezone, which the test must not assume.
-const TODAY = (() => {
-  const now = new Date();
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-  const today = new Date(startOfToday);
-  today.setUTCHours(0, 0, 0, 0);
-  return today;
-})();
-const REST_DAY = [0, 1, 2, 3, 4, 5, 6].filter((d) => d !== TODAY.getDay());
+// The service works in each organization's own calendar day, and the employee
+// fixture below belongs to an IST organization, so "today" is the IST date no
+// matter what timezone this machine runs in.
+const TODAY = getLocalDateOnly(new Date(), "Asia/Kolkata");
+const REST_DAY = [0, 1, 2, 3, 4, 5, 6].filter((d) => d !== TODAY.getUTCDay());
 
 const calls = {};
 const track = (name) => {
@@ -29,6 +24,7 @@ const track = (name) => {
 let db;
 const resetDb = () => {
   db = {
+    organizations: [],
     employees: [],
     attendance: [],
     holidays: [],
@@ -42,10 +38,20 @@ const resetDb = () => {
 const inSet = (value, inArr) => !inArr || inArr.includes(value);
 
 const prisma = {
+  organization: {
+    findMany: async () => {
+      track("organization.findMany");
+      return db.organizations;
+    },
+  },
   employee: {
     findMany: async ({ where }) => {
       track("employee.findMany");
-      return db.employees.filter((e) => (where.organizationId ? e.organizationId === where.organizationId : true));
+      const orgFilter = where.organizationId;
+      return db.employees.filter((e) => {
+        if (!orgFilter) return true;
+        return orgFilter.in ? orgFilter.in.includes(e.organizationId) : e.organizationId === orgFilter;
+      });
     },
   },
   attendance: {
@@ -181,6 +187,97 @@ describe("markAbsentEmployees (batched)", () => {
     const result = await notificationService.markAbsentEmployees();
     assert.equal(result.markedCount, 0);
     assert.equal(calls["attendance.findMany"], undefined);
+  });
+});
+
+describe("markAbsentEmployees timezone handling", () => {
+  const IST = { timezone: "Asia/Kolkata" };
+  const NEW_YORK = { timezone: "America/New_York" };
+  const dateOf = (employeeId) => db.attendance.find((a) => a.employeeId === employeeId)?.date.toISOString().slice(0, 10);
+  const statusOf = (employeeId) => db.attendance.find((a) => a.employeeId === employeeId)?.status;
+
+  beforeEach(resetDb);
+  afterEach(() => mock.timers.reset());
+
+  it("writes each organization's own calendar day, not one shared server day", async () => {
+    // 01:30 on 23 Oct in India, but still the afternoon of 22 Oct in New York.
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-22T20:00:00.000Z") });
+    db.employees = [
+      employee({ id: "in-india", organizationId: "org-in", organization: IST }),
+      employee({ id: "in-new-york", organizationId: "org-ny", organization: NEW_YORK }),
+    ];
+
+    const result = await notificationService.markAbsentEmployees();
+
+    assert.equal(dateOf("in-india"), "2026-10-23");
+    assert.equal(dateOf("in-new-york"), "2026-10-22");
+    assert.deepEqual([...result.dates].sort(), ["2026-10-22", "2026-10-23"]);
+    assert.equal(result.markedCount, 2);
+  });
+
+  it("decides a weekly off by the organization's local weekday", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-22T20:00:00.000Z") }); // Fri in India, Thu in New York
+    db.shifts = [{ id: "mon-thu-sat", workingDays: "1,2,3,4,6" }];
+    db.employees = [
+      employee({ id: "in-india", organizationId: "org-in", organization: IST, shiftId: "mon-thu-sat" }),
+      employee({ id: "in-new-york", organizationId: "org-ny", organization: NEW_YORK, shiftId: "mon-thu-sat" }),
+    ];
+
+    await notificationService.markAbsentEmployees();
+
+    assert.equal(statusOf("in-india"), "WEEK_OFF"); // Friday is not a working day
+    assert.equal(statusOf("in-new-york"), "ABSENT"); // Thursday is
+  });
+
+  for (const hostZone of ["UTC", "Asia/Kolkata", "America/Los_Angeles", "Pacific/Auckland"]) {
+    it(`marks the same day when the server runs in ${hostZone}`, async () => {
+      const previousZone = process.env.TZ;
+      process.env.TZ = hostZone;
+      try {
+        mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-23T17:45:00.000Z") }); // 23:15 in India
+        db.employees = [employee({ id: "in-india", organizationId: "org-in", organization: IST })];
+
+        await notificationService.markAbsentEmployees();
+
+        assert.equal(dateOf("in-india"), "2026-10-23");
+      } finally {
+        if (previousZone === undefined) delete process.env.TZ;
+        else process.env.TZ = previousZone;
+      }
+    });
+  }
+
+  it("on the scheduled run, only marks organizations whose own day has reached 23:00", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-23T17:45:00.000Z") }); // 23:15 India, 13:45 New York
+    db.organizations = [
+      { id: "org-in", ...IST },
+      { id: "org-ny", ...NEW_YORK },
+    ];
+    db.employees = [
+      employee({ id: "in-india", organizationId: "org-in", organization: IST }),
+      employee({ id: "in-new-york", organizationId: "org-ny", organization: NEW_YORK }),
+    ];
+
+    const result = await notificationService.markAbsentEmployees(null, { endOfDayOnly: true });
+
+    assert.equal(statusOf("in-india"), "ABSENT");
+    assert.equal(statusOf("in-new-york"), undefined);
+    assert.equal(result.markedCount, 1);
+  });
+
+  it("on the scheduled run, reads no employees while no organization is near its end of day", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-23T10:00:00.000Z") }); // 15:30 India, 06:00 New York
+    db.organizations = [
+      { id: "org-in", ...IST },
+      { id: "org-ny", ...NEW_YORK },
+    ];
+    db.employees = [employee({ id: "in-india", organizationId: "org-in", organization: IST })];
+
+    const result = await notificationService.markAbsentEmployees(null, { endOfDayOnly: true });
+
+    assert.equal(result.markedCount, 0);
+    assert.equal(calls["employee.findMany"], undefined);
+    assert.equal(db.attendance.length, 0);
   });
 });
 

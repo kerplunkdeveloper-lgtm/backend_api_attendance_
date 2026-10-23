@@ -140,7 +140,7 @@ async function attemptDelivery(delivery, endpoint) {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "user-agent": "WorkPulse-Webhooks/1.0",
+      "user-agent": "WorkPluse-Webhooks/1.0",
       "x-workpulse-event": delivery.event,
       "x-workpulse-signature": `t=${timestamp},v1=${signature(secret, timestamp, body)}`,
     },
@@ -245,7 +245,7 @@ async function sendTest(organizationId, endpointId) {
   const endpoint = await prisma.webhookEndpoint.findFirst({ where: { id: endpointId, organizationId, isActive: true } });
   if (!endpoint) throw fail("Active webhook endpoint not found.", 404);
   // Create a test delivery record
-  return dispatch(organizationId, "webhook.test", { message: "WorkPulse webhook connection test" });
+  return dispatch(organizationId, "webhook.test", { message: "WorkPluse webhook connection test" });
 }
 
 async function listDeliveries(organizationId, endpointId, opts = {}) {

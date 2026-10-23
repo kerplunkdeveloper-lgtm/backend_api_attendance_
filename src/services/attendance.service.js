@@ -14,9 +14,11 @@ const {
   DEFAULT_TIMEZONE,
   getLocalDateOnly,
   getLocalDayOfWeek,
+  getZonedParts,
   isOvernightShift,
 } = require("../utils/datetime");
 const { assertPunchTimestamp } = require("../utils/punchTime");
+const { parsePagination } = require("../utils/pagination");
 const { resolvePunchLocation } = require("../utils/reverseGeocode");
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1283,8 +1285,7 @@ const getMyAttendance = async (userId, organizationId, { limit = 30, page = 1 })
   const employee = await prisma.employee.findFirst({ where: { userId, organizationId } });
   if (!employee) return { records: [], total: 0 };
 
-  const take = parseInt(limit) || 30;
-  const skip = ((parseInt(page) || 1) - 1) * take;
+  const { limit: take, skip, page: curPage } = parsePagination({ page, limit }, { defaultLimit: 30 });
 
   const [records, total] = await Promise.all([
     prisma.attendance.findMany({
@@ -1301,7 +1302,7 @@ const getMyAttendance = async (userId, organizationId, { limit = 30, page = 1 })
     prisma.attendance.count({ where: { employeeId: employee.id, organizationId } }),
   ]);
 
-  return { records, total, page: parseInt(page), totalPages: Math.ceil(total / take) };
+  return { records, total, page: curPage, totalPages: Math.ceil(total / take) };
 };
 
 const getAllAttendance = async (organizationId, query = {}) => {
@@ -1313,8 +1314,7 @@ const getAllAttendance = async (organizationId, query = {}) => {
   if (branchId && branchId !== "ALL" && branchId !== "") where.branchId = branchId;
   if (status && status !== "ALL") where.status = status;
 
-  const take = parseInt(limit) || 50;
-  const skip = ((parseInt(page) || 1) - 1) * take;
+  const { limit: take, skip, page: curPage } = parsePagination({ page, limit }, { defaultLimit: 50 });
 
   const [records, total] = await Promise.all([
     prisma.attendance.findMany({
@@ -1343,11 +1343,27 @@ const getAllAttendance = async (organizationId, query = {}) => {
     prisma.attendance.count({ where }),
   ]);
 
-  return { records, total, page: parseInt(page), totalPages: Math.ceil(total / take) };
+  return { records, total, page: curPage, totalPages: Math.ceil(total / take) };
 };
 
-const getAttendanceSummary = async (organizationId, targetDate = new Date(), branchId = null) => {
-  const date = getTodayDateOnly(targetDate);
+const getAttendanceSummary = async (organizationId, targetDate, branchId = null) => {
+  const timezone = await getOrgTimezone(organizationId);
+
+  // Punches are stored under the tenant's local calendar date, so "today" must be
+  // that date too. Truncating the server's UTC clock would keep showing
+  // yesterday's numbers until the tenant's local day catches up with UTC.
+  let date;
+  if (targetDate) {
+    const requested = new Date(targetDate);
+    if (Number.isNaN(requested.getTime())) {
+      const error = new Error("Invalid date");
+      error.statusCode = 400;
+      throw error;
+    }
+    date = getTodayDateOnly(requested);
+  } else {
+    date = getLocalDateOnly(new Date(), timezone);
+  }
 
   const empWhere = { organizationId, status: "ACTIVE" };
   const attWhere = { organizationId, date };
@@ -1369,8 +1385,16 @@ const getAttendanceSummary = async (organizationId, targetDate = new Date(), bra
   ]);
 
   let present = 0, late = 0, halfDay = 0, onLeave = 0, holidayCount = 0, wfh = 0, weekOff = 0, currentlyClockedIn = 0;
+  // Clock-ins by local hour of day (index 0-23), for the "when does the team
+  // start" chart. Counted here so the dashboard never has to download rows.
+  const hourlyCheckIns = new Array(24).fill(0);
+  let totalPunches = 0;
 
   todayAttendances.forEach((att) => {
+    if (att.checkIn) {
+      totalPunches++;
+      hourlyCheckIns[getZonedParts(att.checkIn, timezone).hour]++;
+    }
     if (att.status === "PRESENT") present++;
     if (att.status === "LATE") late++;
     if (att.status === "HALF_DAY") halfDay++;
@@ -1402,6 +1426,9 @@ const getAttendanceSummary = async (organizationId, targetDate = new Date(), bra
     isHoliday: isTodayHoliday,
     holidayName: todayHoliday ? todayHoliday.name : null,
     currentlyClockedIn,
+    totalPunches,
+    hourlyCheckIns,
+    timezone,
     attendanceRate: totalEmployees > 0 ? Math.round(((present + late + wfh) / totalEmployees) * 100) : 0,
   };
 };
@@ -1412,7 +1439,7 @@ const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, 
   // Only admins and managers see the team; every other role sees only itself.
   if (!ADMIN_ROLES.includes(role)) {
     const employee = await prisma.employee.findFirst({ where: { userId, organizationId } });
-    if (!employee) return { success: true, total: 0, page: 1, limit: parseInt(limit) || 20, totalPages: 0, records: [] };
+    if (!employee) return { success: true, total: 0, page: 1, limit: parsePagination({ page, limit }, { defaultLimit: 20 }).limit, totalPages: 0, records: [] };
     where.employeeId = employee.id;
   } else if (employeeId) {
     where.employeeId = employeeId;
@@ -1426,9 +1453,7 @@ const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, 
 
   if (status && status !== "ALL") where.status = status;
 
-  const take = Math.max(1, parseInt(limit) || 20);
-  const curPage = Math.max(1, parseInt(page) || 1);
-  const skip = (curPage - 1) * take;
+  const { limit: take, skip, page: curPage } = parsePagination({ page, limit }, { defaultLimit: 20 });
 
   const [records, total] = await Promise.all([
     prisma.attendance.findMany({

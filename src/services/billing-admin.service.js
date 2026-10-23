@@ -107,27 +107,39 @@ function offerData(payload, userId, partial = false) {
   if (!partial || payload.createdByUserId !== undefined) data.createdByUserId = userId || null;
   data.updatedByUserId = userId || null;
 
-  if (!data.code || !/^[A-Z0-9][A-Z0-9_-]{2,39}$/.test(data.code)) throw Object.assign(new Error("Offer code must be 3-40 letters, numbers, underscores or hyphens"), { statusCode: 400 });
-  if (!data.label || data.label.length > 160) throw Object.assign(new Error("Offer label is required and must be at most 160 characters"), { statusCode: 400 });
-  if (!["PERCENTAGE", "FIXED"].includes(data.type)) throw Object.assign(new Error("Offer type must be PERCENTAGE or FIXED"), { statusCode: 400 });
-  if (!Number.isFinite(data.value) || data.value < 0 || (data.type === "PERCENTAGE" && data.value > 100)) throw Object.assign(new Error("Offer value is invalid"), { statusCode: 400 });
+  // Only fields that were sent are checked: a partial update such as
+  // { isActive: false } must not fail on fields it never mentions.
+  const sent = (key) => data[key] !== undefined;
+  if (sent("code") && !/^[A-Z0-9][A-Z0-9_-]{2,39}$/.test(data.code)) throw Object.assign(new Error("Offer code must be 3-40 letters, numbers, underscores or hyphens"), { statusCode: 400 });
+  if (sent("label") && (!data.label || data.label.length > 160)) throw Object.assign(new Error("Offer label is required and must be at most 160 characters"), { statusCode: 400 });
+  if (sent("type") && !["PERCENTAGE", "FIXED"].includes(data.type)) throw Object.assign(new Error("Offer type must be PERCENTAGE or FIXED"), { statusCode: 400 });
+  if (sent("value") && (!Number.isFinite(data.value) || data.value < 0)) throw Object.assign(new Error("Offer value is invalid"), { statusCode: 400 });
   if (data.maxDiscountInr != null && (!Number.isFinite(data.maxDiscountInr) || data.maxDiscountInr < 0)) throw Object.assign(new Error("Maximum discount is invalid"), { statusCode: 400 });
-  if (data.eligiblePlans.some((plan) => !PLAN_KEYS.includes(plan))) throw Object.assign(new Error("Offer contains an invalid plan"), { statusCode: 400 });
-  if (data.eligibleCycles.some((cycle) => !BILLING_CYCLES.includes(cycle))) throw Object.assign(new Error("Offer contains an invalid billing cycle"), { statusCode: 400 });
+  if (data.eligiblePlans?.some((plan) => !PLAN_KEYS.includes(plan))) throw Object.assign(new Error("Offer contains an invalid plan"), { statusCode: 400 });
+  if (data.eligibleCycles?.some((cycle) => !BILLING_CYCLES.includes(cycle))) throw Object.assign(new Error("Offer contains an invalid billing cycle"), { statusCode: 400 });
   if (data.startsAt && Number.isNaN(data.startsAt.getTime())) throw Object.assign(new Error("Offer start date is invalid"), { statusCode: 400 });
   if (data.expiresAt && Number.isNaN(data.expiresAt.getTime())) throw Object.assign(new Error("Offer expiry date is invalid"), { statusCode: 400 });
-  if (data.startsAt && data.expiresAt && data.expiresAt < data.startsAt) throw Object.assign(new Error("Offer expiry must be after its start"), { statusCode: 400 });
   return data;
+}
+
+/** Rules that span fields, checked against the offer as it will look after the change. */
+function assertOfferConsistent(offer) {
+  if (offer.type === "PERCENTAGE" && Number(offer.value) > 100) throw Object.assign(new Error("Offer value is invalid"), { statusCode: 400 });
+  if (offer.startsAt && offer.expiresAt && new Date(offer.expiresAt) < new Date(offer.startsAt)) throw Object.assign(new Error("Offer expiry must be after its start"), { statusCode: 400 });
 }
 
 async function createOffer(payload, userId) {
   const data = offerData(payload, userId);
+  assertOfferConsistent(data);
   const row = await prisma.billingOffer.create({ data });
   return serializeOffer(row);
 }
 
 async function updateOffer(id, payload, userId) {
   const data = offerData(payload, userId, true);
+  const existing = await prisma.billingOffer.findUnique({ where: { id } });
+  if (!existing) throw Object.assign(new Error("Offer not found"), { statusCode: 404 });
+  assertOfferConsistent({ ...existing, ...data });
   const row = await prisma.billingOffer.update({ where: { id }, data });
   return serializeOffer(row);
 }

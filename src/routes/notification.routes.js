@@ -68,25 +68,25 @@ router.post("/test-email", adminOnly, async (req, res) => {
     }
 
     const testHtml = await emailService.buildHtmlTemplate({
-      title: "WorkPulse Test Notification",
+      title: "WorkPluse Test Notification",
       badge: "Diagnostic Test",
       badgeColor: "#10b981",
       contentHtml: `
         <p class="text">Hello <strong>${req.user.name || "Colleague"}</strong>,</p>
-        <p class="text">This is a verified test email sent from the <strong>WorkPulse Automation & Communication Gateway</strong>.</p>
+        <p class="text">This is a verified test email sent from the <strong>WorkPluse Automation & Communication Gateway</strong>.</p>
         <div class="info-card">
-          <div class="info-row"><span class="info-label">Sender:</span><span class="info-value">WorkPulse Automated Dispatch</span></div>
+          <div class="info-row"><span class="info-label">Sender:</span><span class="info-value">WorkPluse Automated Dispatch</span></div>
           <div class="info-row"><span class="info-label">Recipient:</span><span class="info-value">${recipient}</span></div>
           <div class="info-row"><span class="info-label">Status:</span><span class="info-value" style="color:#10b981;font-weight:bold;">Operational</span></div>
         </div>
       `,
-      ctaText: "Open WorkPulse Portal",
+      ctaText: "Open WorkPluse Portal",
       ctaUrl: process.env.FRONTEND_URL || "http://localhost:3000",
     });
 
     const result = await emailService.sendEmail({
       to: recipient,
-      subject: "[WorkPulse Diagnostic] System Communication Test",
+      subject: "[WorkPluse Diagnostic] System Communication Test",
       html: testHtml,
     });
 
@@ -115,7 +115,7 @@ router.post("/test-whatsapp", adminOnly, async (req, res) => {
 
     const result = await whatsappService.sendMessage({
       to: recipient,
-      message: `*WorkPulse Notification System Test* 🚀\nHello ${req.user.name || "User"},\nYour WorkPulse WhatsApp alerts are active and running!\nTime: ${new Date().toLocaleTimeString("en-IN")}`,
+      message: `*WorkPluse Notification System Test* 🚀\nHello ${req.user.name || "User"},\nYour WorkPluse WhatsApp alerts are active and running!\nTime: ${new Date().toLocaleTimeString("en-IN")}`,
     });
 
     return res.json({

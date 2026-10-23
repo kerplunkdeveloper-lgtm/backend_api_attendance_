@@ -51,6 +51,7 @@ const webhookRoutes = require("./routes/webhook.routes");
 const billingWebhookRoutes = require("./routes/billing.webhook.routes");
 const { apiRateLimiter } = require("./middleware/rateLimiter.middleware");
 const { auditLogger } = require("./middleware/audit.middleware");
+const { errorHandler } = require("./middleware/errorHandler.middleware");
 const {
   rejectUnsafePayload,
   requestContext,
@@ -219,7 +220,7 @@ app.use("/webhooks", webhookRoutes);
 app.get(["/", "/api"], (req, res) => {
   res.json({
     success: true,
-    message: "WorkPulse Workforce Backend API is running",
+    message: "WorkPluse Workforce Backend API is running",
     endpoints: {
       health: "/api/health",
       auth: "/api/auth",
@@ -283,26 +284,6 @@ app.use((req, res) => {
     message: `Cannot ${req.method} ${req.originalUrl}`,
   });
 });
-app.use((err, req, res, next) => {
-  console.error("Unhandled Error:", err);
-
-  if (err && err.message === "Not allowed by CORS") {
-    return res.status(403).json({ success: false, message: "Origin not allowed" });
-  }
-
-  const statusCode = err.statusCode || 500;
-  const message =
-    statusCode >= 500 && isProduction
-      ? "Internal Server Error"
-      : err.message || "Internal Server Error";
-
-  res.status(statusCode).json({
-    success: false,
-    message,
-    ...(err.code && { code: err.code }),
-    requestId: req.requestId,
-    ...(process.env.NODE_ENV === "development" && { stack: err.stack }),
-  });
-});
+app.use(errorHandler);
 
 module.exports = app;
