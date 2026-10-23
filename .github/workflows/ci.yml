@@ -8,7 +8,7 @@ on:
 jobs:
   test:
     name: Backend Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     services:
       postgres:
@@ -31,12 +31,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: "24"
+          node-version: "22"
           cache: npm
 
       - name: Install dependencies
@@ -68,7 +68,7 @@ jobs:
 
     if: github.event_name == 'push' && github.ref == 'refs/heads/alpha'
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: alpha
     timeout-minutes: 35
 
@@ -107,7 +107,7 @@ jobs:
           PY
 
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ap-south-1

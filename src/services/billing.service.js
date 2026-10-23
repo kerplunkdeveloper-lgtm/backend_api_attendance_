@@ -369,7 +369,7 @@ async function createCheckout(organizationId, payload = {}) {
   };
 }
 
-async function applyPaidPlan(organizationId, plan, billingCycle, { tx = prisma, periodStart } = {}) {
+async function applyPaidPlan(organizationId, plan, billingCycle, { tx = prisma, periodStart, extendFromCurrent = false } = {}) {
   const meta = await getConfiguredLimits(plan, tx);
   const configuredPrice = tx.billingPlanPrice?.findFirst
     ? await tx.billingPlanPrice.findFirst({
@@ -377,7 +377,27 @@ async function applyPaidPlan(organizationId, plan, billingCycle, { tx = prisma, 
     })
     : null;
   const start = periodStart ? new Date(periodStart) : new Date();
-  const periodEnd = addBillingPeriod(start, billingCycle);
+
+  // Renewing the same plan before it runs out adds a new period after the current one, so the days
+  // already paid for are not lost. Switching plans starts a fresh period from now.
+  let periodBase = start;
+  if (extendFromCurrent && tx.organization?.findUnique) {
+    const current = await tx.organization.findUnique({
+      where: { id: organizationId },
+      select: { subscriptionPlan: true, subscriptionStatus: true, subscriptionExpiresAt: true },
+    });
+    const expiry = current?.subscriptionExpiresAt ? new Date(current.subscriptionExpiresAt) : null;
+    if (
+      current &&
+      current.subscriptionPlan === meta.plan &&
+      ["ACTIVE", "CANCELED"].includes(current.subscriptionStatus) &&
+      expiry &&
+      expiry > start
+    ) {
+      periodBase = expiry;
+    }
+  }
+  const periodEnd = addBillingPeriod(periodBase, billingCycle);
   await tx.organization.update({
     where: { id: organizationId },
     data: {
@@ -475,6 +495,8 @@ async function activateOrder(tx, order, paymentId, paidAt = new Date()) {
   await applyPaidPlan(order.organizationId, order.plan, order.billingCycle, {
     tx,
     periodStart,
+    // Only real payments stack time. A 100%-off code must not extend the plan each time it is applied.
+    extendFromCurrent: Number(order.amountInr) > 0,
   });
   if (order.razorpaySubscriptionId && tx.subscription?.update) {
     await tx.subscription.update({

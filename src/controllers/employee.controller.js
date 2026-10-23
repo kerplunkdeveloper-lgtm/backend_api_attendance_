@@ -1,5 +1,6 @@
 const employeeService = require("../services/employee.service");
 const { sendControllerError } = require("../utils/controllerError");
+const auditService = require("../services/audit.service");
 
 const create = async (req, res) => {
   try {
@@ -34,6 +35,21 @@ const list = async (req, res) => {
       limit: result.limit,
       totalPages: result.totalPages,
     });
+  } catch (error) { return sendControllerError(res, error); }
+};
+
+const exportCsv = async (req, res) => {
+  try {
+    const file = await employeeService.exportEmployeesCsv(req.user.organizationId, req.query);
+    await auditService.logAction({
+      organizationId: req.user.organizationId,
+      userId: req.user.id,
+      action: "EXPORT",
+      entity: "Employee",
+      details: { rows: file.rowCount, filters: req.query },
+      ipAddress: req.ip,
+    });
+    return res.json({ success: true, data: file });
   } catch (error) { return sendControllerError(res, error); }
 };
 
@@ -208,6 +224,7 @@ const bulkImport = async (req, res) => {
 };
 
 module.exports = {
+  exportCsv,
   bulkImport,
   bulkSetAccess,
   create,

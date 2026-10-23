@@ -1,4 +1,5 @@
 const prisma = require("../config/database");
+const { assertCanReview, visibleToReviewer } = require("../utils/approvalChain");
 
 function num(v) {
   const n = Number(v);
@@ -11,10 +12,12 @@ function num(v) {
 }
 
 async function apply(organizationId, user, payload) {
-  const employee =
-    user.role === "EMPLOYEE"
-      ? await prisma.employee.findFirst({ where: { organizationId, userId: user.id } })
-      : await prisma.employee.findFirst({ where: { id: payload.employeeId, organizationId } });
+  // Only an HR/admin may file for somebody else. Without an employeeId they file for themselves:
+  // an undefined id would otherwise match the first employee in the organization.
+  const onBehalfOf = user.role !== "EMPLOYEE" && payload.employeeId ? String(payload.employeeId) : null;
+  const employee = await prisma.employee.findFirst({
+    where: onBehalfOf ? { id: onBehalfOf, organizationId } : { organizationId, userId: user.id },
+  });
   if (!employee) {
     const err = new Error("Employee not found");
     err.statusCode = 404;
@@ -52,6 +55,8 @@ async function list(organizationId, user) {
   if (user.role === "EMPLOYEE") {
     const emp = await prisma.employee.findFirst({ where: { organizationId, userId: user.id } });
     where.employeeId = emp?.id || "__none__";
+  } else {
+    Object.assign(where, visibleToReviewer(user.role));
   }
   return prisma.loanAdvance.findMany({
     where,
@@ -60,19 +65,24 @@ async function list(organizationId, user) {
   });
 }
 
-async function review(organizationId, id, payload, reviewerUserId) {
+async function review(organizationId, id, payload, reviewerUserId, reviewerRole = "COMPANY_ADMIN") {
   const status = String(payload.status || "").toUpperCase();
   if (!["APPROVED", "REJECTED", "CLOSED"].includes(status)) {
     const err = new Error("status must be APPROVED, REJECTED or CLOSED");
     err.statusCode = 400;
     throw err;
   }
-  const existing = await prisma.loanAdvance.findFirst({ where: { id, organizationId } });
+  const existing = await prisma.loanAdvance.findFirst({
+    where: { id, organizationId },
+    include: { employee: { select: { user: { select: { role: true } } } } },
+  });
   if (!existing) {
     const err = new Error("Loan / advance not found");
     err.statusCode = 404;
     throw err;
   }
+  // Same two-level chain as leave, expenses and overtime: HR and admin requests need an admin.
+  if (status !== "CLOSED") assertCanReview(existing.employee?.user?.role, reviewerRole);
   if (status === "CLOSED" && existing.status !== "APPROVED") {
     const err = new Error("Only an approved loan can be closed");
     err.statusCode = 400;
@@ -89,6 +99,15 @@ async function review(organizationId, id, payload, reviewerUserId) {
     const err = new Error("Monthly recovery cannot exceed the loan amount");
     err.statusCode = 400;
     throw err;
+  }
+  // A loan with no monthly recovery is never deducted from payroll, so it would stay outstanding forever.
+  if (status === "APPROVED") {
+    const recovery = monthlyRecovery !== undefined ? monthlyRecovery : Number(existing.monthlyRecovery || 0);
+    if (!(recovery > 0)) {
+      const err = new Error("Set a monthly recovery amount before approving, or the loan is never deducted from payroll.");
+      err.statusCode = 400;
+      throw err;
+    }
   }
   return prisma.loanAdvance.update({
     where: { id },

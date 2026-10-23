@@ -1,4 +1,5 @@
 const prisma = require("../config/database");
+const { boundedNumber } = require("../utils/policyValidation");
 const { policySelect } = require("../utils/prismaSelects");
 const { normalizeCycleDay, normalizeDayBasis } = require("../utils/payrollCycle");
 
@@ -70,16 +71,16 @@ class PolicyService {
     } = data;
 
     const payload = {};
-    if (workingDaysPerMonth !== undefined) payload.workingDaysPerMonth = parseInt(workingDaysPerMonth);
-    if (probationMonths !== undefined) payload.probationMonths = Math.max(0, parseInt(probationMonths));
-    if (monthlyPermissionHours !== undefined) payload.monthlyPermissionHours = Math.max(0, Number(monthlyPermissionHours));
+    if (workingDaysPerMonth !== undefined) payload.workingDaysPerMonth = boundedNumber("Working days per month", workingDaysPerMonth, { min: 1, max: 31, integer: true });
+    if (probationMonths !== undefined) payload.probationMonths = boundedNumber("Probation months", probationMonths, { min: 0, max: 36, integer: true });
+    if (monthlyPermissionHours !== undefined) payload.monthlyPermissionHours = boundedNumber("Monthly permission hours", monthlyPermissionHours, { min: 0, max: 100 });
     if (permissionRequiresProbation !== undefined) payload.permissionRequiresProbation = parseBoolean(permissionRequiresProbation);
     if (payrollCycleStartDay !== undefined) payload.payrollCycleStartDay = normalizeCycleDay(payrollCycleStartDay, DEFAULT_POLICY.payrollCycleStartDay);
     if (payrollCycleEndDay !== undefined) payload.payrollCycleEndDay = normalizeCycleDay(payrollCycleEndDay, DEFAULT_POLICY.payrollCycleEndDay);
     if (payrollDayBasis !== undefined) payload.payrollDayBasis = normalizeDayBasis(payrollDayBasis, DEFAULT_POLICY.payrollDayBasis);
-    if (halfDayThresholdMinutes !== undefined) payload.halfDayThresholdMinutes = parseInt(halfDayThresholdMinutes);
-    if (maxLatesBeforeDeduction !== undefined) payload.maxLatesBeforeDeduction = parseInt(maxLatesBeforeDeduction);
-    if (lateDeductionPercent !== undefined) payload.lateDeductionPercent = Number(lateDeductionPercent);
+    if (halfDayThresholdMinutes !== undefined) payload.halfDayThresholdMinutes = boundedNumber("Half-day threshold", halfDayThresholdMinutes, { min: 0, max: 1440, integer: true });
+    if (maxLatesBeforeDeduction !== undefined) payload.maxLatesBeforeDeduction = boundedNumber("Lates before deduction", maxLatesBeforeDeduction, { min: 0, max: 31, integer: true });
+    if (lateDeductionPercent !== undefined) payload.lateDeductionPercent = boundedNumber("Late deduction (fraction of daily rate)", lateDeductionPercent, { min: 0, max: 1 });
     if (allowWfh !== undefined) payload.allowWfh = parseBoolean(allowWfh);
     if (requireOtApproval !== undefined) payload.requireOtApproval = parseBoolean(requireOtApproval);
     if (geofenceStrict !== undefined) payload.geofenceStrict = parseBoolean(geofenceStrict);

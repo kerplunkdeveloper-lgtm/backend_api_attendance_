@@ -36,6 +36,12 @@ router.get(
 );
 
 router.get(
+  "/export",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
+  employeeController.exportCsv,
+);
+
+router.get(
   "/:id",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
   employeeController.getById,

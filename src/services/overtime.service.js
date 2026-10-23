@@ -164,6 +164,14 @@ class OvertimeService {
       throw error;
     }
 
+    // Approval can shorten a claim but never grow it: payroll pays these minutes, so a typo or a
+    // padded figure here would be paid out even though the punch record never supported it.
+    if (status === "APPROVED" && finalOtMinutes > request.requestedMinutes) {
+      const error = new Error(`You can approve at most ${request.requestedMinutes} minute(s), the amount requested.`);
+      error.statusCode = 400;
+      throw error;
+    }
+
     const result = await prisma.$transaction(async (tx) => {
       if (status === "APPROVED") {
         await tx.attendance.update({

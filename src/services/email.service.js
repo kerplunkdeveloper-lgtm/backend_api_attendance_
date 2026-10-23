@@ -182,6 +182,30 @@ class EmailService {
     });
   }
 
+  /** Trial and plan reminders for company admins. The text is built from fixed rules, but is escaped anyway. */
+  async sendSubscriptionReminderEmail(to, { companyName, companyLogoUrl, title, message, urgent = false } = {}) {
+    const billingUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/settings?billing=1`;
+    const html = await this.buildHtmlTemplate({
+      title: title || "About your WorkPluse plan",
+      badge: urgent ? "Action needed" : "Plan reminder",
+      badgeColor: urgent ? "#dc2626" : "#2563eb",
+      companyName,
+      companyLogoUrl,
+      ctaText: "Choose or renew a plan",
+      ctaUrl: billingUrl,
+      contentHtml: `
+        <p class="text">Hello <strong>${escapeHtml(companyName || "there")}</strong>,</p>
+        <p class="text">${escapeHtml(message || "")}</p>
+      `,
+    });
+    return this.sendEmail({
+      to,
+      subject: `${urgent ? "Action required: " : ""}${title || "About your WorkPluse plan"}`,
+      html,
+      text: `${message || ""} Manage your plan at ${billingUrl}.`,
+    });
+  }
+
   /**
    * 1. Leave Request Status Email (Approved or Rejected)
    */

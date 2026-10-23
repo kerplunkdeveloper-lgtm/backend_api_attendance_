@@ -1,7 +1,9 @@
 const prisma = require("../config/database");
+const { WORKING_STATUSES } = require("../utils/employeeStatus");
 const { withRedisLock } = require("../config/redis");
 const { runIfLeader } = require("../utils/jobLease");
 const { processDueDeliveries } = require("./webhook.service");
+const { sendSubscriptionReminders } = require("./subscriptionReminder.service");
 const emailService = require("./email.service");
 const whatsappService = require("./whatsapp.service");
 const { getLocalDateOnly, getLocalMinutesOfDay } = require("../utils/datetime");
@@ -97,7 +99,7 @@ class NotificationService {
    */
   async sendMorningCheckInReminders(organizationId = null, respectSchedule = false) {
     const whereEmployee = {
-      status: "ACTIVE",
+      status: { in: WORKING_STATUSES },
       userId: { not: null },
     };
     if (organizationId) {
@@ -236,7 +238,7 @@ class NotificationService {
    */
   async sendEveningCheckOutReminders(organizationId = null, respectSchedule = false) {
     const whereEmployee = {
-      status: "ACTIVE",
+      status: { in: WORKING_STATUSES },
       userId: { not: null },
     };
     if (organizationId) {
@@ -338,6 +340,26 @@ class NotificationService {
    * Automated Daily Evaluator
    * Called periodically by the backend scheduler, already protected by job lease
    */
+  /**
+   * The reminders are idempotent (an admin never gets the same message twice), so running again after a
+   * restart or a change of leader is harmless. The in-memory day key only avoids doing the sweep every minute.
+   */
+  async runDailySubscriptionReminders(now = new Date()) {
+    const dayKey = now.toISOString().slice(0, 10);
+    if (now.getUTCHours() < 4 || this._subscriptionSweepDay === dayKey) return null;
+    this._subscriptionSweepDay = dayKey;
+    try {
+      const result = await sendSubscriptionReminders(now);
+      if (result.reminded > 0) console.log(`[SubscriptionReminder] Sent ${result.reminded} reminder(s) across ${result.organizations} workspace(s)`);
+      return result;
+    } catch (err) {
+      // Try again on the next tick instead of waiting a whole day.
+      this._subscriptionSweepDay = null;
+      console.error("[SubscriptionReminder] Sweep failed:", err.message);
+      return null;
+    }
+  }
+
   async evaluateScheduledReminders() {
     try {
       await this.sendMorningCheckInReminders(null, true);
@@ -345,6 +367,9 @@ class NotificationService {
 
       // Each organization is marked once its own local day reaches 23:00.
       await this.markAbsentEmployees(null, { endOfDayOnly: true });
+
+      // Trial and plan reminders for company admins: once a day, after 09:30 India time.
+      await this.runDailySubscriptionReminders();
 
       // Process webhook deliveries with exponential backoff
       const processed = await processDueDeliveries(10);
@@ -363,7 +388,7 @@ class NotificationService {
    */
   async markAbsentEmployees(organizationId = null, { endOfDayOnly = false } = {}) {
     const now = new Date();
-    const whereEmployee = { status: "ACTIVE", userId: { not: null } };
+    const whereEmployee = { status: { in: WORKING_STATUSES }, userId: { not: null } };
 
     if (endOfDayOnly) {
       // Scheduled run: a cheap timezone lookup first, so the employee table is
