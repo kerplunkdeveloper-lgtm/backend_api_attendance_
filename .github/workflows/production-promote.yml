@@ -1,0 +1,147 @@
+name: WorkPluse backend production promotion
+
+on:
+  workflow_dispatch:
+    inputs:
+      alpha_sha:
+        description: Full commit SHA already deployed and tested on Alpha
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workpulse-backend-production
+  cancel-in-progress: false
+
+jobs:
+  validate-and-review:
+    if: github.ref == 'refs/heads/main' && github.actor == 'kerplunkdeveloper-lgtm'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci -d ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/ci
+      DATABASE_URL_UNPOOLED: postgresql://ci:ci@127.0.0.1:5432/ci
+      RELEASE_SHA: ${{ inputs.alpha_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Verify selected commit is on Alpha
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags origin alpha
+          git cat-file -e "$RELEASE_SHA^{commit}"
+          git merge-base --is-ancestor "$RELEASE_SHA" origin/alpha
+          git checkout --detach "$RELEASE_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npx prisma validate
+      # db push is confined to this disposable CI database. Production uses migrate deploy.
+      - run: npx prisma db push --accept-data-loss
+      - run: npm test
+      - name: Create migration review report
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          mkdir -p migration-review
+          git diff --name-status origin/main..."$RELEASE_SHA" -- prisma/migrations > migration-review/changes.txt
+          while IFS=$'\t' read -r status path; do
+            [[ -n "${path:-}" ]] || continue
+            if [[ "$status" == "A" && "$path" == */migration.sql ]]; then
+              printf '\n--- %s ---\n' "$path" >> migration-review/new-migrations.sql
+              git show "$RELEASE_SHA:$path" >> migration-review/new-migrations.sql
+            elif [[ "$status" != "A" && "$path" == */migration.sql ]]; then
+              echo "Existing migration changed: $path" >&2
+              exit 1
+            fi
+          done < migration-review/changes.txt
+          if [[ -f migration-review/new-migrations.sql ]] && grep -Ein '(^|[[:space:]])(DROP|TRUNCATE)([[:space:]]|;)' migration-review/new-migrations.sql; then
+            echo 'Destructive migration SQL is blocked from automatic production promotion.' >&2
+            exit 1
+          fi
+          printf 'Commit: %s\nAlpha ancestry: verified\nNew migration SQL: %s\n' "$RELEASE_SHA" "$(wc -l < migration-review/new-migrations.sql 2>/dev/null || echo 0)" > migration-review/summary.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backend-prisma-migration-review-${{ inputs.alpha_sha }}
+          path: migration-review/
+          if-no-files-found: error
+
+  deploy-production:
+    if: github.ref == 'refs/heads/main' && github.actor == 'kerplunkdeveloper-lgtm'
+    needs: validate-and-review
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Require production settings
+        env:
+          ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+          REGION: ${{ vars.AWS_REGION }}
+          INSTANCE_ID: ${{ vars.PROD_INSTANCE_ID }}
+          BACKUP_BUCKET: ${{ vars.PROD_BACKUP_BUCKET }}
+        run: |
+          set -euo pipefail
+          test -n "$ROLE_ARN" && test -n "$REGION" && test -n "$INSTANCE_ID" && test -n "$BACKUP_BUCKET"
+          test "$INSTANCE_ID" = "i-09f2e0a1f56ff314f"
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Verify backend SSM node is Online
+        env:
+          INSTANCE_ID: ${{ vars.PROD_INSTANCE_ID }}
+        run: |
+          set -euo pipefail
+          STATUS=$(aws ssm describe-instance-information --filters "Key=InstanceIds,Values=$INSTANCE_ID" --query 'InstanceInformationList[0].PingStatus' --output text)
+          test "$STATUS" = Online
+      - name: Deploy selected Alpha commit through SSM
+        env:
+          INSTANCE_ID: ${{ vars.PROD_INSTANCE_ID }}
+          REGION: ${{ vars.AWS_REGION }}
+          BACKUP_BUCKET: ${{ vars.PROD_BACKUP_BUCKET }}
+          RELEASE_SHA: ${{ inputs.alpha_sha }}
+          DEPLOY_SCRIPT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          SCRIPT_URL="https://raw.githubusercontent.com/kerplunkdeveloper-lgtm/backend_api_attendance_/$DEPLOY_SCRIPT_SHA/ops/deploy-production.sh"
+          SCRIPT_PATH="/tmp/workpulse-backend-deploy-$RELEASE_SHA.sh"
+          printf -v INNER 'curl -fsSL %q -o %q && bash %q %q %q %q' "$SCRIPT_URL" "$SCRIPT_PATH" "$SCRIPT_PATH" "$RELEASE_SHA" "$BACKUP_BUCKET" "$REGION"
+          printf -v REMOTE 'sudo -iu ubuntu bash -lc %q' "$INNER"
+          PARAMETERS=$(jq -nc --arg cmd "$REMOTE" '{commands:[$cmd]}')
+          COMMAND_ID=$(aws ssm send-command --instance-ids "$INSTANCE_ID" --document-name AWS-RunShellScript --parameters "$PARAMETERS" --timeout-seconds 2400 --query Command.CommandId --output text)
+          for _ in $(seq 1 240); do
+            STATUS=$(aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" --query Status --output text 2>/dev/null || echo Pending)
+            if [[ "$STATUS" == Success ]]; then
+              aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" --query StandardOutputContent --output text
+              exit 0
+            fi
+            case "$STATUS" in Failed|Cancelled|TimedOut|Cancelling) aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" --query '{Status:Status,Output:StandardOutputContent,Error:StandardErrorContent}' --output json; exit 1;; esac
+            sleep 10
+          done
+          echo 'Timed out waiting for backend deployment' >&2
+          exit 1
