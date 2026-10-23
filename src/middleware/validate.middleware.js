@@ -89,6 +89,8 @@ const validate =
     return next();
   };
 
+const upperTrim = (v) => (typeof v === "string" ? v.trim().toUpperCase() : v);
+
 const schemas = {
   register: z
     .object({
@@ -175,8 +177,9 @@ const schemas = {
 
   billingCheckout: z
     .object({
-      plan: z.enum(["STARTER", "PROFESSIONAL", "ENTERPRISE"]),
-      billingCycle: z.enum(["MONTHLY", "ANNUAL"]).default("MONTHLY"),
+      // Clients send "enterprise", "Enterprise" or "ENTERPRISE"; all mean the same plan.
+      plan: z.preprocess(upperTrim, z.enum(["STARTER", "PROFESSIONAL", "ENTERPRISE"])),
+      billingCycle: z.preprocess((v) => (v === undefined || v === "" ? v : { YEARLY: "ANNUAL", YEAR: "ANNUAL", MONTH: "MONTHLY" }[upperTrim(v)] || upperTrim(v)), z.enum(["MONTHLY", "ANNUAL"]).default("MONTHLY")),
       couponCode: z.string().trim().max(40).optional(),
       idempotencyKey: z.string().trim().min(8).max(120).regex(/^[a-zA-Z0-9._:-]+$/).optional(),
     })

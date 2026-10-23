@@ -90,9 +90,21 @@ async function getPlanCatalog() {
   ]));
   const limitMap = new Map(limits.map((item) => [item.plan, item]));
 
+  // Take only the limit fields from the stored row. Spreading the whole row would
+  // overwrite the plan's `id` ("ENTERPRISE") with the row's UUID, and checkout
+  // would then be sent a plan that does not exist.
+  const limitFieldsOf = (row) => row ? {
+    maxEmployees: row.maxEmployees,
+    maxBranches: row.maxBranches,
+    hasGeofence: row.hasGeofence,
+    hasPayroll: row.hasPayroll,
+    hasShiftPlanner: row.hasShiftPlanner,
+    hasApiAccess: row.hasApiAccess,
+  } : {};
+
   const catalog = SUBSCRIPTION_PLANS.map((plan) => ({
     ...plan,
-    ...(limitMap.get(plan.id) || {}),
+    ...limitFieldsOf(limitMap.get(plan.id)),
     priceMonthly: priceMap.get(plan.id + ":MONTHLY") ?? plan.priceMonthly,
     priceAnnual: priceMap.get(plan.id + ":ANNUAL") ?? plan.priceAnnual,
   }));

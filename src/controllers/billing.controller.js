@@ -14,6 +14,27 @@ module.exports = {
       return sendControllerError(res, err);
     }
   },
+  // Read-only price preview, so an offer code can be checked before paying.
+  async quote(req, res) {
+    try {
+      const p = await billingService.calculateCheckout(req.user.organizationId, req.body);
+      return res.json({
+        success: true,
+        data: {
+          plan: p.plan,
+          billingCycle: p.billingCycle,
+          couponCode: p.couponCode,
+          baseAmountInr: p.baseAmountInr,
+          discountAmountInr: p.discountAmountInr,
+          taxAmountInr: p.taxAmountInr,
+          amountInr: p.amountInr,
+          free: p.amountInr === 0 && p.baseAmountInr > 0,
+        },
+      });
+    } catch (err) {
+      return sendControllerError(res, err);
+    }
+  },
   async verify(req, res) {
     try {
       const data = await (req.body.razorpay_subscription_id ? billingService.verifySubscription : billingService.verifyPayment)(
