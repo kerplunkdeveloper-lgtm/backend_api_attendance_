@@ -153,7 +153,4 @@ router.post(
   payslipTemplateController.uploadHtmlTemplate,
 );
 
-// Keep payroll and statutory endpoints under the same public payroll prefixes.
-router.use(statutoryRoutes);
-
 module.exports = router;

@@ -163,8 +163,8 @@ const finishCallback = async ({ code, state }) => {
     where: { organizationId: config.organization.id, email: { equals: identity.email, mode: "insensitive" } },
     include: { organization: organizationWithSubscription, employee: { include: { branch: true, shift: true, department: true } } },
   });
-  if (!user) throw httpError("No WorkPulse account uses this SSO email. Ask your administrator to invite you first.", 404, "SSO_ACCOUNT_NOT_FOUND");
-  if (!user.isActive) throw httpError("This WorkPulse account has been deactivated.", 403, "ACCOUNT_INACTIVE");
+  if (!user) throw httpError("No WorkPluse account uses this SSO email. Ask your administrator to invite you first.", 404, "SSO_ACCOUNT_NOT_FOUND");
+  if (!user.isActive) throw httpError("This WorkPluse account has been deactivated.", 403, "ACCOUNT_INACTIVE");
   if (user.role === "EMPLOYEE") throw httpError("Web access is for admins and HR. Use the mobile app.", 403, "WEB_EMPLOYEE_ACCESS_DISABLED");
   const rawCode = crypto.randomBytes(32).toString("base64url");
   await prisma.ssoLoginCode.deleteMany({ where: { OR: [{ userId: user.id }, { expiresAt: { lt: new Date() } }] } });

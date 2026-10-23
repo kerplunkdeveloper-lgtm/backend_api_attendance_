@@ -236,7 +236,7 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
     cleanEmail,
     firstName.trim(),
     {
-      organizationName: org?.name || "WorkPulse",
+      organizationName: org?.name || "WorkPluse",
       companyLogoUrl: org?.logoUrl,
       tempPassword,
       loginUrl,
@@ -792,10 +792,12 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
     console.warn("[Invite] Welcome email failed:", err.message);
   }
 
-  // Log to console for simulation/dev mode
-  console.log("────────────────────────────────────────────────────────────");
-  console.log(`[Invite] Employee: ${firstName} ${lastName || ""} <${cleanEmail}>`);
-  console.log("────────────────────────────────────────────────────────────");
+  // Dev-mode banner only: keeps employee names and emails out of production logs.
+  if (process.env.NODE_ENV !== "production") {
+    console.log("────────────────────────────────────────────────────────────");
+    console.log(`[Invite] Employee: ${firstName} ${lastName || ""} <${cleanEmail}>`);
+    console.log("────────────────────────────────────────────────────────────");
+  }
 
   return {
     success: true,
@@ -1211,7 +1213,7 @@ const bulkImportEmployees = async (organizationId, employeesList, actorRole = "C
     for (const r of toInsert) {
       try {
         await emailService.sendEmployeeWelcomeEmail(r.email, r.firstName, {
-          organizationName: org?.name || "WorkPulse",
+          organizationName: org?.name || "WorkPluse",
           companyLogoUrl: org?.logoUrl,
           tempPassword: r.tempPassword,
           loginUrl,

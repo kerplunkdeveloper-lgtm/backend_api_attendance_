@@ -1,5 +1,6 @@
 const { assertCanReview, visibleToReviewer } = require("../utils/approvalChain");
 const prisma = require("../config/database");
+const { parsePagination } = require("../utils/pagination");
 const { evaluateAttendanceAgainstShift, calculateLateMinutes } = require("../utils/shiftCalculator");
 const { getOrgDateOnly, resolveShift } = require("./attendance.service");
 
@@ -141,8 +142,7 @@ class CorrectionService {
       where.employeeId = employeeId;
     }
 
-    const take = parseInt(limit) || 50;
-    const skip = ((parseInt(page) || 1) - 1) * take;
+    const { limit: take, skip, page: curPage } = parsePagination({ page, limit }, { defaultLimit: 50 });
 
     const [records, total] = await Promise.all([
       prisma.attendanceCorrection.findMany({
@@ -166,7 +166,7 @@ class CorrectionService {
       prisma.attendanceCorrection.count({ where }),
     ]);
 
-    return { records, total, page: parseInt(page), totalPages: Math.ceil(total / take) };
+    return { records, total, page: curPage, totalPages: Math.ceil(total / take) };
   }
 
   /**

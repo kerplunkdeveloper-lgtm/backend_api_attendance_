@@ -1,4 +1,5 @@
 const prisma = require("../config/database");
+const { parsePagination } = require("../utils/pagination");
 
 class AuditService {
   /**
@@ -34,8 +35,7 @@ class AuditService {
     if (entity && entity !== "PLATFORM") where.entity = entity;
     if (userId) where.userId = userId;
 
-    const take = parseInt(limit) || 50;
-    const skip = ((parseInt(page) || 1) - 1) * take;
+    const { limit: take, skip, page: curPage } = parsePagination({ page, limit }, { defaultLimit: 50 });
 
     const [logs, total] = await Promise.all([
       prisma.auditLog.findMany({
@@ -49,7 +49,7 @@ class AuditService {
 
     return {
       success: true,
-      page: parseInt(page),
+      page: curPage,
       limit: take,
       total,
       totalPages: Math.ceil(total / take) || 1,
