@@ -1,4 +1,7 @@
 const bcrypt = require("bcryptjs");
+const { validateIdentityFields, assertStatus, parsePastDate } = require("../utils/employeeValidation");
+const { toCsv } = require("../utils/csv");
+const { WORKING_STATUSES } = require("../utils/employeeStatus");
 const prisma = require("../config/database");
 const emailService = require("./email.service");
 const { generateTempPassword, resolveAssignableRole, assertRoleAssignment } = require("../utils/password");
@@ -72,6 +75,12 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
 
   const cleanEmail = email.trim().toLowerCase();
   const gender = normalizeGender(data.gender);
+  const identity = validateIdentityFields(data);
+  const dateOfBirth = parsePastDate("Date of birth", data.dateOfBirth);
+  const dateOfJoining = parsePastDate("Date of joining", data.dateOfJoining, { allowFuture: true });
+  if (password && String(password).trim() && String(password).trim().length < 8) {
+    throw Object.assign(new Error("Password must be at least 8 characters."), { statusCode: 400 });
+  }
 
   const existingUser = await prisma.user.findUnique({
     where: {
@@ -182,18 +191,18 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
         departmentId: departmentId || null,
         shiftId: shiftId || null,
         designation: data.designation ? String(data.designation).trim() : null,
-        dateOfJoining: data.dateOfJoining ? new Date(data.dateOfJoining) : null,
-        dateOfBirth: data.dateOfBirth ? new Date(data.dateOfBirth) : null,
+        dateOfJoining,
+        dateOfBirth,
         gender,
         employmentType: data.employmentType ? String(data.employmentType).trim() : null,
         reportingManagerId: data.reportingManagerId || null,
         workEmail: cleanEmail,
-        panNumber: data.panNumber ? String(data.panNumber).trim().toUpperCase() : null,
-        uanNumber: data.uanNumber ? String(data.uanNumber).trim() : null,
+        panNumber: identity.panNumber ?? null,
+        uanNumber: identity.uanNumber ?? null,
         esiNumber: data.esiNumber ? String(data.esiNumber).trim() : null,
         bankName: data.bankName ? String(data.bankName).trim() : null,
-        bankAccountNumber: data.bankAccountNumber ? String(data.bankAccountNumber).trim() : null,
-        bankIfsc: data.bankIfsc ? String(data.bankIfsc).trim().toUpperCase() : null,
+        bankAccountNumber: identity.bankAccountNumber ?? null,
+        bankIfsc: identity.bankIfsc ?? null,
         emergencyContactName: data.emergencyContactName ? String(data.emergencyContactName).trim() : null,
         emergencyContactPhone: data.emergencyContactPhone ? String(data.emergencyContactPhone).trim() : null,
         address: data.address ? String(data.address).trim() : null,
@@ -265,7 +274,9 @@ const getEmployees = async (organizationId, query = {}) => {
   const VALID_STATUSES = ["ACTIVE", "INACTIVE", "TERMINATED", "PROBATION", "NOTICE_PERIOD"];
   const VALID_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "EMPLOYEE"];
   const asText = (v) => (typeof v === "string" ? v.trim() : "");
-  if (VALID_STATUSES.includes(asText(query.status))) where.status = asText(query.status);
+  // WORKING = everyone still employed (active, probation, serving notice), for pickers and headcounts.
+  if (asText(query.status) === "WORKING") where.status = { in: WORKING_STATUSES };
+  else if (VALID_STATUSES.includes(asText(query.status))) where.status = asText(query.status);
   if (asText(query.departmentId)) where.departmentId = asText(query.departmentId);
   if (asText(query.branchId)) where.branchId = asText(query.branchId);
   if (asText(query.shiftId)) where.shiftId = asText(query.shiftId);
@@ -405,6 +416,19 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
   } = data;
 
   const genderToSet = gender !== undefined ? normalizeGender(gender) : undefined;
+  const identity = validateIdentityFields({ panNumber, uanNumber, bankAccountNumber, bankIfsc });
+  const statusToSet = status ? assertStatus(status) : undefined;
+  const birthDateToSet = dateOfBirth !== undefined ? parsePastDate("Date of birth", dateOfBirth) : undefined;
+  const joiningDateToSet = dateOfJoining !== undefined ? parsePastDate("Date of joining", dateOfJoining, { allowFuture: true }) : undefined;
+
+  // Check the code here so a duplicate is a clear message, not an opaque database error.
+  if (employeeCode && employeeCode.trim() !== employee.employeeCode) {
+    const clash = await prisma.employee.findFirst({
+      where: { organizationId, employeeCode: employeeCode.trim(), NOT: { id: employeeId } },
+      select: { id: true },
+    });
+    if (clash) throw Object.assign(new Error(`Employee code '${employeeCode.trim()}' is already taken in this organization`), { statusCode: 409 });
+  }
 
   if (branchId) {
     const branch = await prisma.branch.findFirst({
@@ -467,24 +491,24 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
         ...(firstName ? { firstName: firstName.trim() } : {}),
         ...(lastName !== undefined ? { lastName: lastName?.trim() || null } : {}),
         ...(phone !== undefined ? { phone: phone?.trim() || null } : {}),
-        ...(status ? { status } : {}),
+        ...(statusToSet ? { status: statusToSet } : {}),
         ...(employeeCode ? { employeeCode: employeeCode.trim() } : {}),
         ...(branchId !== undefined ? { branchId: branchId || null } : {}),
         ...(departmentId !== undefined ? { departmentId: departmentId || null } : {}),
         ...(shiftId !== undefined ? { shiftId: shiftId || null } : {}),
         ...(designation !== undefined ? { designation: designation ? String(designation).trim() : null } : {}),
-        ...(dateOfJoining !== undefined ? { dateOfJoining: dateOfJoining ? new Date(dateOfJoining) : null } : {}),
-        ...(dateOfBirth !== undefined ? { dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : null } : {}),
+        ...(joiningDateToSet !== undefined ? { dateOfJoining: joiningDateToSet } : {}),
+        ...(birthDateToSet !== undefined ? { dateOfBirth: birthDateToSet } : {}),
         ...(genderToSet !== undefined ? { gender: genderToSet } : {}),
         ...(employmentType !== undefined ? { employmentType: employmentType ? String(employmentType).trim() : null } : {}),
         ...(reportingManagerId !== undefined ? { reportingManagerId: reportingManagerId || null } : {}),
         ...(workEmail !== undefined ? { workEmail: workEmail ? String(workEmail).trim().toLowerCase() : null } : {}),
-        ...(panNumber !== undefined ? { panNumber: panNumber ? String(panNumber).trim().toUpperCase() : null } : {}),
-        ...(uanNumber !== undefined ? { uanNumber: uanNumber ? String(uanNumber).trim() : null } : {}),
+        ...(identity.panNumber !== undefined ? { panNumber: identity.panNumber } : {}),
+        ...(identity.uanNumber !== undefined ? { uanNumber: identity.uanNumber } : {}),
         ...(esiNumber !== undefined ? { esiNumber: esiNumber ? String(esiNumber).trim() : null } : {}),
         ...(bankName !== undefined ? { bankName: bankName ? String(bankName).trim() : null } : {}),
-        ...(bankAccountNumber !== undefined ? { bankAccountNumber: bankAccountNumber ? String(bankAccountNumber).trim() : null } : {}),
-        ...(bankIfsc !== undefined ? { bankIfsc: bankIfsc ? String(bankIfsc).trim().toUpperCase() : null } : {}),
+        ...(identity.bankAccountNumber !== undefined ? { bankAccountNumber: identity.bankAccountNumber } : {}),
+        ...(identity.bankIfsc !== undefined ? { bankIfsc: identity.bankIfsc } : {}),
         ...(emergencyContactName !== undefined ? { emergencyContactName: emergencyContactName ? String(emergencyContactName).trim() : null } : {}),
         ...(emergencyContactPhone !== undefined ? { emergencyContactPhone: emergencyContactPhone ? String(emergencyContactPhone).trim() : null } : {}),
         ...(address !== undefined ? { address: address ? String(address).trim() : null } : {}),
@@ -663,6 +687,7 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
 
   const cleanEmail = email.trim().toLowerCase();
   const gender = normalizeGender(data.gender);
+  const invitedIdentity = validateIdentityFields({ panNumber: data.panNumber, uanNumber: data.uanNumber });
 
   const existing = await prisma.user.findUnique({
     where: { organizationId_email: { organizationId, email: cleanEmail } },
@@ -720,8 +745,8 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
         departmentId: departmentId || null,
         shiftId: shiftId || null,
         gender,
-        panNumber: data.panNumber ? String(data.panNumber).trim().toUpperCase() : null,
-        uanNumber: data.uanNumber ? String(data.uanNumber).trim() : null,
+        panNumber: invitedIdentity.panNumber ?? null,
+        uanNumber: invitedIdentity.uanNumber ?? null,
         esiNumber: data.esiNumber ? String(data.esiNumber).trim() : null,
       },
       include: {
@@ -867,6 +892,8 @@ const getMyEmployee = async (organizationId, userId) => {
 
 const updateMyProfile = async (organizationId, userId, data) => {
   const employee = await getMyEmployee(organizationId, userId);
+  const identity = validateIdentityFields({ bankAccountNumber: data.bankAccountNumber, bankIfsc: data.bankIfsc });
+  const birthDate = data.dateOfBirth !== undefined ? parsePastDate("Date of birth", data.dateOfBirth) : undefined;
   if (data.branchId) {
     const branch = await prisma.branch.findFirst({
       where: { id: String(data.branchId), organizationId },
@@ -899,12 +926,10 @@ const updateMyProfile = async (organizationId, userId, data) => {
         ...(data.emergencyContactPhone !== undefined
           ? { emergencyContactPhone: data.emergencyContactPhone ? String(data.emergencyContactPhone).trim() : null }
           : {}),
-        ...(data.dateOfBirth !== undefined ? { dateOfBirth: data.dateOfBirth ? new Date(data.dateOfBirth) : null } : {}),
+        ...(birthDate !== undefined ? { dateOfBirth: birthDate } : {}),
         ...(data.bankName !== undefined ? { bankName: data.bankName ? String(data.bankName).trim() : null } : {}),
-        ...(data.bankAccountNumber !== undefined
-          ? { bankAccountNumber: data.bankAccountNumber ? String(data.bankAccountNumber).trim() : null }
-          : {}),
-          ...(data.bankIfsc !== undefined ? { bankIfsc: data.bankIfsc ? String(data.bankIfsc).trim().toUpperCase() : null } : {}),
+        ...(identity.bankAccountNumber !== undefined ? { bankAccountNumber: identity.bankAccountNumber } : {}),
+        ...(identity.bankIfsc !== undefined ? { bankIfsc: identity.bankIfsc } : {}),
           ...(data.branchId !== undefined
             ? { branchId: data.branchId ? String(data.branchId) : null }
             : {}),
@@ -1256,7 +1281,57 @@ const bulkImportEmployees = async (organizationId, employeesList, actorRole = "C
   };
 };
 
+/**
+ * Directory export for audits and migrations. Deliberately leaves out salary, PAN, bank and
+ * other identity numbers: a bulk file of those is the thing most worth not leaking.
+ */
+const EXPORT_LIMIT = 5000;
+const exportEmployeesCsv = async (organizationId, query = {}) => {
+  const where = { organizationId, deletedAt: null };
+  const status = typeof query.status === "string" ? query.status.trim() : "";
+  if (status === "WORKING") where.status = { in: WORKING_STATUSES };
+  else if (["ACTIVE", "INACTIVE", "TERMINATED", "PROBATION", "NOTICE_PERIOD"].includes(status)) where.status = status;
+  if (typeof query.departmentId === "string" && query.departmentId.trim()) where.departmentId = query.departmentId.trim();
+  if (typeof query.branchId === "string" && query.branchId.trim()) where.branchId = query.branchId.trim();
+
+  const records = await prisma.employee.findMany({
+    where,
+    take: EXPORT_LIMIT,
+    orderBy: { employeeCode: "asc" },
+    select: {
+      employeeCode: true,
+      firstName: true,
+      lastName: true,
+      workEmail: true,
+      phone: true,
+      designation: true,
+      employmentType: true,
+      status: true,
+      dateOfJoining: true,
+      department: { select: { name: true } },
+      branch: { select: { name: true } },
+      shift: { select: { name: true } },
+      user: { select: { email: true, role: true } },
+    },
+  });
+
+  const day = (value) => (value ? new Date(value).toISOString().slice(0, 10) : "");
+  const headers = ["Employee code", "First name", "Last name", "Email", "Phone", "Department", "Branch", "Shift", "Designation", "Employment type", "Role", "Status", "Date of joining"];
+  const rows = records.map((e) => [
+    e.employeeCode, e.firstName, e.lastName, e.workEmail || e.user?.email, e.phone, e.department?.name, e.branch?.name,
+    e.shift?.name, e.designation, e.employmentType, e.user?.role, e.status, day(e.dateOfJoining),
+  ]);
+  return {
+    fileName: `employees_${new Date().toISOString().slice(0, 10)}.csv`,
+    mimeType: "text/csv",
+    content: toCsv(headers, rows),
+    rowCount: rows.length,
+    truncated: records.length === EXPORT_LIMIT,
+  };
+};
+
 module.exports = {
+  exportEmployeesCsv,
   bulkImportEmployees,
   setEmployeesAccess,
   createEmployee,

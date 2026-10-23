@@ -19,6 +19,9 @@ const router = express.Router();
 router.use(authenticate);
 router.use(requireFeature("hasPayroll", "Payroll"));
 
+// Statutory payroll endpoints are exposed under /payroll because the web client uses that API namespace.
+router.use(statutoryRoutes);
+
 // Personal Payslips for logged-in employee
 router.get("/payslips/my", payrollController.getMyPayslips);
 router.get("/my-payslips", payrollController.getMyPayslips);
@@ -84,7 +87,7 @@ router.patch(
 // Payroll Approval Workflow: Batch Approve
 router.post(
   "/approve-batch",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
   payrollController.approveBatch,
 );
 

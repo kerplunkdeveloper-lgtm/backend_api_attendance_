@@ -1,4 +1,5 @@
 const prisma = require("../config/database");
+const { proRataFinalSalary, encashableLeaveDays } = require("../utils/finalSettlementMath");
 const notificationService = require("./notification.service");
 const { getPolicy, getOrgDateOnly } = require("./attendance.service");
 
@@ -681,6 +682,7 @@ class OffboardingService {
           },
         },
         clearances: true,
+        finalSettlement: { select: { status: true } },
       },
     });
 
@@ -690,12 +692,29 @@ class OffboardingService {
       throw error;
     }
 
+    if (exit.finalSettlement?.status === "DISBURSED") {
+      const error = new Error("This settlement has already been disbursed and can no longer be recalculated.");
+      error.statusCode = 409;
+      throw error;
+    }
+
     const { employee } = exit;
     const salary = employee.salaryStructure;
 
-    // Determine monthly base salary and daily rate
-    const monthlyCtc = salary ? Number(salary.monthlyCtc || salary.baseSalary) : 30000;
-    const baseSalary = salary ? Number(salary.baseSalary) : monthlyCtc * 0.5;
+    // Never settle on an invented salary: payroll refuses the same case.
+    if (!salary && customOverrides.finalSalaryPayable === undefined) {
+      const error = new Error(
+        `No salary structure is set for ${employee.firstName} (${employee.employeeCode}). Set their CTC first, or enter the final salary manually.`
+      );
+      error.statusCode = 422;
+      throw error;
+    }
+
+    // Base salary drives the daily rate (leave encashment, notice shortfall); the final month pays the full gross.
+    const baseSalary = salary ? Number(salary.baseSalary) : 0;
+    const monthlyGross = salary
+      ? baseSalary + Number(salary.hra || 0) + Number(salary.transport || 0) + Number(salary.special || 0) + Number(salary.otherAllowance || 0)
+      : 0;
 
     const policy = await getPolicy(organizationId);
     const standardWorkingDays = policy.workingDaysPerMonth || 26;
@@ -703,23 +722,16 @@ class OffboardingService {
 
     // 1. Calculate Worked Days in Final Month
     const lwd = exit.approvedLastWorkingDate || exit.preferredLastWorkingDate || new Date();
-    const finalMonthDay = lwd.getDate();
-    // Cap worked days to standard working days
-    const workedDaysInFinalMonth = Math.min(finalMonthDay, standardWorkingDays);
-    const calculatedFinalSalary = Math.round(workedDaysInFinalMonth * dailyRate * 100) / 100;
+    const finalMonth = proRataFinalSalary(monthlyGross, lwd);
+    const workedDaysInFinalMonth = finalMonth.days;
+    const calculatedFinalSalary = finalMonth.amount;
 
     // 2. Overtime Pay
     const overtimePay = 0; // can be adjusted via customOverrides
 
     // 3. Leave Encashment
     // Find unutilized paid leave balance (e.g. Privilege Leave / Paid Leave / Annual Leave)
-    const paidLeaveBalanceRecord = employee.leaveBalances.find(
-      (b) => b.leaveType.name.toLowerCase().includes("privilege") ||
-             b.leaveType.name.toLowerCase().includes("annual") ||
-             b.leaveType.name.toLowerCase().includes("paid")
-    ) || employee.leaveBalances[0];
-
-    const availableLeaves = paidLeaveBalanceRecord ? Math.max(0, Number(paidLeaveBalanceRecord.balance)) : 0;
+    const availableLeaves = encashableLeaveDays(employee.leaveBalances, new Date(lwd).getUTCFullYear());
     const leaveEncashmentDays = customOverrides.leaveEncashmentDays !== undefined
       ? Number(customOverrides.leaveEncashmentDays)
       : availableLeaves;
@@ -769,7 +781,7 @@ class OffboardingService {
     const loanOrAdvanceRecovery = customOverrides.loanOrAdvanceRecovery !== undefined
       ? Number(customOverrides.loanOrAdvanceRecovery)
       : outstandingLoans;
-    const statutoryDeductions = customOverrides.statutoryDeductions !== undefined ? Number(customOverrides.statutoryDeductions) : Math.round((salary ? Number(salary.pf || 0) + Number(salary.professionalTax || 0) : 0) * (workedDaysInFinalMonth / standardWorkingDays));
+    const statutoryDeductions = customOverrides.statutoryDeductions !== undefined ? Number(customOverrides.statutoryDeductions) : Math.round((salary ? Number(salary.pf || 0) + Number(salary.professionalTax || 0) : 0) * finalMonth.ratio);
     const otherDeductions = customOverrides.otherDeductions !== undefined ? Number(customOverrides.otherDeductions) : 0;
 
     // Totals
@@ -869,34 +881,44 @@ class OffboardingService {
       throw error;
     }
 
+    if (exit.finalSettlement.status === "DISBURSED") {
+      const error = new Error("This settlement has already been disbursed.");
+      error.statusCode = 409;
+      throw error;
+    }
+
+    const loanService = require("./loan.service");
     const { paymentReference, remarks } = payload;
     const adminName = adminUser.employee
       ? `${adminUser.employee.firstName} ${adminUser.employee.lastName || ""}`.trim()
       : adminUser.email;
 
-    // 1. Mark Settlement as DISBURSED
-    const updatedSettlement = await prisma.finalSettlement.update({
-      where: { exitId },
-      data: {
-        status: "DISBURSED",
-        approvedBy: adminName,
-        approvedAt: new Date(),
-        disbursedAt: new Date(),
-        paymentReference: paymentReference ? paymentReference.trim() : `WP-FF-${Date.now().toString().slice(-6)}`,
-        remarks: remarks ? remarks.trim() : null,
-      },
-    });
+    // One transaction: a failure part-way must never leave a disbursed settlement on a still-active employee.
+    const now = new Date();
+    const [updatedSettlement, updatedExit] = await prisma.$transaction(async (tx) => {
+      const settlement = await tx.finalSettlement.update({
+        where: { exitId },
+        data: {
+          status: "DISBURSED",
+          approvedBy: adminName,
+          approvedAt: now,
+          disbursedAt: now,
+          paymentReference: paymentReference ? paymentReference.trim() : `WP-FF-${Date.now().toString().slice(-6)}`,
+          remarks: remarks ? remarks.trim() : null,
+        },
+      });
+      const closedExit = await tx.employeeExit.update({ where: { id: exitId }, data: { status: "TERMINATED" } });
+      await tx.employee.update({ where: { id: exit.employeeId }, data: { status: "TERMINATED" } });
 
-    // 2. Mark Exit as TERMINATED
-    const updatedExit = await prisma.employeeExit.update({
-      where: { id: exitId },
-      data: { status: "TERMINATED" },
-    });
-
-    // 3. Mark Employee status as TERMINATED
-    await prisma.employee.update({
-      where: { id: exit.employeeId },
-      data: { status: "TERMINATED" },
+      // Loans recovered through this settlement are settled; leaving them open would keep a ghost balance.
+      const outstanding = await loanService.outstandingForEmployee(organizationId, exit.employeeId, tx);
+      if (outstanding > 0 && Number(settlement.loanOrAdvanceRecovery) >= outstanding) {
+        await tx.loanAdvance.updateMany({
+          where: { organizationId, employeeId: exit.employeeId, status: "APPROVED" },
+          data: { status: "CLOSED", outstanding: 0 },
+        });
+      }
+      return [settlement, closedExit];
     });
 
     // 4. Deactivate User Account & Invalidate Tokens

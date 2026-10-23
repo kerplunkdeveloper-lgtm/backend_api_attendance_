@@ -29,6 +29,7 @@ module.exports = {
         req.params.id,
         req.body,
         req.user.id,
+        req.user.role,
       );
       return res.json({ success: true, data });
     } catch (err) {

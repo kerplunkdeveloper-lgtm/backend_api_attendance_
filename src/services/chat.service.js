@@ -2,6 +2,9 @@ const prisma = require("../config/database");
 const { parsePagination, paginationMeta } = require("../utils/pagination");
 const { broadcastToThread } = require("../realtime/chatWs");
 
+const MAX_GROUP_TITLE = 80;
+const MAX_GROUP_MEMBERS = 200;
+
 async function listThreads(organizationId, userId, query = {}) {
   const { page, limit, skip } = parsePagination(query, { defaultLimit: 100 });
   const where = { userId, thread: { organizationId } };
@@ -34,7 +37,7 @@ async function openDirect(organizationId, userId, otherUserId) {
     err.statusCode = 400;
     throw err;
   }
-  const other = await prisma.user.findFirst({ where: { id: otherUserId, organizationId } });
+  const other = await prisma.user.findFirst({ where: { id: otherUserId, organizationId, isActive: true } });
   if (!other) {
     const err = new Error("User not found in this organization");
     err.statusCode = 404;
@@ -123,9 +126,19 @@ async function createGroup(organizationId, userId, { title, userIds }) {
     err.statusCode = 400;
     throw err;
   }
-  const ids = Array.from(new Set([userId, ...(Array.isArray(userIds) ? userIds : [])]));
+  if (name.length > MAX_GROUP_TITLE) {
+    const err = new Error(`Group title must be ${MAX_GROUP_TITLE} characters or fewer`);
+    err.statusCode = 400;
+    throw err;
+  }
+  const ids = Array.from(new Set([userId, ...(Array.isArray(userIds) ? userIds.filter((id) => typeof id === "string") : [])]));
+  if (ids.length > MAX_GROUP_MEMBERS) {
+    const err = new Error(`A group can have at most ${MAX_GROUP_MEMBERS} people`);
+    err.statusCode = 400;
+    throw err;
+  }
   const members = await prisma.user.findMany({
-    where: { organizationId, id: { in: ids } },
+    where: { organizationId, isActive: true, id: { in: ids } },
     select: { id: true },
   });
   if (members.length < 2) {

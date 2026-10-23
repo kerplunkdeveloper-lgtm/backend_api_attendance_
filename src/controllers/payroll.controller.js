@@ -1,6 +1,19 @@
 const payrollService = require("../services/payroll.service");
 const prisma = require("../config/database");
 const { fail } = require("../utils/response");
+const { assertCanSetStatus, assertNotOwnSalary } = require("../utils/payrollAccess");
+
+/** Throws 403 when HR (a non-admin) is about to change their own pay. */
+const guardOwnSalary = (req, employeeIds) =>
+  assertNotOwnSalary({
+    role: req.user.role,
+    employeeIds,
+    findOwn: (ids) =>
+      prisma.employee.findFirst({
+        where: { organizationId: req.user.organizationId, userId: req.user.id, id: { in: ids } },
+        select: { id: true },
+      }),
+  });
 
 async function resolvePeriod(req) {
   let { month, year, batchId } = req.body || {};
@@ -20,6 +33,7 @@ async function resolvePeriod(req) {
 class PayrollController {
   async upsertSalaryStructure(req, res) {
     try {
+      await guardOwnSalary(req, [req.body?.employeeId]);
       const result = await payrollService.upsertSalaryStructure(
         req.user.organizationId,
         req.body,
@@ -46,6 +60,7 @@ class PayrollController {
 
   async bulkUpsertSalaryStructures(req, res) {
     try {
+      await guardOwnSalary(req, (Array.isArray(req.body?.entries) ? req.body.entries : []).map((entry) => entry?.employeeId));
       const result = await payrollService.bulkUpsertSalaryStructures(
         req.user.organizationId,
         req.body,
@@ -232,6 +247,7 @@ class PayrollController {
           .status(400)
           .json({ success: false, message: "status is required" });
       }
+      assertCanSetStatus(req.user.role, status);
       const result = await payrollService.updatePayslipStatus(
         req.user.organizationId,
         id,
@@ -307,6 +323,7 @@ class PayrollController {
 
   async recordSalaryRevision(req, res) {
     try {
+      await guardOwnSalary(req, [req.body?.employeeId]);
       const result = await payrollService.recordSalaryRevision(
         req.user.organizationId,
         req.body,

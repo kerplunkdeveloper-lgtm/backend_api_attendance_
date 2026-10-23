@@ -1,4 +1,5 @@
 const prisma = require("../config/database");
+const { WORKING_STATUSES } = require("../utils/employeeStatus");
 const { getOrgDateOnly } = require("./attendance.service");
 const policyService = require("./policy.service");
 const { getPayrollPeriod, resolveDayBasis, parseWorkingDays, classifyPayrollDays, computePermissionDeduction, buildCompanyLeaveMap, toIsoKey, round2 } = require("../utils/payrollCycle");
@@ -521,7 +522,7 @@ class PayrollService {
    */
   async calculateOrganizationPayroll(organizationId, month, year) {
     const employees = await prisma.employee.findMany({
-      where: { organizationId, status: "ACTIVE" },
+      where: { organizationId, status: { in: WORKING_STATUSES } },
       select: { id: true, employeeCode: true, firstName: true },
     });
 
@@ -580,7 +581,7 @@ class PayrollService {
     }
 
     const employees = await prisma.employee.findMany({
-      where: { organizationId, status: "ACTIVE" },
+      where: { organizationId, status: { in: WORKING_STATUSES } },
     });
 
     const generated = [];

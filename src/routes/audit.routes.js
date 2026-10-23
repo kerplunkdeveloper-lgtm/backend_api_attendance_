@@ -9,10 +9,11 @@ const router = express.Router();
 
 router.use(authenticate);
 
-// Get audit logs (Admins and Managers)
+// Audit details include the (redacted) request bodies, which carry salary and payroll figures,
+// so the log is for admins only.
 router.get(
   "/",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
   async (req, res) => {
     try {
       const result = await auditService.getAuditLogs(

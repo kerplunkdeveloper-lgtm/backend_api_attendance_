@@ -1,4 +1,5 @@
 const prisma = require("../config/database");
+const { WORKING_STATUSES } = require("../utils/employeeStatus");
 const { getOrgDateOnly } = require("./attendance.service");
 
 class ReportService {
@@ -10,7 +11,7 @@ class ReportService {
 
     const [allEmployees, attendances, approvedLeaves, org] = await Promise.all([
       prisma.employee.findMany({
-        where: { organizationId, status: "ACTIVE" },
+        where: { organizationId, status: { in: WORKING_STATUSES } },
         select: {
           id: true,
           firstName: true,
@@ -167,7 +168,7 @@ class ReportService {
 
     const [employees, attendances, leaves, org] = await Promise.all([
       prisma.employee.findMany({
-        where: { organizationId, status: "ACTIVE" },
+        where: { organizationId, status: { in: WORKING_STATUSES } },
         include: {
           department: { select: { name: true } },
           branch: { select: { name: true } },

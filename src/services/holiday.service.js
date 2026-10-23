@@ -1,8 +1,30 @@
 const prisma = require("../config/database");
+const { getOrgDateOnly } = require("./attendance.service");
+
 const getMidnightDate = (dateInput) => {
   const d = new Date(dateInput);
   d.setUTCHours(0, 0, 0, 0);
   return d;
+};
+
+const badRequest = (message) => {
+  const error = new Error(message);
+  error.statusCode = 400;
+  return error;
+};
+
+/** A real calendar date as UTC midnight (holidays are stored date-only). */
+const parseHolidayDate = (value) => {
+  const date = getMidnightDate(value);
+  if (Number.isNaN(date.getTime())) throw badRequest("Enter a valid holiday date.");
+  return date;
+};
+
+const cleanName = (value) => {
+  const name = String(value ?? "").trim();
+  if (!name) throw badRequest("Holiday name and date are required");
+  if (name.length > 120) throw badRequest("Holiday name must be 120 characters or fewer.");
+  return name;
 };
 
 class HolidayService {
@@ -17,8 +39,9 @@ class HolidayService {
     }
 
     const validTypes = ["GOVERNMENT", "COMPANY", "OPTIONAL"];
-    const holidayType = validTypes.includes(type.toUpperCase()) ? type.toUpperCase() : "GOVERNMENT";
-    const dateOnly = getMidnightDate(date);
+    const holidayType = validTypes.includes(String(type).toUpperCase()) ? String(type).toUpperCase() : "GOVERNMENT";
+    const dateOnly = parseHolidayDate(date);
+    const holidayName = cleanName(name);
 
     // If branchId is provided, ensure the branch belongs to this organization
     if (branchId) {
@@ -38,7 +61,7 @@ class HolidayService {
         organizationId,
         date: dateOnly,
         branchId: branchId || null,
-        name,
+        name: holidayName,
       },
     });
 
@@ -51,11 +74,11 @@ class HolidayService {
     return await prisma.holiday.create({
       data: {
         organizationId,
-        name: name.trim(),
+        name: holidayName,
         date: dateOnly,
         type: holidayType,
         branchId: branchId || null,
-        description: description ? description.trim() : null,
+        description: description ? String(description).trim() : null,
         isOptional: Boolean(isOptional || holidayType === "OPTIONAL"),
       },
       include: {
@@ -124,6 +147,11 @@ class HolidayService {
         resolvedBranchId = branchMap.get(branchId);
       } else if (branchName && branchMap.has(branchName.toLowerCase())) {
         resolvedBranchId = branchMap.get(branchName.toLowerCase());
+      } else if (branchName) {
+        // A typo such as "Mumbay" would otherwise make this an organization-wide holiday for every office.
+        results.skipped++;
+        results.errors.push(`Unknown branch '${branchName}' for '${name}'. Fix the branch name or leave it blank for all branches.`);
+        continue;
       }
 
       const holidayType = validTypes.includes(String(rawType).toUpperCase())
@@ -245,8 +273,8 @@ class HolidayService {
     const { name, date, type, branchId, description, isOptional } = data;
     const updateData = {};
 
-    if (name) updateData.name = name.trim();
-    if (date) updateData.date = getMidnightDate(date);
+    if (name) updateData.name = cleanName(name);
+    if (date) updateData.date = parseHolidayDate(date);
     if (type) {
       const validTypes = ["GOVERNMENT", "COMPANY", "OPTIONAL"];
       if (validTypes.includes(type.toUpperCase())) {
@@ -326,7 +354,7 @@ class HolidayService {
    * Get upcoming holidays for widgets & notifications
    */
   async getUpcomingHolidays(organizationId, branchId = null, limit = 5) {
-    const today = getMidnightDate(new Date());
+    const today = await getOrgDateOnly(organizationId);
 
     return await prisma.holiday.findMany({
       where: {

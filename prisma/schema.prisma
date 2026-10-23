@@ -124,6 +124,7 @@ model Organization {
   payslips             Payslip[]
   permissionRequests   PermissionRequest[]
   notifications        Notification[]
+  announcements        Announcement[]
   auditLogs            AuditLog[]
   employeeDevices      EmployeeDevice[]
   onboardingCandidates OnboardingCandidate[]
@@ -892,6 +893,23 @@ model Notification {
   @@index([userId, isRead])
   @@index([organizationId])
   @@index([userId, createdAt])
+}
+
+/// Company-wide notice board posts from HR or admins (policy changes, events, office closures).
+model Announcement {
+  id              String    @id @default(uuid())
+  organizationId  String
+  title           String
+  body            String    @db.Text
+  pinned          Boolean   @default(false)
+  expiresAt       DateTime?
+  createdByUserId String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
 }
 
 model AuditLog {

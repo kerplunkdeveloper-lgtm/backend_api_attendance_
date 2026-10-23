@@ -58,16 +58,26 @@ const lookupPlaceName = async (latitude, longitude) => {
 };
 
 const fallbackPunchLocation = ({ workMode, branchName } = {}) => {
-  if (workMode && WORK_MODE_LABELS[workMode]) return WORK_MODE_LABELS[workMode];
   if (branchName) return branchName;
-  return "Location not shared";
+  if (workMode && WORK_MODE_LABELS[workMode]) return WORK_MODE_LABELS[workMode];
+  return "Office";
 };
 
 const resolvePunchLocation = async ({ locationLabel, latitude, longitude, workMode, branchName } = {}) => {
+  // 1. If assigned or matched to an official branch, always use the branch name
+  if (branchName) return branchName;
+
+  // 2. Specific work mode (e.g. Work from home)
+  if (workMode && workMode !== "OFFICE" && WORK_MODE_LABELS[workMode]) {
+    return WORK_MODE_LABELS[workMode];
+  }
+
+  // 3. User-provided custom note or location label (filter out raw municipal ward strings like "Ward 62, Chennai, Tamil Nadu")
   const provided = typeof locationLabel === "string" ? locationLabel.trim() : "";
-  if (provided) return provided.slice(0, 180);
-  const lookedUp = await lookupPlaceName(latitude, longitude);
-  if (lookedUp) return lookedUp;
+  if (provided && !/^ward\s+\d+/i.test(provided)) {
+    return provided.slice(0, 180);
+  }
+
   return fallbackPunchLocation({ workMode, branchName });
 };
 

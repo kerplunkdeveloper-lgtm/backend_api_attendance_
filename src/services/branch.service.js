@@ -1,5 +1,6 @@
 const { assertBranchAvailable } = require("./entitlement.service");
 const prisma = require("../config/database");
+const { parseCoordinates, parseRadius } = require("../utils/branchValidation");
 
 /**
  * 1. POST /api/branches - Create Branch
@@ -11,6 +12,9 @@ const createBranch = async (organizationId, data) => {
     throw new Error("Branch name is required");
   }
 
+  const coordinates = parseCoordinates(latitude, longitude);
+  const radius = parseRadius(radiusMeters);
+
   return prisma.$transaction(async (tx) => {
     await assertBranchAvailable(organizationId, tx);
     return tx.branch.create({
@@ -18,9 +22,9 @@ const createBranch = async (organizationId, data) => {
         organizationId,
         name: name.trim(),
         address: address ? address.trim() : null,
-        latitude: latitude !== undefined && latitude !== null && latitude !== '' ? parseFloat(latitude) : null,
-        longitude: longitude !== undefined && longitude !== null && longitude !== '' ? parseFloat(longitude) : null,
-        radiusMeters: radiusMeters ? parseInt(radiusMeters, 10) : 200,
+        latitude: coordinates.latitude,
+        longitude: coordinates.longitude,
+        radiusMeters: radius,
       },
       include: {
         _count: {
@@ -88,15 +92,20 @@ const updateBranch = async (organizationId, branchId, data) => {
   }
 
   const { name, address, latitude, longitude, radiusMeters } = data;
+  // Validate the values the branch will end up with, so changing one coordinate cannot leave a half-set location.
+  const coordinates = parseCoordinates(
+    latitude !== undefined ? latitude : branch.latitude,
+    longitude !== undefined ? longitude : branch.longitude,
+  );
+  const radius = radiusMeters !== undefined ? parseRadius(radiusMeters) : undefined;
 
   return await prisma.branch.update({
     where: { id: branchId },
     data: {
       ...(name ? { name: name.trim() } : {}),
       ...(address !== undefined ? { address: address ? address.trim() : null } : {}),
-      ...(latitude !== undefined ? { latitude: latitude !== null && latitude !== '' ? parseFloat(latitude) : null } : {}),
-      ...(longitude !== undefined ? { longitude: longitude !== null && longitude !== '' ? parseFloat(longitude) : null } : {}),
-      ...(radiusMeters !== undefined ? { radiusMeters: parseInt(radiusMeters, 10) } : {}),
+      ...(latitude !== undefined || longitude !== undefined ? { latitude: coordinates.latitude, longitude: coordinates.longitude } : {}),
+      ...(radius !== undefined ? { radiusMeters: radius } : {}),
     },
     include: {
       _count: {
@@ -116,6 +125,15 @@ const deleteBranch = async (organizationId, branchId) => {
 
   if (!branch) {
     throw new Error("Branch not found in this organization");
+  }
+
+  // Removing a branch would drop everyone assigned to it out of their geofence, so check-in would
+  // quietly stop being location-checked. Require an explicit reassignment first.
+  const assigned = await prisma.employee.count({ where: { branchId, organizationId } });
+  if (assigned > 0) {
+    const error = new Error(`${assigned} employee${assigned === 1 ? "" : "s"} ${assigned === 1 ? "is" : "are"} still assigned to this branch. Move them to another branch before deleting it.`);
+    error.statusCode = 409;
+    throw error;
   }
 
   return await prisma.$transaction(async (tx) => {

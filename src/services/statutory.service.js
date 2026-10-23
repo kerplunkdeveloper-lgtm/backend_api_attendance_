@@ -1,19 +1,17 @@
 const prisma = require("../config/database");
+const { WORKING_STATUSES } = require("../utils/employeeStatus");
+const { toCsv } = require("../utils/csv");
 const { currentFinancialYear, fyBounds, computeAnnualTax } = require("../utils/incomeTax");
 
 function num(v) {
   return Number(v || 0);
 }
 
-function csvEscape(v) {
-  const s = v == null ? "" : String(v);
-  if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
+/** Names and organization names are user-entered and end up inside stored HTML, so they must be escaped. */
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
 }
 
-function toCsv(headers, rows) {
-  return [headers.join(","), ...rows.map((r) => r.map(csvEscape).join(","))].join("\n");
-}
 
 async function resolveEmployee(organizationId, user) {
   if (user.employee?.id) return user.employee.id;
@@ -131,10 +129,10 @@ h1{font-size:20px;margin:0}table{width:100%;border-collapse:collapse;margin-top:
 td,th{border:1px solid #e2e8f0;padding:8px;text-align:left;font-size:13px}
 .muted{color:#64748b;font-size:12px}</style></head><body>
 <h1>Form 16 — Part B (WorkPluse)</h1>
-<p class="muted">${e.organizationName || "Organization"} · FY ${estimate.financialYear} · ${t.financialYearNote} · ${t.regime} regime</p>
+<p class="muted">${escapeHtml(e.organizationName || "Organization")} · FY ${estimate.financialYear} · ${t.financialYearNote} · ${t.regime} regime</p>
 <table>
-<tr><th>Employee</th><td>${e.name} (${e.employeeCode || ""})</td></tr>
-<tr><th>PAN</th><td>${e.panNumber || "—"}</td></tr>
+<tr><th>Employee</th><td>${escapeHtml(e.name)} (${escapeHtml(e.employeeCode || "")})</td></tr>
+<tr><th>PAN</th><td>${escapeHtml(e.panNumber || "—")}</td></tr>
 <tr><th>Gross salary</th><td>₹${t.annualGross.toLocaleString("en-IN")}</td></tr>
 <tr><th>Standard deduction</th><td>₹${t.standardDeduction.toLocaleString("en-IN")}</td></tr>
 <tr><th>Total exemptions / deductions</th><td>₹${t.exemptions.toLocaleString("en-IN")}</td></tr>
@@ -145,7 +143,7 @@ td,th{border:1px solid #e2e8f0;padding:8px;text-align:left;font-size:13px}
 <tr><th>Total tax</th><td>₹${t.totalTax.toLocaleString("en-IN")}</td></tr>
 <tr><th>TDS deducted</th><td>₹${t.tdsDeducted.toLocaleString("en-IN")}</td></tr>
 <tr><th>Tax payable / (refund)</th><td>₹${t.taxPayable.toLocaleString("en-IN")}</td></tr>
-<tr><th>Declaration regime</th><td>${d.regime} · ${d.status}</td></tr>
+<tr><th>Declaration regime</th><td>${escapeHtml(d.regime)} · ${escapeHtml(d.status)}</td></tr>
 </table>
 <p class="muted">Computer-generated Form 16 summary for payroll records. File ITR on the Income Tax portal for the official certificate.</p>
 </body></html>`;
@@ -197,7 +195,7 @@ async function generateForm16(organizationId, employeeId, financialYear) {
 async function generateForm16Batch(organizationId, financialYear) {
   const fy = financialYear || currentFinancialYear();
   const employees = await prisma.employee.findMany({
-    where: { organizationId, status: "ACTIVE" },
+    where: { organizationId, status: { in: WORKING_STATUSES } },
     select: { id: true },
   });
   const results = [];
@@ -215,7 +213,8 @@ async function monthlyTdsForEmployee(organizationId, employeeId) {
   try {
     const estimate = await estimateForEmployee(organizationId, employeeId);
     return estimate.tax.monthlyTds || 0;
-  } catch {
+  } catch (err) {
+    console.warn(`[Statutory] TDS estimate failed for employee ${employeeId}; deducting 0 this month:`, err.message);
     return 0;
   }
 }
@@ -270,12 +269,14 @@ async function exportPfEcr(organizationId, month, year, userId) {
   const slips = await listPayslipsForMonth(organizationId, month, year);
   const lines = slips.map((p) => {
     const e = p.employee;
-    const name = `${e.firstName} ${e.lastName || ""}`.trim();
+    const name = `${e.firstName} ${e.lastName || ""}`.trim().replace(/#/g, " ");
     const gross = num(p.grossSalary);
     const epfWage = Math.min(num(p.baseSalary), 15000);
     const eePf = num(p.pfDeduction);
     const erPf = eePf;
     const eps = Math.round(epfWage * 0.0833);
+    // The employer's 12% is split into EPS (8.33%, wage capped at 15,000) and the EPF difference.
+    const epfEpsDiff = Math.max(0, erPf - eps);
     return [
       e.uanNumber || "",
       name,
@@ -285,7 +286,7 @@ async function exportPfEcr(organizationId, month, year, userId) {
       epfWage,
       eePf,
       eps,
-      Math.round(epfWage * 0.005),
+      epfEpsDiff,
       0,
       0,
     ].join("#");
@@ -297,7 +298,9 @@ async function exportPfEcr(organizationId, month, year, userId) {
 }
 
 async function exportEsi(organizationId, month, year, userId) {
-  const slips = await listPayslipsForMonth(organizationId, month, year);
+  const allSlips = await listPayslipsForMonth(organizationId, month, year);
+  // Above the wage ceiling an employee is outside ESI: no deduction, so no employer share either.
+  const slips = allSlips.filter((p) => num(p.esiDeduction) > 0);
   const headers = ["IP Number", "Name", "Employee Code", "Days", "Wages", "Employee ESI", "Employer ESI"];
   const rows = slips.map((p) => {
     const e = p.employee;
@@ -368,6 +371,8 @@ async function getExport(organizationId, id) {
 }
 
 module.exports = {
+  escapeHtml,
+  form16Html,
   currentFinancialYear,
   resolveEmployee,
   getOrCreateDeclaration,

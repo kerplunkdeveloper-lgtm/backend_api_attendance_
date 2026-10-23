@@ -1,4 +1,5 @@
 const prisma = require("../config/database");
+const { WORKING_STATUSES } = require("../utils/employeeStatus");
 const { verifyGeofence, officeOnlyRejection } = require("../utils/geofence");
 
 // Work modes that are, by definition, away from the office. They are exempt
@@ -1214,7 +1215,7 @@ const getLiveToday = async (organizationId) => {
 
   const [employees, attendances] = await Promise.all([
     prisma.employee.findMany({
-      where: { organizationId, status: "ACTIVE" },
+      where: { organizationId, status: { in: WORKING_STATUSES } },
       select: {
         id: true,
         firstName: true,
@@ -1365,7 +1366,7 @@ const getAttendanceSummary = async (organizationId, targetDate, branchId = null)
     date = getLocalDateOnly(new Date(), timezone);
   }
 
-  const empWhere = { organizationId, status: "ACTIVE" };
+  const empWhere = { organizationId, status: { in: WORKING_STATUSES } };
   const attWhere = { organizationId, date };
 
   if (branchId && branchId !== "ALL" && branchId !== "") {

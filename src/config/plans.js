@@ -201,11 +201,18 @@ const getPlan = (name) => PLAN_CONFIGS[String(name || "").toUpperCase()] || null
 
 const isPaidPlan = (name) => PAID_PLANS.has(String(name || "").toUpperCase());
 
+/**
+ * End of a billing period. Adding months with setUTCMonth overflows (31 Jan + 1 month became 3 Mar),
+ * so the day is clamped to the last day of the target month (31 Jan + 1 month = 28 Feb).
+ */
 const addBillingPeriod = (from, billingCycle) => {
   const start = new Date(from);
-  const end = new Date(start.getTime());
   const months = String(billingCycle).toUpperCase() === "ANNUAL" ? 12 : 1;
+  const end = new Date(start.getTime());
+  end.setUTCDate(1);
   end.setUTCMonth(end.getUTCMonth() + months);
+  const lastDay = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth() + 1, 0)).getUTCDate();
+  end.setUTCDate(Math.min(start.getUTCDate(), lastDay));
   return end;
 };
 

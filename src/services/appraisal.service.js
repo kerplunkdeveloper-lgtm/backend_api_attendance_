@@ -1,22 +1,39 @@
 const prisma = require("../config/database");
+const { WORKING_STATUSES } = require("../utils/employeeStatus");
+
+const fail = (message, statusCode = 400) => {
+  const err = new Error(message);
+  err.statusCode = statusCode;
+  throw err;
+};
+
+/** Scores are whole numbers from 1 to 5 (the UI scale). Blank or 0 means "not entered" and keeps the stored value. */
+const parseScore = (value, current) => {
+  if (value === undefined || value === null || value === "" || Number(value) === 0) return current;
+  const score = Number(value);
+  if (!Number.isInteger(score) || score < 1 || score > 5) fail("Score must be a whole number from 1 to 5.");
+  return score;
+};
 
 async function createCycle(organizationId, payload) {
   if (!payload.name || !payload.startDate || !payload.endDate) {
-    const err = new Error("name, startDate and endDate are required");
-    err.statusCode = 400;
-    throw err;
+    fail("name, startDate and endDate are required");
   }
+  const start = new Date(payload.startDate);
+  const end = new Date(payload.endDate);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) fail("Enter valid start and end dates.");
+  if (end < start) fail("The cycle cannot end before it starts.");
   const cycle = await prisma.appraisalCycle.create({
     data: {
       organizationId,
       name: String(payload.name).trim(),
-      startDate: new Date(payload.startDate),
-      endDate: new Date(payload.endDate),
+      startDate: start,
+      endDate: end,
       status: "OPEN",
     },
   });
   const employees = await prisma.employee.findMany({
-    where: { organizationId, status: "ACTIVE" },
+    where: { organizationId, status: { in: WORKING_STATUSES } },
     select: { id: true },
   });
   if (employees.length) {
@@ -79,10 +96,12 @@ async function submitSelf(organizationId, userId, reviewId, payload) {
     err.statusCode = 404;
     throw err;
   }
+  // A finished review is the record of the appraisal; resubmitting a self-score must not reopen it.
+  if (review.status === "COMPLETED") fail("This review is already completed and can no longer be changed.", 409);
   return prisma.appraisalReview.update({
     where: { id: reviewId },
     data: {
-      selfScore: payload.selfScore != null ? Number(payload.selfScore) : review.selfScore,
+      selfScore: parseScore(payload.selfScore, review.selfScore),
       selfComments: payload.selfComments != null ? String(payload.selfComments) : review.selfComments,
       status: "SELF_SUBMITTED",
     },
@@ -91,17 +110,21 @@ async function submitSelf(organizationId, userId, reviewId, payload) {
 }
 
 async function submitManager(organizationId, userId, reviewId, payload) {
-  const review = await prisma.appraisalReview.findFirst({ where: { id: reviewId, organizationId } });
+  const review = await prisma.appraisalReview.findFirst({
+    where: { id: reviewId, organizationId },
+    include: { employee: { select: { userId: true } } },
+  });
   if (!review) {
     const err = new Error("Review not found");
     err.statusCode = 404;
     throw err;
   }
+  if (review.employee?.userId && review.employee.userId === userId) fail("You cannot score your own appraisal.", 403);
   return prisma.appraisalReview.update({
     where: { id: reviewId },
     data: {
       reviewerUserId: userId,
-      managerScore: payload.managerScore != null ? Number(payload.managerScore) : review.managerScore,
+      managerScore: parseScore(payload.managerScore, review.managerScore),
       managerComments: payload.managerComments != null ? String(payload.managerComments) : review.managerComments,
       status: "COMPLETED",
     },

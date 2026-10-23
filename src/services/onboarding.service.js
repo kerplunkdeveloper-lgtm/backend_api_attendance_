@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const prisma = require("../config/database");
+const { validateIdentityFields, parsePastDate } = require("../utils/employeeValidation");
 const { uploadImage, uploadBuffer, signedDeliveryUrl, isSensitiveDocumentType } = require("../config/cloudinary");
 const emailService = require("./email.service");
 const whatsappService = require("./whatsapp.service");
@@ -242,6 +243,7 @@ class OnboardingService {
   async updateCandidateProfile(token, profileData) {
     const candidate = await prisma.onboardingCandidate.findUnique({
       where: { token },
+      include: { documents: { select: { id: true } } },
     });
 
     assertPortalCandidate(candidate);
@@ -268,8 +270,17 @@ class OnboardingService {
       aadhaarNumber,
     } = profileData;
 
+    // These values are copied into the employee record on activation, and later into PF, ESI and bank files.
+    const identity = validateIdentityFields({
+      panNumber,
+      aadhaarNumber,
+      bankAccountNumber: accountNumber,
+      bankIfsc: ifscCode,
+    });
+    const birthDate = parsePastDate("Date of birth", dateOfBirth);
+
     const updateFields = {};
-    if (dateOfBirth) updateFields.dateOfBirth = new Date(dateOfBirth);
+    if (birthDate) updateFields.dateOfBirth = birthDate;
     if (gender !== undefined) updateFields.gender = gender ? String(gender).trim() : null;
     if (bloodGroup !== undefined) updateFields.bloodGroup = bloodGroup ? String(bloodGroup).trim() : null;
     if (maritalStatus !== undefined) updateFields.maritalStatus = maritalStatus ? String(maritalStatus).trim() : null;
@@ -278,14 +289,14 @@ class OnboardingService {
     if (emergencyContactName !== undefined) updateFields.emergencyContactName = emergencyContactName ? String(emergencyContactName).trim() : null;
     if (emergencyContactPhone !== undefined) updateFields.emergencyContactPhone = emergencyContactPhone ? String(emergencyContactPhone).trim() : null;
     if (bankName !== undefined) updateFields.bankName = bankName ? String(bankName).trim() : null;
-    if (accountNumber !== undefined) updateFields.accountNumber = accountNumber ? String(accountNumber).trim() : null;
-    if (ifscCode !== undefined) updateFields.ifscCode = ifscCode ? String(ifscCode).trim().toUpperCase() : null;
-    if (panNumber !== undefined) updateFields.panNumber = panNumber ? String(panNumber).trim().toUpperCase() : null;
-    if (aadhaarNumber !== undefined) updateFields.aadhaarNumber = aadhaarNumber ? String(aadhaarNumber).trim() : null;
+    if (identity.bankAccountNumber !== undefined) updateFields.accountNumber = identity.bankAccountNumber;
+    if (identity.bankIfsc !== undefined) updateFields.ifscCode = identity.bankIfsc;
+    if (identity.panNumber !== undefined) updateFields.panNumber = identity.panNumber;
+    if (identity.aadhaarNumber !== undefined) updateFields.aadhaarNumber = identity.aadhaarNumber;
 
-    // Advance status from INVITED to PROFILE_SUBMITTED if initial submission
+    // Profile first submission. If documents were already uploaded, both halves are in: go to HR review.
     if (candidate.status === "INVITED") {
-      updateFields.status = "PROFILE_SUBMITTED";
+      updateFields.status = (candidate.documents || []).length > 0 ? "UNDER_HR_REVIEW" : "PROFILE_SUBMITTED";
     }
 
     return await prisma.onboardingCandidate.update({
@@ -409,8 +420,8 @@ class OnboardingService {
       },
     });
 
-    // Advance candidate status to UNDER_HR_REVIEW if profile was already submitted
-    if (["INVITED", "PROFILE_SUBMITTED"].includes(candidate.status)) {
+    // Advance to HR review only once the profile is in. A document alone must not skip the profile step.
+    if (candidate.status === "PROFILE_SUBMITTED") {
       await prisma.onboardingCandidate.update({
         where: { id: candidate.id },
         data: { status: "UNDER_HR_REVIEW" },

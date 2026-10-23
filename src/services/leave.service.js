@@ -1,4 +1,5 @@
 const { assertCanReview, visibleToReviewer } = require("../utils/approvalChain");
+const { WORKING_STATUSES } = require("../utils/employeeStatus");
 const prisma = require("../config/database");
 const { parsePagination } = require("../utils/pagination");
 const { getTodayDateOnly, getOrgDateOnly } = require("./attendance.service");
@@ -825,7 +826,7 @@ class LeaveService {
     const cap = Math.max(0, Number(maxDays) || 15);
     const types = await prisma.leaveType.findMany({ where: { organizationId, isPaid: true } });
     const employees = await prisma.employee.findMany({
-      where: { organizationId, status: "ACTIVE" },
+      where: { organizationId, status: { in: WORKING_STATUSES } },
       select: { id: true },
     });
     let updated = 0;

@@ -1,4 +1,6 @@
 const prisma = require("../config/database");
+const { WORKING_STATUSES } = require("../utils/employeeStatus");
+const { assetRules } = require("../utils/assetRules");
 const notificationService = require("./notification.service");
 
 const CATEGORY_PREFIXES = {
@@ -254,6 +256,8 @@ class AssetService {
       }
     }
 
+    const checked = assetRules.validateDetails({ purchaseDate, purchaseCost, warrantyExpiry });
+
     let status = "AVAILABLE";
     let assignedDate = null;
     let assignedCondition = null;
@@ -267,6 +271,7 @@ class AssetService {
         error.statusCode = 404;
         throw error;
       }
+      assetRules.assertWorking(emp, WORKING_STATUSES);
       status = "ASSIGNED";
       assignedDate = new Date();
       assignedCondition = condition;
@@ -281,9 +286,9 @@ class AssetService {
         brand: brand ? brand.trim() : null,
         modelNumber: modelNumber ? modelNumber.trim() : null,
         serialNumber: serialNumber ? serialNumber.trim() : null,
-        purchaseDate: purchaseDate ? new Date(purchaseDate) : null,
-        purchaseCost: purchaseCost ? Number(purchaseCost) : null,
-        warrantyExpiry: warrantyExpiry ? new Date(warrantyExpiry) : null,
+        purchaseDate: checked.purchaseDate ?? null,
+        purchaseCost: checked.purchaseCost ?? null,
+        warrantyExpiry: checked.warrantyExpiry ?? null,
         status,
         condition,
         specifications: specifications || null,
@@ -357,6 +362,9 @@ class AssetService {
       notes,
     } = payload;
 
+    const checked = assetRules.validateDetails({ purchaseDate, purchaseCost, warrantyExpiry });
+    if (status !== undefined) assetRules.assertStatusChange(asset, status);
+
     const updated = await prisma.asset.update({
       where: { id: assetId },
       data: {
@@ -365,9 +373,9 @@ class AssetService {
         brand: brand !== undefined ? brand : asset.brand,
         modelNumber: modelNumber !== undefined ? modelNumber : asset.modelNumber,
         serialNumber: serialNumber !== undefined ? serialNumber : asset.serialNumber,
-        purchaseDate: purchaseDate !== undefined ? (purchaseDate ? new Date(purchaseDate) : null) : asset.purchaseDate,
-        purchaseCost: purchaseCost !== undefined ? (purchaseCost ? Number(purchaseCost) : null) : asset.purchaseCost,
-        warrantyExpiry: warrantyExpiry !== undefined ? (warrantyExpiry ? new Date(warrantyExpiry) : null) : asset.warrantyExpiry,
+        purchaseDate: purchaseDate !== undefined ? checked.purchaseDate : asset.purchaseDate,
+        purchaseCost: purchaseCost !== undefined ? checked.purchaseCost : asset.purchaseCost,
+        warrantyExpiry: warrantyExpiry !== undefined ? checked.warrantyExpiry : asset.warrantyExpiry,
         condition: condition !== undefined ? condition : asset.condition,
         status: status !== undefined ? status : asset.status,
         specifications: specifications !== undefined ? specifications : asset.specifications,
@@ -448,6 +456,9 @@ class AssetService {
       throw error;
     }
 
+    assetRules.assertAssignable(asset);
+    assetRules.assertWorking(employee, WORKING_STATUSES);
+
     const cond = conditionOnAssign || asset.condition;
 
     // Update asset
@@ -510,6 +521,8 @@ class AssetService {
       recoveryCharge = 0,
       remarks,
     } = payload;
+
+    const returnInput = assetRules.validateReturn({ conditionOnReturn, recoveryCharge });
 
     const asset = await prisma.asset.findFirst({
       where: { id: assetId, organizationId },
@@ -595,16 +608,18 @@ class AssetService {
       );
 
       if (itClearance) {
+        // Dues accumulate: a damaged laptop returned earlier must still be charged after the phone comes back.
+        const totalDue = assetRules.addDue(itClearance.dueAmount, returnInput.recoveryCharge);
         if (remainingAssetsCount === 0) {
           // All assets returned!
           await prisma.employeeClearance.update({
             where: { id: itClearance.id },
             data: {
-              status: recoveryCharge > 0 ? "RECOVERABLE_DUE" : "CLEARED",
+              status: totalDue > 0 ? "RECOVERABLE_DUE" : "CLEARED",
               clearedAt: new Date(),
               clearedBy: returnedToUser?.id || null,
-              clearanceNotes: `All assets returned. ${asset.assetCode} returned in ${conditionOnReturn} condition.${recoveryCharge > 0 ? ` Damage recovery: ₹${recoveryCharge}` : ""}`,
-              dueAmount: recoveryCharge > 0 ? Number(recoveryCharge) : 0,
+              clearanceNotes: `All assets returned. ${asset.assetCode} returned in ${conditionOnReturn} condition.${returnInput.recoveryCharge > 0 ? ` Damage recovery: ₹${returnInput.recoveryCharge}` : ""}${totalDue > returnInput.recoveryCharge ? ` Total recovery due: ₹${totalDue}` : ""}`,
+              dueAmount: totalDue,
             },
           });
         } else {
@@ -614,7 +629,7 @@ class AssetService {
             data: {
               status: "IN_PROGRESS",
               clearanceNotes: `Asset ${asset.assetCode} returned. ${remainingAssetsCount} asset(s) still pending return.`,
-              dueAmount: recoveryCharge > 0 ? Number(recoveryCharge) : Number(itClearance.dueAmount || 0),
+              dueAmount: totalDue,
             },
           });
         }
@@ -668,6 +683,9 @@ class AssetService {
       error.statusCode = 404;
       throw error;
     }
+
+    assetRules.assertTransferable(asset, targetEmployee);
+    assetRules.assertWorking(targetEmployee, WORKING_STATUSES);
 
     const fromEmployeeId = asset.assignedToId;
     const cond = condition || asset.condition;

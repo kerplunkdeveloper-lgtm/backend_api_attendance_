@@ -1,5 +1,6 @@
 const prisma = require("../config/database");
 const { getScheduledDurationMinutes } = require("../utils/shiftCalculator");
+const { assertTime, normalizeWorkingDays } = require("../utils/shiftValidation");
 
 const normalizeMinutes = (value, fallback = 0) => {
   const parsed = Number(value);
@@ -34,25 +35,28 @@ const createShift = async (organizationId, data) => {
   const { name, startTime, endTime, graceMinutes, breakMinutes = 0, lunchMinutes = 0, breakIncluded = true, lunchIncluded = true, workingDays = "1,2,3,4,5,6" } = data;
   if (!name || !name.trim()) throw new Error("Shift name is required");
   if (!startTime || !endTime) throw new Error("Shift start time and end time are required (e.g. 09:00, 18:00)");
+  const cleanStart = assertTime("Start time", startTime);
+  const cleanEnd = assertTime("End time", endTime);
+  const cleanWorkingDays = normalizeWorkingDays(workingDays || "1,2,3,4,5,6");
 
   const normalizedBreakMinutes = normalizeMinutes(breakMinutes);
   const normalizedLunchMinutes = normalizeMinutes(lunchMinutes);
   const effectiveBreakMinutes = breakIncluded !== false ? normalizedBreakMinutes : 0;
   const effectiveLunchMinutes = lunchIncluded !== false ? normalizedLunchMinutes : 0;
-  validateShiftPauseConfig(startTime.trim(), endTime.trim(), effectiveBreakMinutes, effectiveLunchMinutes);
+  validateShiftPauseConfig(cleanStart, cleanEnd, effectiveBreakMinutes, effectiveLunchMinutes);
 
   const shift = await prisma.shift.create({
     data: {
       organizationId,
       name: name.trim(),
-      startTime: startTime.trim(),
-      endTime: endTime.trim(),
+      startTime: cleanStart,
+      endTime: cleanEnd,
       graceMinutes: graceMinutes !== undefined ? normalizeMinutes(graceMinutes, 10) : 10,
       breakMinutes: normalizedBreakMinutes,
       lunchMinutes: normalizedLunchMinutes,
       breakIncluded: breakIncluded !== false,
       lunchIncluded: lunchIncluded !== false,
-      workingDays: workingDays ? workingDays.trim() : "1,2,3,4,5,6",
+      workingDays: cleanWorkingDays,
     },
     include: { _count: { select: { employees: true } } },
   });
@@ -91,8 +95,9 @@ const updateShift = async (organizationId, shiftId, data) => {
   if (!shift) throw new Error("Shift not found in this organization");
 
   const { name, startTime, endTime, graceMinutes, breakMinutes, lunchMinutes, breakIncluded, lunchIncluded, workingDays } = data;
-  const nextStartTime = startTime ? startTime.trim() : shift.startTime;
-  const nextEndTime = endTime ? endTime.trim() : shift.endTime;
+  const nextStartTime = startTime ? assertTime("Start time", startTime) : shift.startTime;
+  const nextEndTime = endTime ? assertTime("End time", endTime) : shift.endTime;
+  const nextWorkingDays = workingDays ? normalizeWorkingDays(workingDays) : undefined;
   const nextBreakIncluded = breakIncluded !== undefined ? breakIncluded !== false : shift.breakIncluded;
   const nextLunchIncluded = lunchIncluded !== undefined ? lunchIncluded !== false : shift.lunchIncluded;
   const nextBreakMinutes = breakMinutes !== undefined ? normalizeMinutes(breakMinutes) : shift.breakMinutes;
@@ -110,7 +115,7 @@ const updateShift = async (organizationId, shiftId, data) => {
       ...(lunchMinutes !== undefined ? { lunchMinutes: nextLunchMinutes } : {}),
       ...(breakIncluded !== undefined ? { breakIncluded: nextBreakIncluded } : {}),
       ...(lunchIncluded !== undefined ? { lunchIncluded: nextLunchIncluded } : {}),
-      ...(workingDays ? { workingDays: workingDays.trim() } : {}),
+      ...(nextWorkingDays ? { workingDays: nextWorkingDays } : {}),
     },
     include: { _count: { select: { employees: true } } },
   });
@@ -120,6 +125,14 @@ const updateShift = async (organizationId, shiftId, data) => {
 const deleteShift = async (organizationId, shiftId) => {
   const shift = await prisma.shift.findFirst({ where: { id: shiftId, organizationId } });
   if (!shift) throw new Error("Shift not found in this organization");
+  // Deleting under people would silently drop them onto the default schedule, changing how their
+  // lateness and payroll days are classified. Make that an explicit reassignment instead.
+  const assigned = await prisma.employee.count({ where: { shiftId, organizationId } });
+  if (assigned > 0) {
+    const error = new Error(`${assigned} employee${assigned === 1 ? "" : "s"} still use this shift. Assign them to another shift before deleting it.`);
+    error.statusCode = 409;
+    throw error;
+  }
   return prisma.$transaction(async (tx) => {
     await tx.employee.updateMany({ where: { shiftId }, data: { shiftId: null } });
     await tx.attendance.updateMany({ where: { shiftId }, data: { shiftId: null } });
