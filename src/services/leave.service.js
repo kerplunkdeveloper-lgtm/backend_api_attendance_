@@ -1,5 +1,6 @@
 const { assertCanReview, visibleToReviewer } = require("../utils/approvalChain");
 const prisma = require("../config/database");
+const { parsePagination } = require("../utils/pagination");
 const { getTodayDateOnly, getOrgDateOnly } = require("./attendance.service");
 const holidayService = require("./holiday.service");
 const emailService = require("./email.service");
@@ -446,8 +447,7 @@ class LeaveService {
       where.employeeId = employeeId;
     }
 
-    const take = parseInt(limit) || 50;
-    const skip = ((parseInt(page) || 1) - 1) * take;
+    const { limit: take, skip, page: curPage } = parsePagination({ page, limit }, { defaultLimit: 50 });
 
     const [records, total] = await Promise.all([
       prisma.leaveRequest.findMany({
@@ -471,7 +471,7 @@ class LeaveService {
       prisma.leaveRequest.count({ where }),
     ]);
 
-    return { records, total, page: parseInt(page), totalPages: Math.ceil(total / take) };
+    return { records, total, page: curPage, totalPages: Math.ceil(total / take) };
   }
 
   /**

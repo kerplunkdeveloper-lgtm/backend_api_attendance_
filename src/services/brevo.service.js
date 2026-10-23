@@ -8,7 +8,7 @@ class BrevoEmailService {
   constructor() {
     this.apiKey = (process.env.BREVO_API_KEY || "").trim();
     this.fromEmail = process.env.BREVO_FROM_EMAIL || "onboarding@workpulse.com";
-    this.fromName = process.env.BREVO_FROM_NAME || "WorkPulse";
+    this.fromName = process.env.BREVO_FROM_NAME || "WorkPluse";
 
     if (!this.apiKey) {
       console.warn("[BrevoEmailService] No BREVO_API_KEY provided.");
@@ -52,8 +52,8 @@ class BrevoEmailService {
         body: JSON.stringify({
           sender: { email: this.fromEmail, name: this.fromName },
           to: sanitizedRecipients,
-          subject: subject || "WorkPulse Notification",
-          htmlContent: html || (text ? `<p>${text}</p>` : "<p>WorkPulse Notification</p>"),
+          subject: subject || "WorkPluse Notification",
+          htmlContent: html || (text ? `<p>${text}</p>` : "<p>WorkPluse Notification</p>"),
           ...(text ? { textContent: text } : {}),
           ...(attachments.length ? { attachment: attachments } : {}),
         }),

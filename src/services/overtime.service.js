@@ -1,4 +1,5 @@
 const prisma = require("../config/database");
+const { parsePagination } = require("../utils/pagination");
 const { getOrgDateOnly } = require("./attendance.service");
 const { assertCanReview, visibleToReviewer } = require("../utils/approvalChain");
 const webhookService = require("./webhook.service");
@@ -237,8 +238,7 @@ class OvertimeService {
     if (status && status !== "ALL") where.status = status;
     if (employeeId) where.employeeId = employeeId;
 
-    const take = parseInt(limit) || 50;
-    const skip = ((parseInt(page) || 1) - 1) * take;
+    const { limit: take, skip, page: curPage } = parsePagination({ page, limit }, { defaultLimit: 50 });
 
     const [records, total] = await Promise.all([
       prisma.overtimeRequest.findMany({
@@ -254,7 +254,7 @@ class OvertimeService {
       prisma.overtimeRequest.count({ where }),
     ]);
 
-    return { records, total, page: parseInt(page), totalPages: Math.ceil(total / take) };
+    return { records, total, page: curPage, totalPages: Math.ceil(total / take) };
   }
 
   /**

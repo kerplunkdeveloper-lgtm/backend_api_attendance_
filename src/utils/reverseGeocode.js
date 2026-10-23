@@ -45,7 +45,7 @@ const lookupPlaceName = async (latitude, longitude) => {
     const response = await fetch(url, {
       headers: {
         Accept: "application/json",
-        "User-Agent": "WorkPulse/1.0 (attendance punch locations)",
+        "User-Agent": "WorkPluse/1.0 (attendance punch locations)",
       },
       signal: AbortSignal.timeout(3500),
     });

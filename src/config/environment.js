@@ -59,10 +59,10 @@ const validateEnvironment = () => {
   requiredOneOf(["REFRESH_TOKEN_SECRET", "JWT_REFRESH_SECRET", "JWT_SECRET"]);
   requiredOneOf(["RESET_PASSWORD_SECRET", "JWT_SECRET"]);
 
-  // Database â€” direct URL needed for Prisma migrations over pooled Neon
+  // Database — direct URL needed for Prisma migrations over pooled Neon
   requiredOneOf(["DIRECT_URL", "DATABASE_URL"]);
 
-  // File storage â€” missing this makes all uploads fail silently
+  // File storage — missing this makes all uploads fail silently
   requiredOneOf(["CLOUDINARY_CLOUD_NAME"]);
   requiredOneOf(["CLOUDINARY_API_KEY"]);
   requiredOneOf(["CLOUDINARY_API_SECRET"]);

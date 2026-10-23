@@ -34,7 +34,7 @@ const evaluateEntitlement = (org, now = new Date()) => {
       state: "SUSPENDED",
       allowApp: false,
       code: "ACCOUNT_SUSPENDED",
-      message: "This workspace has been suspended. Please contact WorkPulse support.",
+      message: "This workspace has been suspended. Please contact WorkPluse support.",
     };
   }
 
@@ -120,7 +120,7 @@ const evaluateEntitlement = (org, now = new Date()) => {
     state: "UNKNOWN",
     allowApp: false,
     code: "SUBSCRIPTION_UNKNOWN",
-    message: "We could not confirm your subscription. Open billing or contact WorkPulse support.",
+    message: "We could not confirm your subscription. Open billing or contact WorkPluse support.",
   };
 };
 

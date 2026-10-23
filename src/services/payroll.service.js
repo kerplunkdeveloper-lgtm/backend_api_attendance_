@@ -982,7 +982,7 @@ class PayrollService {
       where: { organizationId },
     });
 
-    const companyDisplayName = template?.companyName || payslip.organization.name || "WorkPulse Enterprise";
+    const companyDisplayName = template?.companyName || payslip.organization.name || "WorkPluse Enterprise";
     const companyDisplayAddress = template?.addressLine1
       ? `${template.addressLine1}${template.addressLine2 ? ", " + template.addressLine2 : ""}`
       : (payslip.employee.branch?.address || "Corporate Headquarters, Cyber City, Phase II");

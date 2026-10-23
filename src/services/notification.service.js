@@ -14,6 +14,9 @@ const {
   isAfterShiftEndWindow,
 } = require("../utils/reminderWindows");
 
+const END_OF_DAY_MINUTES = 23 * 60;
+const isEndOfDay = (now, timeZone) => getLocalMinutesOfDay(now, timeZone) >= END_OF_DAY_MINUTES;
+
 class NotificationService {
   /**
    * Create an in-app notification for a user
@@ -86,14 +89,6 @@ class NotificationService {
       where: { userId, organizationId, isRead: false },
       data: { isRead: true },
     });
-  }
-
-  /**
-   * Helper: Get start of today (UTC or local normalized date)
-   */
-  getStartOfToday() {
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
   }
 
   /**
@@ -345,14 +340,11 @@ class NotificationService {
    */
   async evaluateScheduledReminders() {
     try {
-      const now = new Date();
-      const hours = getLocalMinutesOfDay(now, FALLBACK_TZ) / 60;
       await this.sendMorningCheckInReminders(null, true);
       await this.sendEveningCheckOutReminders(null, true);
 
-      if (hours >= 23) {
-        await this.markAbsentEmployees();
-      }
+      // Each organization is marked once its own local day reaches 23:00.
+      await this.markAbsentEmployees(null, { endOfDayOnly: true });
 
       // Process webhook deliveries with exponential backoff
       const processed = await processDueDeliveries(10);
@@ -369,23 +361,70 @@ class NotificationService {
    * Creates ABSENT attendance records for active employees who never punched in today.
    * Skips employees who are on approved leave or holiday.
    */
-  async markAbsentEmployees(organizationId = null) {
-    const startOfToday = this.getStartOfToday();
-    const today = new Date(startOfToday);
-    today.setUTCHours(0, 0, 0, 0);
-
+  async markAbsentEmployees(organizationId = null, { endOfDayOnly = false } = {}) {
+    const now = new Date();
     const whereEmployee = { status: "ACTIVE", userId: { not: null } };
-    if (organizationId) whereEmployee.organizationId = organizationId;
+
+    if (endOfDayOnly) {
+      // Scheduled run: a cheap timezone lookup first, so the employee table is
+      // only read while some organization's own local clock is past 23:00.
+      const organizations = await prisma.organization.findMany({ select: { id: true, timezone: true } });
+      const due = organizations.filter((org) => isEndOfDay(now, zoneOf({ organization: org })));
+      if (due.length === 0) return { success: true, markedCount: 0, markedEmployees: [], date: null };
+      whereEmployee.organizationId = { in: due.map((org) => org.id) };
+    } else if (organizationId) {
+      whereEmployee.organizationId = organizationId;
+    }
 
     const activeEmployees = await prisma.employee.findMany({
       where: whereEmployee,
-      select: { id: true, organizationId: true, branchId: true, shiftId: true, firstName: true, lastName: true },
+      select: {
+        id: true,
+        organizationId: true,
+        branchId: true,
+        shiftId: true,
+        firstName: true,
+        lastName: true,
+        organization: { select: { timezone: true } },
+      },
     });
 
-    if (activeEmployees.length === 0) {
-      return { success: true, markedCount: 0, markedEmployees: [], date: today.toISOString().split("T")[0] };
+    // "Today" is each organization's own calendar day. Punches are stored under
+    // that date, so absences must be written under the same one; the server's
+    // clock (UTC on a host, IST on a laptop) must not decide it.
+    const byDay = new Map();
+    for (const emp of activeEmployees) {
+      const day = getLocalDateOnly(now, zoneOf(emp));
+      const key = day.toISOString();
+      if (!byDay.has(key)) byDay.set(key, { day, employees: [] });
+      byDay.get(key).employees.push(emp);
     }
 
+    if (byDay.size === 0) {
+      return {
+        success: true,
+        markedCount: 0,
+        markedEmployees: [],
+        date: getLocalDateOnly(now, FALLBACK_TZ).toISOString().split("T")[0],
+      };
+    }
+
+    let markedCount = 0;
+    const markedEmployees = [];
+    for (const { day, employees } of byDay.values()) {
+      const result = await this.markAbsentForDay(day, employees);
+      markedCount += result.markedCount;
+      markedEmployees.push(...result.markedEmployees);
+    }
+    const dates = [...byDay.values()].map(({ day }) => day.toISOString().split("T")[0]);
+    return { success: true, markedCount, markedEmployees, date: dates[0], dates };
+  }
+
+  /**
+   * Writes ABSENT / WEEK_OFF rows for the given employees for one calendar day,
+   * passed as UTC midnight of that date. All lookups are batched.
+   */
+  async markAbsentForDay(today, activeEmployees) {
     const employeeIds = activeEmployees.map((e) => e.id);
     const orgIds = [...new Set(activeEmployees.map((e) => e.organizationId))];
     const shiftIds = [...new Set(activeEmployees.map((e) => e.shiftId).filter(Boolean))];
@@ -421,7 +460,7 @@ class NotificationService {
     const isHolidayFor = (emp) =>
       orgWideHoliday.has(emp.organizationId) || (emp.branchId && branchHoliday.has(`${emp.organizationId}:${emp.branchId}`));
 
-    const dayOfWeek = today.getDay(); // 0=Sun, 1=Mon...
+    const dayOfWeek = today.getUTCDay(); // 0=Sun, 1=Mon... (today is UTC midnight of the local date)
     const weekOffRecords = [];
     const absentRecords = [];
     const markedEmployees = [];
@@ -478,7 +517,7 @@ class NotificationService {
 
     const markedCount = absentResult?.count ?? 0;
     console.log(`[AbsentMarker] Marked ${markedCount} employees ABSENT for ${today.toISOString().split("T")[0]}`);
-    return { success: true, markedCount, markedEmployees, date: today.toISOString().split("T")[0] };
+    return { markedCount, markedEmployees };
   }
 
   /**

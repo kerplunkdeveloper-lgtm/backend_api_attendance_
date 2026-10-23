@@ -202,6 +202,60 @@ async function calculateCheckout(organizationId, { plan, billingCycle, couponCod
   return { plan: p, billingCycle: cycle, couponCode: normalizedCoupon, offer, baseAmountInr, discountAmountInr, taxAmountInr, amountInr, taxRate };
 }
 
+const freeCheckoutResponse = (order, taxRate) => ({
+  orderId: order.id,
+  activated: true,
+  razorpayOrderId: null,
+  razorpaySubscriptionId: null,
+  amountInr: 0,
+  currency: "INR",
+  plan: order.plan,
+  billingCycle: order.billingCycle,
+  baseAmountInr: Number(order.baseAmountInr || 0),
+  discountAmountInr: Number(order.discountAmountInr || 0),
+  taxAmountInr: 0,
+  couponCode: order.couponCode,
+  taxRate,
+});
+
+/**
+ * A 100%-off offer leaves nothing to charge, and Razorpay refuses orders under
+ * ₹1, so there is no payment to wait for. The order is recorded as PAID and the
+ * plan is activated through the same path a verified payment uses, in one
+ * transaction so a failure never leaves an activated plan without its order.
+ */
+async function activateFreeOrder(organizationId, pricing, idempotencyKey) {
+  const { plan, billingCycle, couponCode, baseAmountInr, discountAmountInr, taxRate } = pricing;
+  let order;
+  try {
+    order = await prisma.$transaction(async (tx) => {
+      const created = await tx.billingOrder.create({
+        data: {
+          organizationId,
+          plan,
+          billingCycle,
+          amountInr: 0,
+          baseAmountInr,
+          discountAmountInr,
+          taxAmountInr: 0,
+          couponCode,
+          idempotencyKey,
+          status: "CREATED",
+        },
+      });
+      await recordEvent(tx, `offer:${created.id}`, "offer.free_activation", organizationId, created.id);
+      await activateOrder(tx, created, null);
+      return created;
+    });
+  } catch (err) {
+    // Two clicks can race past the idempotency lookup; return the order that won.
+    if (err?.code !== "P2002" || !idempotencyKey) throw err;
+    order = await prisma.billingOrder.findFirst({ where: { organizationId, idempotencyKey } });
+    if (!order) throw err;
+  }
+  return freeCheckoutResponse(order, taxRate);
+}
+
 async function createCheckout(organizationId, payload = {}) {
   const pricing = await calculateCheckout(organizationId, payload);
   const { plan: p, billingCycle: cycle, couponCode, baseAmountInr, discountAmountInr, taxAmountInr, amountInr } = pricing;
@@ -212,6 +266,9 @@ async function createCheckout(organizationId, payload = {}) {
       where: { organizationId, idempotencyKey },
     });
     if (existing) {
+      if (existing.status === "PAID" && Number(existing.amountInr) === 0) {
+        return { ...freeCheckoutResponse(existing, pricing.taxRate), reused: true };
+      }
       return {
         orderId: existing.id,
         razorpayOrderId: existing.razorpayOrderId,
@@ -229,6 +286,12 @@ async function createCheckout(organizationId, payload = {}) {
         reused: true,
       };
     }
+  }
+
+  // Only a configured offer may take an order to zero. A plan that merely has a
+  // ₹0 price (a misconfigured price row, say) must never unlock itself.
+  if (couponCode && pricing.offer && baseAmountInr > 0 && amountInr === 0) {
+    return activateFreeOrder(organizationId, pricing, idempotencyKey);
   }
 
   const configuredPlanId = recurringPlanId(p, cycle);

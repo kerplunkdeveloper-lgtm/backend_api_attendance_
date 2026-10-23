@@ -32,6 +32,15 @@ const pool = new Pool({
   keepAliveInitialDelayMillis: 10000,
 });
 
+// The database can close an idle pooled connection at any time (Neon suspends
+// idle compute, networks drop). pg reports that as an 'error' event on the pool,
+// and with no listener Node treats it as an uncaught exception, which makes
+// server.js shut the whole API down. Log it instead: the pool discards the dead
+// client and opens a fresh one for the next query.
+pool.on("error", (error) => {
+  console.warn("[db] idle connection closed by the database:", error.message);
+});
+
 const adapter = new PrismaPg(pool);
 // Remote Neon round-trips make the 5s default too tight for multi-step
 // transactions (payroll runs, imports); allow more headroom before aborting.
