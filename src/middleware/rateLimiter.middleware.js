@@ -5,7 +5,7 @@ let limiterSequence = 0;
  * Creates an Express rate-limiter middleware.
  * @param {object} options
  * @param {number} options.windowMs     - Window duration in milliseconds
- * @param {number} options.max          - Max requests per window per key
+ * @param {number|function} options.max - Max requests per window per key, or (req) => number
  * @param {string} options.keyBy        - "ip" (default) | "user" (uses req.user.id if authenticated)
  * @param {string} options.message      - Custom error message
  * @param {function} options.keyFn      - Optional (req) => string appended to the key subject
@@ -13,7 +13,7 @@ let limiterSequence = 0;
  */
 const createRateLimiter = ({
   windowMs = 15 * 60 * 1000,
-  max = 100,
+  max: maxOption = 100,
   keyBy = "ip",
   message,
   keyFn,
@@ -22,6 +22,7 @@ const createRateLimiter = ({
   namespace = `limiter-${++limiterSequence}`,
 }) => {
   const applyResult = (req, res, next, count, resetAt) => {
+    const max = typeof maxOption === "function" ? maxOption(req) : maxOption;
     if (count > max) {
       const retryAfter = Math.max(1, Math.ceil((resetAt - Date.now()) / 1000));
       res.setHeader("Retry-After", retryAfter);
@@ -142,14 +143,24 @@ const sessionRateLimiter = createRateLimiter({
 });
 
 /**
- * General API limiter: 200 requests per minute per IP
+ * General API limiter: 200/min per IP anonymous, 3000/min per IP signed-in
  * Protects all other endpoints from abuse
  */
+const hasBearer = (req) => /^Bearer\s+\S+/i.test(String(req.headers?.authorization || ""));
+const perMinuteEnv = (name, fallback) => {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : fallback;
+};
+// Behind a proxy (Next rewrites, Vercel -> Railway) every user shares one IP,
+// so a single 200/min bucket locks the whole product out together. Signed-in
+// traffic is already budgeted per workspace by tenantRateLimiter, so it gets a
+// separate, larger per-IP allowance; anonymous traffic keeps the strict one.
 const apiRateLimiter = createRateLimiter({
   namespace: "api",
   windowMs: 60 * 1000,
-  max: 200,
+  max: (req) => (hasBearer(req) ? perMinuteEnv("API_RATE_LIMIT_AUTH_PER_MIN", 3000) : perMinuteEnv("API_RATE_LIMIT_PER_MIN", 200)),
   keyBy: "ip",
+  keyFn: (req) => (hasBearer(req) ? "auth" : "anon"),
   message: "Too many requests. Please slow down.",
 });
 
