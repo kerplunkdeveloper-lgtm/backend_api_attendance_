@@ -2,6 +2,7 @@ const prisma = require("../config/database");
 const { uploadBuffer } = require("../config/cloudinary");
 const { assertRealImage } = require("../middleware/upload.middleware");
 const ssoService = require("./sso.service");
+const { isValidTimeZone } = require("../utils/datetime");
 
 const presentOrganization = (organization) => {
   if (!organization) return organization;
@@ -41,7 +42,14 @@ async function updateSettings(organizationId, payload, actor = {}) {
   if (payload.phone !== undefined) data.phone = payload.phone ? String(payload.phone).trim() : null;
   if (payload.address !== undefined) data.address = payload.address ? String(payload.address).trim() : null;
   if (payload.taxId !== undefined) data.taxId = payload.taxId ? String(payload.taxId).trim() : null;
-  if (payload.timezone !== undefined) data.timezone = String(payload.timezone).trim() || "UTC";
+  if (payload.timezone !== undefined) {
+    const timezone = String(payload.timezone).trim() || "UTC";
+    // An unknown zone silently falls back to UTC everywhere, so refuse it here instead.
+    if (!isValidTimeZone(timezone)) {
+      throw Object.assign(new Error("Timezone is not a valid IANA name, e.g. Asia/Kolkata."), { statusCode: 400 });
+    }
+    data.timezone = timezone;
+  }
   if (payload.currency !== undefined) data.currency = String(payload.currency).trim() || "INR";
   if (payload.logoUrl !== undefined) {
     const url = payload.logoUrl ? String(payload.logoUrl).trim() : null;

@@ -414,6 +414,13 @@ class LeaveService {
       },
     });
 
+    void notificationService.notifyReviewersOfRequest({
+      organizationId,
+      employeeId: employee.id,
+      title: "New leave request",
+      summary: `applied for ${request.leaveType?.name || "leave"} from ${toDateKey(request.startDate)} to ${toDateKey(request.endDate)} (${calculatedDays} day${Number(calculatedDays) === 1 ? "" : "s"}).`,
+    });
+
     return request;
   }
 

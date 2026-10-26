@@ -290,6 +290,38 @@ class PayrollController {
     } catch (err) { return fail(res, err); }
   }
 
+  async getPayslipPdf(req, res) {
+    try {
+      const { id } = req.params;
+      const restrictToEmployeeId =
+        req.user.role === "EMPLOYEE" ? (req.user.employee?.id ?? null) : null;
+
+      if (req.user.role === "EMPLOYEE" && !restrictToEmployeeId) {
+        return res
+          .status(403)
+          .json({
+            success: false,
+            message: "No employee profile linked to this account",
+          });
+      }
+
+      const { details, pdfBuffer } = await payrollService.getPayslipPdf(
+        req.user.organizationId,
+        id,
+        restrictToEmployeeId,
+      );
+
+      const safeEmpCode = String(details.employee?.employeeCode || "EMP").replace(/[^a-zA-Z0-9_-]/g, "");
+      const monthName = details.period?.monthName || `M${details.period?.month || ""}`;
+      const filename = `Payslip_${monthName}_${details.period?.year || ""}_${safeEmpCode}.pdf`;
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.setHeader("Content-Length", pdfBuffer.length);
+      return res.status(200).send(pdfBuffer);
+    } catch (err) { return fail(res, err); }
+  }
+
   async getReports(req, res) {
     try {
       const { month, year } = req.query;

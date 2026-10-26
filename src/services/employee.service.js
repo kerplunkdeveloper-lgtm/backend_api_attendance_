@@ -1,5 +1,13 @@
 const bcrypt = require("bcryptjs");
-const { validateIdentityFields, assertStatus, parsePastDate } = require("../utils/employeeValidation");
+const {
+  validateIdentityFields,
+  validateNewEmployeeProfile,
+  assertRequiredNotCleared,
+  normalizeGender,
+  normalizeEmploymentType,
+  assertStatus,
+  parsePastDate,
+} = require("../utils/employeeValidation");
 const { toCsv } = require("../utils/csv");
 const { WORKING_STATUSES } = require("../utils/employeeStatus");
 const prisma = require("../config/database");
@@ -30,54 +38,72 @@ const withoutSensitiveEmployeeFields = (employee) => {
   return safe;
 };
 
-const GENDER_VALUES = ["MALE", "FEMALE"];
-
-/** Blank means "not recorded". Anything else must be Male or Female. */
-const normalizeGender = (value) => {
-  if (value === undefined || value === null || String(value).trim() === "" || String(value).trim().toUpperCase() === "NOT_SPECIFIED") return null;
-  const gender = String(value).trim().toUpperCase();
-  if (!GENDER_VALUES.includes(gender)) {
-    throw Object.assign(new Error("Gender must be Male or Female"), { statusCode: 400 });
-  }
-  return gender;
-};
-
+// HR (the MANAGER role) maintains the full employee profile, including identity and bank details.
+// Role changes are still policed by assertRoleAssignment, and HR can only edit plain employee accounts.
 const MANAGER_UPDATE_FIELDS = new Set([
   "firstName", "lastName", "phone", "status", "branchId", "departmentId",
   "shiftId", "designation", "employmentType", "reportingManagerId", "avatarUrl",
-  "profileImage", "profilePicture", "avatar", "role",
+  "profileImage", "profilePicture", "avatar", "role", "gender", "dateOfBirth",
+  "dateOfJoining", "workEmail", "address", "emergencyContactName", "emergencyContactPhone",
+  "panNumber", "uanNumber", "esiNumber", "bankName", "bankAccountNumber", "bankIfsc",
 ]);
+
+/** The Employee columns a validated manual-entry / invite profile fills in. */
+const employeeProfileColumns = (profile) => ({
+  firstName: profile.firstName,
+  lastName: profile.lastName,
+  phone: profile.phone,
+  gender: profile.gender,
+  dateOfBirth: profile.dateOfBirth,
+  dateOfJoining: profile.dateOfJoining,
+  designation: profile.designation,
+  employmentType: profile.employmentType,
+  address: profile.address,
+  emergencyContactName: profile.emergencyContactName,
+  emergencyContactPhone: profile.emergencyContactPhone,
+  panNumber: profile.panNumber,
+  uanNumber: profile.uanNumber,
+  esiNumber: profile.esiNumber,
+  bankName: profile.bankName,
+  bankAccountNumber: profile.bankAccountNumber,
+  bankIfsc: profile.bankIfsc,
+});
+
+/** Seeds a default salary split from the annual CTC; payroll can refine it later. */
+const seedSalaryStructure = async (organizationId, employeeId, annualCtc, label) => {
+  try {
+    const payrollService = require("./payroll.service");
+    const monthly = annualCtc / 12;
+    await payrollService.upsertSalaryStructure(organizationId, {
+      employeeId,
+      annualCtc,
+      monthlyCtc: monthly,
+      baseSalary: Math.round(monthly * 0.5),
+      hra: Math.round(monthly * 0.25),
+      special: Math.round(monthly * 0.15),
+      otherAllowance: Math.round(monthly * 0.1),
+    });
+  } catch (err) {
+    console.warn(`[${label}] CTC structure skipped:`, err.message);
+  }
+};
 
 /**
  * 1. POST /api/employees - Create Employee
  */
 const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN") => {
   const {
-    firstName,
-    lastName,
-    email,
     password,
     role = "EMPLOYEE",
     employeeCode,
-    phone,
     branchId,
     departmentId,
     shiftId,
   } = data;
 
-  if (!firstName || !firstName.trim()) {
-    throw new Error("First name is required");
-  }
-
-  if (!email || !email.trim()) {
-    throw new Error("Employee email is required");
-  }
-
-  const cleanEmail = email.trim().toLowerCase();
-  const gender = normalizeGender(data.gender);
-  const identity = validateIdentityFields(data);
-  const dateOfBirth = parsePastDate("Date of birth", data.dateOfBirth);
-  const dateOfJoining = parsePastDate("Date of joining", data.dateOfJoining, { allowFuture: true });
+  // Every field except PAN, UAN and ESI is mandatory for manual entry.
+  const profile = validateNewEmployeeProfile(data);
+  const cleanEmail = profile.email;
   if (password && String(password).trim() && String(password).trim().length < 8) {
     throw Object.assign(new Error("Password must be at least 8 characters."), { statusCode: 400 });
   }
@@ -155,8 +181,8 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
     profileImage: data.profileImage,
     profilePicture: data.profilePicture,
     avatar: data.avatar,
-    firstName: firstName.trim(),
-    lastName: lastName ? lastName.trim() : null,
+    firstName: profile.firstName,
+    lastName: profile.lastName,
     employeeCode: finalEmployeeCode,
   });
 
@@ -182,30 +208,14 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
         organizationId,
         userId: user.id,
         employeeCode: finalEmployeeCode,
-        firstName: firstName.trim(),
-        lastName: lastName ? lastName.trim() : null,
-        phone: phone ? phone.trim() : null,
+        ...employeeProfileColumns(profile),
         avatarUrl,
         status: "ACTIVE",
-        branchId: branchId || null,
-        departmentId: departmentId || null,
-        shiftId: shiftId || null,
-        designation: data.designation ? String(data.designation).trim() : null,
-        dateOfJoining,
-        dateOfBirth,
-        gender,
-        employmentType: data.employmentType ? String(data.employmentType).trim() : null,
+        branchId,
+        departmentId,
+        shiftId,
         reportingManagerId: data.reportingManagerId || null,
         workEmail: cleanEmail,
-        panNumber: identity.panNumber ?? null,
-        uanNumber: identity.uanNumber ?? null,
-        esiNumber: data.esiNumber ? String(data.esiNumber).trim() : null,
-        bankName: data.bankName ? String(data.bankName).trim() : null,
-        bankAccountNumber: identity.bankAccountNumber ?? null,
-        bankIfsc: identity.bankIfsc ?? null,
-        emergencyContactName: data.emergencyContactName ? String(data.emergencyContactName).trim() : null,
-        emergencyContactPhone: data.emergencyContactPhone ? String(data.emergencyContactPhone).trim() : null,
-        address: data.address ? String(data.address).trim() : null,
       },
       include: {
         user: {
@@ -220,30 +230,13 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
     return employee;
   });
 
-  if (data.ctc) {
-    try {
-      const payrollService = require("./payroll.service");
-      const annualCtc = Number(data.ctc);
-      const monthly = annualCtc / 12;
-      await payrollService.upsertSalaryStructure(organizationId, {
-        employeeId: createdEmployee.id,
-        annualCtc,
-        monthlyCtc: monthly,
-        baseSalary: Math.round(monthly * 0.5),
-        hra: Math.round(monthly * 0.25),
-        special: Math.round(monthly * 0.15),
-        otherAllowance: Math.round(monthly * 0.1),
-      });
-    } catch (err) {
-      console.warn("[CreateEmployee] CTC structure skipped:", err.message);
-    }
-  }
+  await seedSalaryStructure(organizationId, createdEmployee.id, profile.ctc, "CreateEmployee");
 
   // Dispatch welcome email with credentials
   const loginUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/login`;
   emailService.sendEmployeeWelcomeEmail(
     cleanEmail,
-    firstName.trim(),
+    profile.firstName,
     {
       organizationName: org?.name || "WorkPluse",
       companyLogoUrl: org?.logoUrl,
@@ -351,7 +344,8 @@ const getEmployeeById = async (organizationId, employeeId, actorRole = "EMPLOYEE
     throw new Error("Employee not found");
   }
 
-  return ["SUPER_ADMIN", "COMPANY_ADMIN"].includes(actorRole)
+  // Admins and HR open the full profile (it feeds the edit form); the route already excludes plain employees.
+  return ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"].includes(actorRole)
     ? employee
     : withoutSensitiveEmployeeFields(employee);
 };
@@ -415,8 +409,21 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
     address,
   } = data;
 
+  // Editing may change a required field but never empty it (PAN, UAN and ESI may be cleared).
+  assertRequiredNotCleared(data);
   const genderToSet = gender !== undefined ? normalizeGender(gender) : undefined;
-  const identity = validateIdentityFields({ panNumber, uanNumber, bankAccountNumber, bankIfsc });
+  if (gender !== undefined && !genderToSet) throw badRequest("Gender must be Male or Female");
+  const employmentTypeToSet = employmentType !== undefined ? normalizeEmploymentType(employmentType) : undefined;
+  const identity = validateIdentityFields({
+    panNumber,
+    uanNumber,
+    esiNumber,
+    bankAccountNumber,
+    bankIfsc,
+    phone,
+    emergencyContactPhone,
+  });
+  if (workEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(workEmail).trim())) throw badRequest("Work email is not valid.");
   const statusToSet = status ? assertStatus(status) : undefined;
   const birthDateToSet = dateOfBirth !== undefined ? parsePastDate("Date of birth", dateOfBirth) : undefined;
   const joiningDateToSet = dateOfJoining !== undefined ? parsePastDate("Date of joining", dateOfJoining, { allowFuture: true }) : undefined;
@@ -490,7 +497,7 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
         ...(avatarToSet !== undefined ? { avatarUrl: avatarToSet ? String(avatarToSet).trim() : null } : {}),
         ...(firstName ? { firstName: firstName.trim() } : {}),
         ...(lastName !== undefined ? { lastName: lastName?.trim() || null } : {}),
-        ...(phone !== undefined ? { phone: phone?.trim() || null } : {}),
+        ...(identity.phone !== undefined ? { phone: identity.phone } : {}),
         ...(statusToSet ? { status: statusToSet } : {}),
         ...(employeeCode ? { employeeCode: employeeCode.trim() } : {}),
         ...(branchId !== undefined ? { branchId: branchId || null } : {}),
@@ -500,17 +507,17 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
         ...(joiningDateToSet !== undefined ? { dateOfJoining: joiningDateToSet } : {}),
         ...(birthDateToSet !== undefined ? { dateOfBirth: birthDateToSet } : {}),
         ...(genderToSet !== undefined ? { gender: genderToSet } : {}),
-        ...(employmentType !== undefined ? { employmentType: employmentType ? String(employmentType).trim() : null } : {}),
+        ...(employmentTypeToSet !== undefined ? { employmentType: employmentTypeToSet } : {}),
         ...(reportingManagerId !== undefined ? { reportingManagerId: reportingManagerId || null } : {}),
         ...(workEmail !== undefined ? { workEmail: workEmail ? String(workEmail).trim().toLowerCase() : null } : {}),
         ...(identity.panNumber !== undefined ? { panNumber: identity.panNumber } : {}),
         ...(identity.uanNumber !== undefined ? { uanNumber: identity.uanNumber } : {}),
-        ...(esiNumber !== undefined ? { esiNumber: esiNumber ? String(esiNumber).trim() : null } : {}),
+        ...(identity.esiNumber !== undefined ? { esiNumber: identity.esiNumber } : {}),
         ...(bankName !== undefined ? { bankName: bankName ? String(bankName).trim() : null } : {}),
         ...(identity.bankAccountNumber !== undefined ? { bankAccountNumber: identity.bankAccountNumber } : {}),
         ...(identity.bankIfsc !== undefined ? { bankIfsc: identity.bankIfsc } : {}),
         ...(emergencyContactName !== undefined ? { emergencyContactName: emergencyContactName ? String(emergencyContactName).trim() : null } : {}),
-        ...(emergencyContactPhone !== undefined ? { emergencyContactPhone: emergencyContactPhone ? String(emergencyContactPhone).trim() : null } : {}),
+        ...(identity.emergencyContactPhone !== undefined ? { emergencyContactPhone: identity.emergencyContactPhone } : {}),
         ...(address !== undefined ? { address: address ? String(address).trim() : null } : {}),
       },
       include: {
@@ -521,9 +528,7 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
       },
     });
   });
-  return actorRole === "MANAGER"
-    ? withoutSensitiveEmployeeFields(updatedEmployee)
-    : updatedEmployee;
+  return updatedEmployee;
 };
 
 /**
@@ -673,21 +678,25 @@ const setEmployeesAccess = async (organizationId, employeeIds, action, actor = {
 const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole = "COMPANY_ADMIN") => {
   const emailService = require("./email.service");
   const {
-    firstName,
-    lastName,
-    email,
     role = "EMPLOYEE",
     branchId,
     departmentId,
     shiftId,
   } = data;
 
-  if (!firstName || !firstName.trim()) throw new Error("First name is required.");
-  if (!email || !email.trim()) throw new Error("Employee email is required.");
+  // Same rule as manual entry: everything except PAN, UAN and ESI is mandatory.
+  const profile = validateNewEmployeeProfile(data);
+  const cleanEmail = profile.email;
 
-  const cleanEmail = email.trim().toLowerCase();
-  const gender = normalizeGender(data.gender);
-  const invitedIdentity = validateIdentityFields({ panNumber: data.panNumber, uanNumber: data.uanNumber });
+  // The ids come from the client, so confirm each belongs to this organization.
+  const [branch, department, shift] = await Promise.all([
+    prisma.branch.findFirst({ where: { id: branchId, organizationId }, select: { id: true } }),
+    prisma.department.findFirst({ where: { id: departmentId, organizationId }, select: { id: true } }),
+    prisma.shift.findFirst({ where: { id: shiftId, organizationId }, select: { id: true } }),
+  ]);
+  if (!branch) throw badRequest("Specified branch does not exist in this organization");
+  if (!department) throw badRequest("Specified department does not exist in this organization");
+  if (!shift) throw badRequest("Specified shift does not exist in this organization");
 
   const existing = await prisma.user.findUnique({
     where: { organizationId_email: { organizationId, email: cleanEmail } },
@@ -710,8 +719,8 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
     profileImage: data.profileImage,
     profilePicture: data.profilePicture,
     avatar: data.avatar,
-    firstName: firstName.trim(),
-    lastName: lastName ? lastName.trim() : null,
+    firstName: profile.firstName,
+    lastName: profile.lastName,
     employeeCode,
   });
 
@@ -737,17 +746,13 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
         organizationId,
         userId: user.id,
         employeeCode,
-        firstName: firstName.trim(),
-        lastName: lastName ? lastName.trim() : null,
+        ...employeeProfileColumns(profile),
         avatarUrl,
         status: "ACTIVE",
-        branchId: branchId || null,
-        departmentId: departmentId || null,
-        shiftId: shiftId || null,
-        gender,
-        panNumber: invitedIdentity.panNumber ?? null,
-        uanNumber: invitedIdentity.uanNumber ?? null,
-        esiNumber: data.esiNumber ? String(data.esiNumber).trim() : null,
+        branchId,
+        departmentId,
+        shiftId,
+        workEmail: cleanEmail,
       },
       include: {
         user: { select: { id: true, email: true, role: true, avatarUrl: true, mustChangePassword: true } },
@@ -762,8 +767,8 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
       data: {
         organizationId,
         email: cleanEmail,
-        firstName: firstName.trim(),
-        lastName: lastName ? lastName.trim() : null,
+        firstName: profile.firstName,
+        lastName: profile.lastName,
         role: userRole,
         tempPassword: passwordHash,
         employeeId: employee.id,
@@ -777,24 +782,7 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
     return { user, employee };
   });
 
-  if (data.ctc) {
-    try {
-      const payrollService = require("./payroll.service");
-      const annualCtc = Number(data.ctc);
-      const monthly = annualCtc / 12;
-      await payrollService.upsertSalaryStructure(organizationId, {
-        employeeId: employee.id,
-        annualCtc,
-        monthlyCtc: monthly,
-        baseSalary: Math.round(monthly * 0.5),
-        hra: Math.round(monthly * 0.25),
-        special: Math.round(monthly * 0.15),
-        otherAllowance: Math.round(monthly * 0.1),
-      });
-    } catch (err) {
-      console.warn("[InviteEmployee] CTC structure skipped:", err.message);
-    }
-  }
+  await seedSalaryStructure(organizationId, employee.id, profile.ctc, "InviteEmployee");
 
   // Send welcome email with credentials
   const loginUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/login`;
@@ -802,7 +790,7 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
   try {
     emailDelivery = await emailService.sendEmployeeWelcomeEmail(
       cleanEmail,
-      firstName.trim(),
+      profile.firstName,
       {
         organizationName: org.name,
         companyLogoUrl: org.logoUrl,
@@ -820,7 +808,7 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
   // Dev-mode banner only: keeps employee names and emails out of production logs.
   if (process.env.NODE_ENV !== "production") {
     console.log("────────────────────────────────────────────────────────────");
-    console.log(`[Invite] Employee: ${firstName} ${lastName || ""} <${cleanEmail}>`);
+    console.log(`[Invite] Employee: ${profile.firstName} ${profile.lastName} <${cleanEmail}>`);
     console.log("────────────────────────────────────────────────────────────");
   }
 

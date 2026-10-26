@@ -94,16 +94,42 @@ describe("role assignment", () => {
     assert.equal(state.roleWritten, null);
   });
 
-  it("prevents managers from changing sensitive payroll identity fields", async () => {
-    await assert.rejects(
-      () => employeeService.updateEmployee(
-        "org-a",
-        "emp-a",
-        { bankAccountNumber: "1234567890", panNumber: "ABCDE1234F" },
-        { actorRole: "MANAGER", actorUserId: "mgr-1" },
-      ),
-      /Managers cannot update: bankAccountNumber, panNumber/,
+  it("lets HR edit identity and bank details, with the same format checks as admins", async () => {
+    const updated = await employeeService.updateEmployee(
+      "org-a",
+      "emp-a",
+      { bankAccountNumber: "1234567890", panNumber: "abcde1234f", gender: "FEMALE" },
+      { actorRole: "MANAGER", actorUserId: "mgr-1" },
     );
+    assert.equal(updated.panNumber, "ABCDE1234F");
+    assert.equal(updated.gender, "FEMALE");
+
+    await assert.rejects(
+      () => employeeService.updateEmployee("org-a", "emp-a", { panNumber: "BAD" }, { actorRole: "MANAGER", actorUserId: "mgr-1" }),
+      /PAN is not valid/,
+    );
+  });
+
+  it("still keeps HR away from fields outside the profile", async () => {
+    await assert.rejects(
+      () => employeeService.updateEmployee("org-a", "emp-a", { organizationId: "org-b" }, { actorRole: "MANAGER", actorUserId: "mgr-1" }),
+      /Managers cannot update: organizationId/,
+    );
+  });
+
+  it("does not let an edit blank a required field, but PAN, UAN and ESI may be cleared", async () => {
+    await assert.rejects(
+      () => employeeService.updateEmployee("org-a", "emp-a", { address: "  ", phone: "" }, { actorRole: "COMPANY_ADMIN", actorUserId: "admin-1" }),
+      /cannot be left empty: Phone, Address/,
+    );
+    const cleared = await employeeService.updateEmployee(
+      "org-a",
+      "emp-a",
+      { panNumber: "", uanNumber: "", esiNumber: "" },
+      { actorRole: "COMPANY_ADMIN", actorUserId: "admin-1" },
+    );
+    assert.equal(cleared.panNumber, null);
+    assert.equal(cleared.esiNumber, null);
   });
 
   it("lets a company admin assign MANAGER but not SUPER_ADMIN", () => {

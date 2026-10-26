@@ -47,7 +47,8 @@ const lookupPlaceName = async (latitude, longitude) => {
         Accept: "application/json",
         "User-Agent": "WorkPluse/1.0 (attendance punch locations)",
       },
-      signal: AbortSignal.timeout(3500),
+      // Punching waits on this lookup when the app sent no place name, so keep it short.
+      signal: AbortSignal.timeout(2500),
     });
     if (!response.ok) return null;
     const payload = await response.json();
@@ -63,20 +64,32 @@ const fallbackPunchLocation = ({ workMode, branchName } = {}) => {
   return "Office";
 };
 
+/**
+ * The label saved with a punch, shown to admins and HR as "where did they punch".
+ *
+ * `branchName` must only be passed when the punch was really inside that branch's geofence. Passing the
+ * employee's home branch for every punch labelled work-from-home and field punches as "Head Office".
+ *
+ *  1. Inside a branch, in office mode  -> the branch name
+ *  2. Anywhere else                    -> the place from the app, else looked up from the coordinates,
+ *                                         prefixed with the work mode when it is not the office
+ *  3. Nothing known                    -> the work mode, the branch, or "Office"
+ */
 const resolvePunchLocation = async ({ locationLabel, latitude, longitude, workMode, branchName } = {}) => {
-  // 1. If assigned or matched to an official branch, always use the branch name
-  if (branchName) return branchName;
+  const modeLabel = workMode && workMode !== "OFFICE" ? WORK_MODE_LABELS[workMode] : null;
 
-  // 2. Specific work mode (e.g. Work from home)
-  if (workMode && workMode !== "OFFICE" && WORK_MODE_LABELS[workMode]) {
-    return WORK_MODE_LABELS[workMode];
-  }
+  if (branchName && !modeLabel) return branchName;
 
-  // 3. User-provided custom note or location label (filter out raw municipal ward strings like "Ward 62, Chennai, Tamil Nadu")
+  // Raw municipal ward strings like "Ward 62, Chennai, Tamil Nadu" are not useful to a reader.
   const provided = typeof locationLabel === "string" ? locationLabel.trim() : "";
-  if (provided && !/^ward\s+\d+/i.test(provided)) {
-    return provided.slice(0, 180);
+  let place = provided && !/^ward\s+\d+/i.test(provided) ? provided : null;
+  if (!place) place = await lookupPlaceName(latitude, longitude);
+
+  if (modeLabel) {
+    if (!place || place.toLowerCase().startsWith(modeLabel.toLowerCase())) return (place || modeLabel).slice(0, 180);
+    return `${modeLabel} · ${place}`.slice(0, 180);
   }
+  if (place) return place.slice(0, 180);
 
   return fallbackPunchLocation({ workMode, branchName });
 };

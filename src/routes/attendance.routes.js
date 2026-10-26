@@ -54,8 +54,8 @@ router.get("/:attendanceId/breaks", attendanceController.getBreakDetails);
 // Today's active session status
 router.get("/today", attendanceController.getTodayStatus);
 
-// Team punch locations for today (every signed-in employee)
-router.get("/live-today", attendanceController.getLiveToday);
+// Where everyone punched today. Locations are for admins and HR only.
+router.get("/live-today", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"), attendanceController.getLiveToday);
 
 // Personal attendance history
 router.get("/my", attendanceController.getMyAttendance);
@@ -68,6 +68,13 @@ router.get(
   "/summary",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
   attendanceController.getAttendanceSummary,
+);
+
+// Today's attendance for each branch (present / total, leave, off, absent)
+router.get(
+  "/branch-summary",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  attendanceController.getBranchSummary,
 );
 
 // All org attendance logs (filterable)

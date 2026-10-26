@@ -1,6 +1,13 @@
 const prisma = require("../config/database");
 const { getScheduledDurationMinutes } = require("../utils/shiftCalculator");
 const { assertTime, normalizeWorkingDays } = require("../utils/shiftValidation");
+const { workingDaysFromWeeklyOff } = require("../utils/policyValidation");
+
+/** Working days for a new shift: the company's weekly off decides, Sunday off unless the policy says otherwise. */
+const companyWorkingDays = async (organizationId) => {
+  const policy = await prisma.attendancePolicy.findUnique({ where: { organizationId }, select: { weeklyOffDays: true } });
+  return workingDaysFromWeeklyOff(policy?.weeklyOffDays ?? "0") || "1,2,3,4,5,6";
+};
 
 const normalizeMinutes = (value, fallback = 0) => {
   const parsed = Number(value);
@@ -32,12 +39,12 @@ const validateShiftPauseConfig = (startTime, endTime, breakMinutes, lunchMinutes
 };
 
 const createShift = async (organizationId, data) => {
-  const { name, startTime, endTime, graceMinutes, breakMinutes = 0, lunchMinutes = 0, breakIncluded = true, lunchIncluded = true, workingDays = "1,2,3,4,5,6" } = data;
+  const { name, startTime, endTime, graceMinutes, breakMinutes = 0, lunchMinutes = 0, breakIncluded = true, lunchIncluded = true, workingDays } = data;
   if (!name || !name.trim()) throw new Error("Shift name is required");
   if (!startTime || !endTime) throw new Error("Shift start time and end time are required (e.g. 09:00, 18:00)");
   const cleanStart = assertTime("Start time", startTime);
   const cleanEnd = assertTime("End time", endTime);
-  const cleanWorkingDays = normalizeWorkingDays(workingDays || "1,2,3,4,5,6");
+  const cleanWorkingDays = normalizeWorkingDays(workingDays || (await companyWorkingDays(organizationId)));
 
   const normalizedBreakMinutes = normalizeMinutes(breakMinutes);
   const normalizedLunchMinutes = normalizeMinutes(lunchMinutes);

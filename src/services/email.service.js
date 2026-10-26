@@ -303,7 +303,7 @@ class EmailService {
   }
 
   /**
-   * 3. Morning Shift Check-in Reminder Email
+   * 3. Morning Shift Punch-in Reminder Email
    */
   async sendShiftReminderEmail(to, employeeName, { shiftName, shiftTime, punchUrl, companyName, companyLogoUrl }) {
     employeeName = escapeHtml(employeeName);
@@ -316,7 +316,7 @@ class EmailService {
       <div class="info-card">
         <div class="info-row"><span class="info-label">Shift Name:</span><span class="info-value">${shiftName || "General Shift"}</span></div>
         <div class="info-row"><span class="info-label">Start Time:</span><span class="info-value">${shiftTime || "09:00 AM"}</span></div>
-        <div class="info-row"><span class="info-label">Status:</span><span class="info-value" style="color: #f59e0b;">Pending Clock-In</span></div>
+        <div class="info-row"><span class="info-label">Status:</span><span class="info-value" style="color: #f59e0b;">Pending Punch-In</span></div>
       </div>
       <p class="text" style="font-size: 13px; color: #64748b;">
         Punch in easily from your mobile browser or desktop. GPS Geofence verification applies.
@@ -328,7 +328,7 @@ class EmailService {
       badge: "Punch In Reminder",
       badgeColor: "#f59e0b",
       contentHtml,
-      ctaText: "Clock In Now",
+      ctaText: "Punch In Now",
       ctaUrl: punchUrl || `${process.env.FRONTEND_URL || "http://localhost:3000"}`,
       companyName,
       companyLogoUrl,
@@ -337,6 +337,42 @@ class EmailService {
     return await this.sendEmail({
       to,
       subject: `[WorkPluse] Reminder: Your shift starts at ${shiftTime || "09:00 AM"}`,
+      html,
+    });
+  }
+
+  /**
+   * Evening reminder: the shift has ended and the employee has not punched out yet.
+   */
+  async sendShiftEndReminderEmail(to, employeeName, { shiftName, shiftEndTime, punchUrl, companyName, companyLogoUrl }) {
+    employeeName = escapeHtml(employeeName);
+    shiftName = escapeHtml(shiftName);
+    const contentHtml = `
+      <p class="text">Hi <strong>${employeeName}</strong> 👋,</p>
+      <p class="text">
+        Your work shift has ended, but we still show you as punched in. Please punch out to close your shift and keep your working hours accurate.
+      </p>
+      <div class="info-card">
+        <div class="info-row"><span class="info-label">Shift Name:</span><span class="info-value">${shiftName || "General Shift"}</span></div>
+        <div class="info-row"><span class="info-label">End Time:</span><span class="info-value">${shiftEndTime || "06:00 PM"}</span></div>
+        <div class="info-row"><span class="info-label">Status:</span><span class="info-value" style="color: #f59e0b;">Pending Punch-Out</span></div>
+      </div>
+    `;
+
+    const html = await this.buildHtmlTemplate({
+      title: "Daily Attendance Reminder",
+      badge: "Punch Out Reminder",
+      badgeColor: "#f59e0b",
+      contentHtml,
+      ctaText: "Punch Out Now",
+      ctaUrl: punchUrl || `${process.env.FRONTEND_URL || "http://localhost:3000"}`,
+      companyName,
+      companyLogoUrl,
+    });
+
+    return await this.sendEmail({
+      to,
+      subject: `[WorkPluse] Reminder: Please punch out, your shift ended at ${shiftEndTime || "06:00 PM"}`,
       html,
     });
   }

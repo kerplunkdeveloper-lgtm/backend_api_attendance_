@@ -84,7 +84,7 @@ class PermissionService {
 
     await this._assertCycleOpen(organizationId, employee.id, date);
 
-    return prisma.permissionRequest.create({
+    const request = await prisma.permissionRequest.create({
       data: {
         organizationId,
         employeeId: employee.id,
@@ -93,6 +93,15 @@ class PermissionService {
         reason,
       },
     });
+
+    void notificationService.notifyReviewersOfRequest({
+      organizationId,
+      employeeId: employee.id,
+      title: "New permission request",
+      summary: `asked for ${hours} hour(s) of permission on ${new Date(date).toISOString().slice(0, 10)}.`,
+    });
+
+    return request;
   }
 
   /**

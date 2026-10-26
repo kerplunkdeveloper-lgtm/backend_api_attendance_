@@ -140,6 +140,13 @@ class ExpenseService {
       },
     });
 
+    void require("./notification.service").notifyReviewersOfRequest({
+      organizationId,
+      employeeId,
+      title: "New expense claim",
+      summary: `submitted an expense claim of ${numAmount}: ${finalTitle}.`,
+    });
+
     return claim;
   }
 

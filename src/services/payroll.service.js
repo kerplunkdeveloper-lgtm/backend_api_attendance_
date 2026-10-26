@@ -988,6 +988,67 @@ class PayrollService {
       ? `${template.addressLine1}${template.addressLine2 ? ", " + template.addressLine2 : ""}`
       : (payslip.employee.branch?.address || "Corporate Headquarters, Cyber City, Phase II");
 
+    const dailyRate = payslip.workingDays > 0 ? Math.round((Number(payslip.baseSalary) / payslip.workingDays) * 100) / 100 : 0;
+    const hourlyRate = Math.round((dailyRate / 8) * 100) / 100;
+
+    const earnings = [
+      { label: "Basic Salary", amount: Number(payslip.baseSalary), category: "BASIC" },
+      { label: "House Rent Allowance (HRA)", amount: Number(payslip.hra || 0), category: "ALLOWANCE" },
+      { label: "Transport Allowance", amount: Number(payslip.transport || 0), category: "ALLOWANCE" },
+      { label: "Special Allowance", amount: Number(payslip.special || 0), category: "ALLOWANCE" },
+      ...(Number(payslip.otherAllowance || 0) > 0 ? [{ label: "Other Allowance", amount: Number(payslip.otherAllowance), category: "ALLOWANCE" }] : []),
+      ...(Number(payslip.overtimePay || 0) > 0 ? [{ label: `Overtime Pay (${payslip.overtimeHours} hrs)`, amount: Number(payslip.overtimePay), category: "OVERTIME" }] : []),
+      ...(Number(payslip.reimbursements || 0) > 0 ? [{ label: "Approved Expense Reimbursements", amount: Number(payslip.reimbursements), category: "REIMBURSEMENT" }] : []),
+    ];
+
+    const deductions = [
+      ...(Number(payslip.unpaidLeaveDeduction || 0) > 0 ? [{
+        label: `Loss of Pay (Unpaid Leave - ${payslip.unpaidLeaveDays} days)`,
+        amount: Number(payslip.unpaidLeaveDeduction),
+        category: "ATTENDANCE_LEAVE",
+        days: Number(payslip.unpaidLeaveDays),
+        ratePerDay: dailyRate,
+        explanation: `${payslip.unpaidLeaveDays} absent/unpaid day(s) deducted at INR ${dailyRate}/day`,
+      }] : []),
+      ...(Number(payslip.lateDeduction || 0) > 0 ? [{
+        label: "Late Arrival Deduction",
+        amount: Number(payslip.lateDeduction),
+        category: "ATTENDANCE_LATE",
+        explanation: "Deduction for late arrival(s) exceeding grace policy",
+      }] : []),
+      ...(Number(payslip.permissionDeduction || 0) > 0 ? [{
+        label: "Permission / Excess Hours Deduction",
+        amount: Number(payslip.permissionDeduction),
+        category: "ATTENDANCE_HOURS",
+        explanation: `Permission hours beyond monthly allowance deducted at INR ${hourlyRate}/hr`,
+      }] : []),
+      ...(Number(payslip.pfDeduction || 0) > 0 ? [{
+        label: "Provident Fund (PF)",
+        amount: Number(payslip.pfDeduction),
+        category: "STATUTORY",
+      }] : []),
+      ...(Number(payslip.esiDeduction || 0) > 0 ? [{
+        label: "Employee State Insurance (ESI)",
+        amount: Number(payslip.esiDeduction),
+        category: "STATUTORY",
+      }] : []),
+      ...(Number(payslip.ptDeduction || 0) > 0 ? [{
+        label: "Professional Tax (PT)",
+        amount: Number(payslip.ptDeduction),
+        category: "STATUTORY",
+      }] : []),
+      ...(Number(payslip.tdsDeduction || 0) > 0 ? [{
+        label: "Tax Deducted at Source (TDS)",
+        amount: Number(payslip.tdsDeduction),
+        category: "STATUTORY",
+      }] : []),
+      ...(Number(payslip.loanRecovery || 0) > 0 ? [{
+        label: "Loan / Advance Recovery",
+        amount: Number(payslip.loanRecovery),
+        category: "FINANCIAL",
+      }] : []),
+    ];
+
     return {
       payslipId: payslip.id,
       referenceNo: `WP-PAY-${payslip.year}-${String(payslip.month).padStart(2, "0")}-${payslip.employee.employeeCode}`,
@@ -1031,24 +1092,20 @@ class PayrollService {
         paidLeaveDays: Number(payslip.paidLeaveDays),
         unpaidLeaveDays: Number(payslip.unpaidLeaveDays),
         overtimeHours: Number(payslip.overtimeHours),
+        lateDeduction: Number(payslip.lateDeduction || 0),
+        permissionDeduction: Number(payslip.permissionDeduction || 0),
       },
-      earnings: [
-        { label: "Basic Salary", amount: Number(payslip.baseSalary) },
-        { label: "House Rent Allowance (HRA)", amount: Number(payslip.hra || 0) },
-        { label: "Transport Allowance", amount: Number(payslip.transport || 0) },
-        { label: "Special Allowance", amount: Number(payslip.special || 0) },
-        ...(Number(payslip.otherAllowance || 0) > 0 ? [{ label: "Other Allowance", amount: Number(payslip.otherAllowance) }] : []),
-        ...(Number(payslip.overtimePay || 0) > 0 ? [{ label: `Overtime Pay (${payslip.overtimeHours} hrs)`, amount: Number(payslip.overtimePay) }] : []),
-      ],
-      deductions: [
-        ...(Number(payslip.unpaidLeaveDeduction || 0) > 0 ? [{ label: `Loss of Pay (LWP - ${payslip.unpaidLeaveDays} days)`, amount: Number(payslip.unpaidLeaveDeduction) }] : []),
-        ...(Number(payslip.lateDeduction || 0) > 0 ? [{ label: "Late Arrival Deduction", amount: Number(payslip.lateDeduction) }] : []),
-        { label: "Provident Fund (PF)", amount: Number(payslip.pfDeduction || 0) },
-        { label: "Employee State Insurance (ESI)", amount: Number(payslip.esiDeduction || 0) },
-        { label: "Professional Tax (PT)", amount: Number(payslip.ptDeduction || 0) },
-      ],
+      rates: {
+        dailyRate,
+        hourlyRate,
+      },
+      earnings,
+      deductions,
       totals: {
+        baseSalary: Number(payslip.baseSalary),
         grossSalary: gross,
+        reimbursements: Number(payslip.reimbursements || 0),
+        totalEarnings: gross + Number(payslip.reimbursements || 0),
         totalDeductions: Number(payslip.deductionsTotal),
         netSalary: net,
         netSalaryInWords: `${this._convertNumberToWords(net)} Rupees Only`,
@@ -1062,6 +1119,16 @@ class PayrollService {
         generatedAt: payslip.createdAt,
       },
     };
+  }
+
+  /**
+   * Generates official A4 Payslip PDF buffer for download
+   */
+  async getPayslipPdf(organizationId, payslipId, restrictToEmployeeId = null) {
+    const details = await this.getPayslipDetails(organizationId, payslipId, restrictToEmployeeId);
+    const { generatePayslipPdf } = require("./payslip-pdf.service");
+    const pdfBuffer = await generatePayslipPdf(details);
+    return { details, pdfBuffer };
   }
 
   /**

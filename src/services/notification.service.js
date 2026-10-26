@@ -5,6 +5,7 @@ const { runIfLeader } = require("../utils/jobLease");
 const { processDueDeliveries } = require("./webhook.service");
 const { sendSubscriptionReminders } = require("./subscriptionReminder.service");
 const emailService = require("./email.service");
+const { requiresAdminReview, ADMIN_ROLES } = require("../utils/approvalChain");
 const whatsappService = require("./whatsapp.service");
 const { getLocalDateOnly, getLocalMinutesOfDay } = require("../utils/datetime");
 const {
@@ -18,6 +19,48 @@ const {
 
 const END_OF_DAY_MINUTES = 23 * 60;
 const isEndOfDay = (now, timeZone) => getLocalMinutesOfDay(now, timeZone) >= END_OF_DAY_MINUTES;
+
+/**
+ * Ids of the given due employees who are on approved leave, or whose branch (or whole company) has a
+ * holiday, on their own local "today". They are not expected to punch, so they get no reminder.
+ */
+async function offTodayIds(due) {
+  if (due.length === 0) return new Set();
+  const employeeIds = due.map((d) => d.emp.id);
+  const orgIds = [...new Set(due.map((d) => d.emp.organizationId))];
+  const days = [...new Map(due.map((d) => [d.startOfToday.getTime(), d.startOfToday])).values()];
+  const earliest = new Date(Math.min(...days.map((d) => d.getTime())));
+  const latest = new Date(Math.max(...days.map((d) => d.getTime())));
+
+  const [leaves, holidays, companyLeaves] = await Promise.all([
+    prisma.leaveRequest.findMany({
+      where: { employeeId: { in: employeeIds }, status: "APPROVED", startDate: { lte: latest }, endDate: { gte: earliest } },
+      select: { employeeId: true, startDate: true, endDate: true },
+    }),
+    prisma.holiday.findMany({
+      where: { organizationId: { in: orgIds }, date: { gte: earliest, lte: latest }, isOptional: false },
+      select: { organizationId: true, branchId: true, date: true },
+    }),
+    prisma.companyLeave.findMany({
+      where: { organizationId: { in: orgIds }, startDate: { lte: latest }, endDate: { gte: earliest } },
+      select: { organizationId: true, branchId: true, startDate: true, endDate: true },
+    }),
+  ]);
+
+  const off = new Set();
+  for (const { emp, startOfToday } of due) {
+    const day = startOfToday.getTime();
+    const onLeave = leaves.some((l) => l.employeeId === emp.id && l.startDate.getTime() <= day && l.endDate.getTime() >= day);
+    const holiday = holidays.some(
+      (h) => h.organizationId === emp.organizationId && h.date.getTime() === day && (!h.branchId || h.branchId === emp.branchId),
+    );
+    const companyLeave = companyLeaves.some(
+      (c) => c.organizationId === emp.organizationId && c.startDate.getTime() <= day && c.endDate.getTime() >= day && (!c.branchId || c.branchId === emp.branchId),
+    );
+    if (onLeave || holiday || companyLeave) off.add(emp.id);
+  }
+  return off;
+}
 
 class NotificationService {
   /**
@@ -49,6 +92,90 @@ class NotificationService {
       data: users.map((user) => ({ organizationId, userId: user.id, title, message, type })),
     });
     return { sent: result.count };
+  }
+
+  /**
+   * Tell the people who can act on a request that it is waiting, the moment an employee submits it.
+   *
+   * Follows the approval chain: a request from an employee goes to HR and the admins; a request from HR or
+   * an admin goes to the admins only, because they alone may approve it. The requester is never told
+   * about their own request. Never throws: a failed alert must not fail the request that was saved.
+   *
+   * @returns {Promise<number>} how many people were notified
+   */
+  async notifyReviewersOfRequest({ organizationId, employeeId, title, summary, type = "APPROVAL" }) {
+    try {
+      const employee = await prisma.employee.findFirst({
+        where: { id: employeeId, organizationId },
+        select: { firstName: true, lastName: true, employeeCode: true, userId: true, user: { select: { role: true } } },
+      });
+      if (!employee) return 0;
+
+      const roles = requiresAdminReview(employee.user?.role) ? ADMIN_ROLES : [...ADMIN_ROLES, "MANAGER"];
+      const where = { organizationId, isActive: true, role: { in: roles } };
+      if (employee.userId) where.id = { not: employee.userId };
+      const reviewers = await prisma.user.findMany({ where, select: { id: true }, take: 200 });
+      if (!reviewers.length) return 0;
+
+      const name = `${employee.firstName || ""} ${employee.lastName || ""}`.trim() || "An employee";
+      const who = employee.employeeCode ? `${name} (${employee.employeeCode})` : name;
+      await prisma.notification.createMany({
+        data: reviewers.map((reviewer) => ({
+          organizationId,
+          userId: reviewer.id,
+          title,
+          message: `${who} ${summary}`,
+          type,
+        })),
+      });
+      return reviewers.length;
+    } catch (error) {
+      console.warn("[ReviewerNotification] Could not notify reviewers:", error.message);
+      return 0;
+    }
+  }
+
+  /**
+   * A new chat message alerts the other people in the conversation. One unread alert per conversation,
+   * not one per message, so a busy chat does not bury the rest of the bell.
+   */
+  async notifyChatMessage({ organizationId, threadId, senderUserId, body }) {
+    try {
+      const [thread, sender] = await Promise.all([
+        prisma.chatThread.findFirst({
+          where: { id: threadId, organizationId },
+          select: { title: true, isDirect: true, members: { select: { userId: true } } },
+        }),
+        prisma.user.findUnique({
+          where: { id: senderUserId },
+          select: { email: true, employee: { select: { firstName: true, lastName: true } } },
+        }),
+      ]);
+      if (!thread) return 0;
+      const recipients = thread.members.map((member) => member.userId).filter((id) => id !== senderUserId);
+      if (!recipients.length) return 0;
+
+      const senderName =
+        `${sender?.employee?.firstName || ""} ${sender?.employee?.lastName || ""}`.trim() || sender?.email || "A teammate";
+      const title = thread.isDirect ? `New message from ${senderName}` : `${senderName} in ${thread.title || "group chat"}`;
+
+      const alreadyAlerted = await prisma.notification.findMany({
+        where: { userId: { in: recipients }, type: "CHAT", isRead: false, title },
+        select: { userId: true },
+      });
+      const skip = new Set(alreadyAlerted.map((n) => n.userId));
+      const targets = recipients.filter((id) => !skip.has(id));
+      if (!targets.length) return 0;
+
+      const preview = String(body || "").replace(/\s+/g, " ").trim().slice(0, 140);
+      await prisma.notification.createMany({
+        data: targets.map((userId) => ({ organizationId, userId, title, message: preview, type: "CHAT" })),
+      });
+      return targets.length;
+    } catch (error) {
+      console.warn("[ChatNotification] Could not notify recipients:", error.message);
+      return 0;
+    }
   }
 
   /**
@@ -94,7 +221,7 @@ class NotificationService {
   }
 
   /**
-   * 1. Morning Shift Check-In Reminder (before shift start, e.g. 08:00–09:00)
+   * 1. Morning Shift Punch-In Reminder (before shift start, e.g. 08:00–09:00)
    * Sends to all active employees who have not clocked in today.
    */
   async sendMorningCheckInReminders(organizationId = null, respectSchedule = false) {
@@ -115,6 +242,7 @@ class NotificationService {
         lastName: true,
         phone: true,
         organizationId: true,
+        branchId: true,
         user: { select: { email: true } },
         shift: { select: { name: true, startTime: true, workingDays: true } },
         organization: { select: { timezone: true, name: true, logoUrl: true } },
@@ -158,13 +286,14 @@ class NotificationService {
     // up to two per employee.
     const [attendanceToday, candidateNotifications] = await Promise.all([
       prisma.attendance.findMany({
-        where: { employeeId: { in: employeeIds }, checkIn: { not: null } },
+        // Only today onward: without the bound this read every employee's whole attendance history each minute.
+        where: { employeeId: { in: employeeIds }, checkIn: { not: null }, date: { gte: earliestStartOfToday } },
         select: { employeeId: true, date: true },
       }),
       prisma.notification.findMany({
         where: {
           userId: { in: userIds },
-          title: { contains: "Morning Shift Check-In" },
+          title: { contains: "Morning Shift" }, // matches the older "Check-In" title too,
           createdAt: { gte: earliestStartOfToday },
         },
         select: { userId: true, createdAt: true },
@@ -179,11 +308,13 @@ class NotificationService {
       else notificationsByUser.set(n.userId, [n.createdAt]);
     }
 
-    const toNotify = due.filter(({ emp, startOfToday }) => {
+    const candidates = due.filter(({ emp, startOfToday }) => {
       if (hasCheckedInByDate.has(`${emp.id}:${startOfToday.getTime()}`)) return false;
       const sentAt = notificationsByUser.get(emp.userId);
       return !sentAt?.some((createdAt) => createdAt >= startOfToday);
     });
+    const offToday = await offTodayIds(candidates);
+    const toNotify = candidates.filter(({ emp }) => !offToday.has(emp.id));
 
     if (toNotify.length === 0) {
       return { success: true, sentCount: 0, sentUsers: [], timestamp: reminderNow.toISOString() };
@@ -193,8 +324,8 @@ class NotificationService {
       data: toNotify.map(({ emp }) => ({
         organizationId: emp.organizationId,
         userId: emp.userId,
-        title: "Morning Shift Check-In Reminder",
-        message: `Good morning, ${emp.firstName}! Shift starts at ${emp.shift?.startTime || "09:00"}. Clock in on time to avoid a late mark.`,
+        title: "Morning Shift Punch-In Reminder",
+        message: `Good morning, ${emp.firstName}! Shift starts at ${emp.shift?.startTime || "09:00"}. Punch in on time to avoid a late mark.`,
         type: "ATTENDANCE",
       })),
     });
@@ -233,7 +364,7 @@ class NotificationService {
   }
 
   /**
-   * 2. Evening Shift Completion & Check-Out Reminder (after shift end, e.g. 18:00–22:59)
+   * 2. Evening Shift Completion & Punch-Out Reminder (after shift end, e.g. 18:00–22:59)
    * Sends to all active employees who clocked in today but have not yet clocked out.
    */
   async sendEveningCheckOutReminders(organizationId = null, respectSchedule = false) {
@@ -252,9 +383,11 @@ class NotificationService {
         userId: true,
         firstName: true,
         lastName: true,
+        phone: true,
         organizationId: true,
+        user: { select: { email: true } },
         shift: { select: { name: true, endTime: true, workingDays: true } },
-        organization: { select: { timezone: true } },
+        organization: { select: { timezone: true, name: true, logoUrl: true } },
       },
     });
 
@@ -285,7 +418,7 @@ class NotificationService {
 
     const [attendanceToday, candidateNotifications] = await Promise.all([
       prisma.attendance.findMany({
-        where: { employeeId: { in: employeeIds }, checkIn: { not: null } },
+        where: { employeeId: { in: employeeIds }, checkIn: { not: null }, date: { gte: earliestStartOfToday } },
         select: { employeeId: true, date: true, checkOut: true },
       }),
       prisma.notification.findMany({
@@ -321,11 +454,32 @@ class NotificationService {
       data: toNotify.map(({ emp }) => ({
         organizationId: emp.organizationId,
         userId: emp.userId,
-        title: "Shift Completion & Check-Out Reminder",
-        message: `Great job today, ${emp.firstName}! Working hours ended at ${emp.shift?.endTime || "18:00"}. Clock out to close your shift.`,
+        title: "Shift Completion & Punch-Out Reminder",
+        message: `Great job today, ${emp.firstName}! Working hours ended at ${emp.shift?.endTime || "18:00"}. Punch out to close your shift.`,
         type: "ATTENDANCE",
       })),
     });
+
+    // Same channels as the morning reminder. Fire-and-forget: a slow or failing provider must not hold up the pass.
+    for (const { emp } of toNotify) {
+      const shiftName = emp.shift?.name || "General Shift";
+      const shiftEndTime = emp.shift?.endTime || "18:00";
+      if (emp.user?.email) {
+        emailService
+          .sendShiftEndReminderEmail(emp.user.email, emp.firstName, {
+            shiftName,
+            shiftEndTime,
+            companyName: emp.organization?.name,
+            companyLogoUrl: emp.organization?.logoUrl,
+          })
+          .catch((e) => console.warn(`[EveningReminder:Email] ${e.message}`));
+      }
+      if (emp.phone) {
+        whatsappService
+          .sendShiftEndReminderWhatsApp(emp.phone, emp.firstName, { shiftName, shiftEndTime })
+          .catch((e) => console.warn(`[EveningReminder:WhatsApp] ${e.message}`));
+      }
+    }
 
     const sentUsers = toNotify.map(({ emp }) => `${emp.firstName} (${emp.userId})`);
     return {
@@ -360,8 +514,87 @@ class NotificationService {
     }
   }
 
+  /**
+   * The evening-before heads-up: "Tomorrow is a holiday for Diwali". Covers holidays and company leave set by
+   * admin or HR, goes to everyone in scope as an in-app notification (the same channel as every other
+   * reminder), and is sent once per person per event. Runs from 10:00 in each company's own timezone.
+   */
+  async sendUpcomingHolidayReminders(now = new Date()) {
+    const organizations = await prisma.organization.findMany({ select: { id: true, timezone: true } });
+    this._holidaySweep = this._holidaySweep || new Map();
+    let sent = 0;
+
+    for (const org of organizations) {
+      const timeZone = zoneOf({ organization: org });
+      if (getLocalMinutesOfDay(now, timeZone) < 10 * 60) continue;
+      const today = getLocalDateOnly(now, timeZone);
+      if (this._holidaySweep.get(org.id) === today.getTime()) continue;
+      const tomorrow = new Date(today.getTime() + 86400000);
+
+      const [holidays, leaves] = await Promise.all([
+        prisma.holiday.findMany({
+          where: { organizationId: org.id, date: tomorrow, isOptional: false },
+          select: { name: true, branchId: true },
+        }),
+        prisma.companyLeave.findMany({
+          // Only the first day of a leave: later days were announced with it.
+          where: { organizationId: org.id, startDate: tomorrow },
+          select: { title: true, reason: true, branchId: true, isPaid: true, endDate: true },
+        }),
+      ]);
+
+      const events = [
+        ...holidays.map((h) => ({ title: `Holiday tomorrow: ${h.name}`, branchId: h.branchId, body: `Tomorrow is a holiday for ${h.name}. Punch-in is not required.` })),
+        ...leaves.map((l) => {
+          const days = Math.round((l.endDate.getTime() - tomorrow.getTime()) / 86400000) + 1;
+          return {
+            title: `Company leave tomorrow: ${l.title}`,
+            branchId: l.branchId,
+            body: `Tomorrow starts a ${days > 1 ? `${days}-day ` : ""}${l.isPaid ? "paid" : "unpaid"} company leave for ${l.title}.${l.reason ? ` ${l.reason}.` : ""} Punch-in is not required.`,
+          };
+        }),
+      ];
+
+      const dayLabel = tomorrow.toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "short", timeZone: "UTC" });
+      for (const event of events) {
+        const employees = await prisma.employee.findMany({
+          where: {
+            organizationId: org.id,
+            deletedAt: null,
+            userId: { not: null },
+            status: { in: WORKING_STATUSES },
+            ...(event.branchId ? { branchId: event.branchId } : {}),
+          },
+          select: { userId: true },
+        });
+        if (employees.length === 0) continue;
+        const userIds = employees.map((e) => e.userId);
+        const already = await prisma.notification.findMany({
+          where: { userId: { in: userIds }, title: { contains: event.title }, createdAt: { gte: today } },
+          select: { userId: true },
+        });
+        const alreadySent = new Set(already.map((n) => n.userId));
+        const fresh = userIds.filter((id) => !alreadySent.has(id));
+        if (fresh.length === 0) continue;
+        await prisma.notification.createMany({
+          data: fresh.map((userId) => ({
+            organizationId: org.id,
+            userId,
+            title: event.title,
+            message: `${dayLabel}. ${event.body}`,
+            type: "SYSTEM",
+          })),
+        });
+        sent += fresh.length;
+      }
+      this._holidaySweep.set(org.id, today.getTime());
+    }
+    return { success: true, sentCount: sent };
+  }
+
   async evaluateScheduledReminders() {
     try {
+      await this.sendUpcomingHolidayReminders();
       await this.sendMorningCheckInReminders(null, true);
       await this.sendEveningCheckOutReminders(null, true);
 
@@ -457,7 +690,7 @@ class NotificationService {
     // Previously up to four sequential queries per employee (existing
     // attendance, holiday, approved leave, shift) — now four queries total,
     // independent of how many employees are platform-wide.
-    const [existingToday, holidaysToday, approvedLeavesToday, shifts] = await Promise.all([
+    const [existingToday, holidaysToday, approvedLeavesToday, shifts, companyLeavesToday] = await Promise.all([
       prisma.attendance.findMany({
         where: { employeeId: { in: employeeIds }, date: today },
         select: { employeeId: true },
@@ -473,6 +706,10 @@ class NotificationService {
       shiftIds.length
         ? prisma.shift.findMany({ where: { id: { in: shiftIds } }, select: { id: true, workingDays: true } })
         : Promise.resolve([]),
+      prisma.companyLeave.findMany({
+        where: { organizationId: { in: orgIds }, startDate: { lte: today }, endDate: { gte: today } },
+        select: { organizationId: true, branchId: true },
+      }),
     ]);
 
     const hasAttendanceToday = new Set(existingToday.map((a) => a.employeeId));
@@ -482,8 +719,13 @@ class NotificationService {
     // whole organization; one with a branchId covers only that branch.
     const orgWideHoliday = new Set(holidaysToday.filter((h) => !h.branchId).map((h) => h.organizationId));
     const branchHoliday = new Set(holidaysToday.filter((h) => h.branchId).map((h) => `${h.organizationId}:${h.branchId}`));
+    // Company leave (for example Diwali) works like a holiday: nobody it covers is marked absent.
+    const orgWideLeave = new Set(companyLeavesToday.filter((c) => !c.branchId).map((c) => c.organizationId));
+    const branchLeave = new Set(companyLeavesToday.filter((c) => c.branchId).map((c) => `${c.organizationId}:${c.branchId}`));
     const isHolidayFor = (emp) =>
-      orgWideHoliday.has(emp.organizationId) || (emp.branchId && branchHoliday.has(`${emp.organizationId}:${emp.branchId}`));
+      orgWideHoliday.has(emp.organizationId) ||
+      orgWideLeave.has(emp.organizationId) ||
+      Boolean(emp.branchId && (branchHoliday.has(`${emp.organizationId}:${emp.branchId}`) || branchLeave.has(`${emp.organizationId}:${emp.branchId}`)));
 
     const dayOfWeek = today.getUTCDay(); // 0=Sun, 1=Mon... (today is UTC midnight of the local date)
     const weekOffRecords = [];
@@ -549,7 +791,7 @@ class NotificationService {
    * Start the recurring 60-second timer
    */
   startScheduler() {
-    console.log("[NotificationScheduler] Starting scheduler: check-in before shift start, check-out after shift end, absent marking after 23:00...");
+    console.log("[NotificationScheduler] Starting scheduler: punch-in before shift start, punch-out after shift end, absent marking after 23:00...");
     // Every instance may run this timer. The database lease makes exactly one
     // of them the leader, with or without Redis; a dead leader's lease expires
     // after 90s and another instance takes over.

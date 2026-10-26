@@ -14,6 +14,7 @@ router.use(authenticate);
 // Diagnostics and broadcast triggers expose provider config and can send mail to
 // arbitrary addresses, so they are administrator-only.
 const adminOnly = authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN");
+const adminOrHr = authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER");
 
 // Get my notifications
 router.get("/", async (req, res) => {
@@ -155,8 +156,8 @@ router.put("/read-all", async (req, res) => {
 });
 
 // Trigger daily reminders (morning before shift start, evening after shift end). Admin trigger ignores the clock window.
-// Announce one message to every active user in the organization (admin only)
-router.post("/broadcast", adminOnly, async (req, res) => {
+// Announce one message to every active user in the organization (admin and HR)
+router.post("/broadcast", adminOrHr, async (req, res) => {
   try {
     const title = String(req.body?.title || "").trim();
     const message = String(req.body?.message || "").trim();

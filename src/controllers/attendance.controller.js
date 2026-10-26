@@ -145,6 +145,15 @@ class AttendanceController {
   /**
    * Today's punch locations for everyone in the workspace
    */
+  async getBranchSummary(req, res) {
+    try {
+      const result = await attendanceService.getBranchSummary(req.user.organizationId);
+      return ok(res, result);
+    } catch (error) {
+      return fail(res, error);
+    }
+  }
+
   async getLiveToday(req, res) {
     try {
       const result = await attendanceService.getLiveToday(req.user.organizationId);
@@ -163,6 +172,7 @@ class AttendanceController {
         req.user.id,
         req.user.organizationId,
         req.query,
+        req.user.role,
       );
       return paginated(res, result);
     } catch (error) {
@@ -213,8 +223,8 @@ class AttendanceController {
         organizationId: req.user.organizationId,
         role: req.user.role,
         employeeId: req.query.employeeId,
-        from: req.query.from,
-        to: req.query.to,
+        from: req.query.from || req.query.date,
+        to: req.query.to || req.query.date,
         status: req.query.status,
         page: req.query.page,
         limit: req.query.limit,

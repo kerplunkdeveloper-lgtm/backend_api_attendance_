@@ -116,6 +116,9 @@ async function sendMessage(organizationId, userId, threadId, body) {
 
   // Push to live subscribers (no-op when the WebSocket gateway is not attached).
   broadcastToThread(threadId, message);
+
+  // People who are not looking at the chat still get an alert in the bell.
+  void require("./notification.service").notifyChatMessage({ organizationId, threadId, senderUserId: userId, body: text });
   return message;
 }
 

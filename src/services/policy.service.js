@@ -1,5 +1,5 @@
 const prisma = require("../config/database");
-const { boundedNumber } = require("../utils/policyValidation");
+const { boundedNumber, normalizeWeeklyOffDays, workingDaysFromWeeklyOff } = require("../utils/policyValidation");
 const { policySelect } = require("../utils/prismaSelects");
 const { normalizeCycleDay, normalizeDayBasis } = require("../utils/payrollCycle");
 
@@ -18,6 +18,7 @@ const DEFAULT_POLICY = {
   requireOtApproval: false,
   geofenceStrict: false,
   requireTrustedDevice: false,
+  weeklyOffDays: "0",
 };
 
 const parseBoolean = (value) => {
@@ -68,6 +69,7 @@ class PolicyService {
       requireOtApproval,
       geofenceStrict,
       requireTrustedDevice,
+      weeklyOffDays,
     } = data;
 
     const payload = {};
@@ -85,18 +87,37 @@ class PolicyService {
     if (requireOtApproval !== undefined) payload.requireOtApproval = parseBoolean(requireOtApproval);
     if (geofenceStrict !== undefined) payload.geofenceStrict = parseBoolean(geofenceStrict);
     if (requireTrustedDevice !== undefined) payload.requireTrustedDevice = parseBoolean(requireTrustedDevice);
+    if (weeklyOffDays !== undefined) payload.weeklyOffDays = normalizeWeeklyOffDays(weeklyOffDays);
     const createPayload = { ...DEFAULT_POLICY, ...payload };
 
-    const policy = await prisma.attendancePolicy.upsert({
-      where: { organizationId },
-      update: payload,
-      create: { organizationId, ...createPayload },
-    });
+    const save = () =>
+      prisma.attendancePolicy.upsert({
+        where: { organizationId },
+        update: payload,
+        create: { organizationId, ...createPayload },
+      });
+
+    let policy;
+    let shiftsUpdated = 0;
+    if (payload.weeklyOffDays !== undefined) {
+      // Every shift in the company follows the company weekly off, so attendance, leave, payroll and the
+      // absent marker (which all read the shift's working days) agree with the policy straight away.
+      const workingDays = workingDaysFromWeeklyOff(payload.weeklyOffDays);
+      const [saved, updated] = await prisma.$transaction([
+        save(),
+        prisma.shift.updateMany({ where: { organizationId }, data: { workingDays } }),
+      ]);
+      policy = saved;
+      shiftsUpdated = updated.count;
+    } else {
+      policy = await save();
+    }
 
     return {
       ...policy,
       lateDeductionPercent: Number(policy.lateDeductionPercent),
       monthlyPermissionHours: Number(policy.monthlyPermissionHours),
+      ...(payload.weeklyOffDays !== undefined ? { shiftsUpdated } : {}),
     };
   }
   async listLateComingRules(organizationId) {

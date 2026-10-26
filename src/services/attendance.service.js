@@ -3,7 +3,7 @@ const { WORKING_STATUSES } = require("../utils/employeeStatus");
 const { verifyGeofence, officeOnlyRejection } = require("../utils/geofence");
 
 // Work modes that are, by definition, away from the office. They are exempt
-// from "office only" check-in (WFH still needs policy.allowWfh).
+// from "office only" punch-in (WFH still needs policy.allowWfh).
 const SPECIAL_WORK_MODES = ["WORK_FROM_HOME", "CLIENT_VISIT", "TRAVEL", "SHOOT"];
 const {
   calculateLateMinutes,
@@ -40,6 +40,37 @@ const getTodayDateOnly = (date = new Date()) => {
 };
 
 const timezoneCache = new Map();
+
+/**
+ * The branch's name, but only when the punch really was inside it. Without GPS on either side we cannot
+ * tell, so the branch name is kept as before rather than showing no place at all.
+ */
+const branchNameIfInside = (branch, latitude, longitude) => {
+  if (!branch?.name) return undefined;
+  if (latitude == null || longitude == null || !branch.latitude || !branch.longitude) return branch.name;
+  try {
+    const check = verifyGeofence({ latitude, longitude }, { latitude: branch.latitude, longitude: branch.longitude, radiusMeters: branch.radiusMeters });
+    return check.isInside || check.bypassed ? branch.name : undefined;
+  } catch {
+    return branch.name;
+  }
+};
+
+/**
+ * Where someone punched is for admins and HR only. Everyone else gets their record without the place
+ * names, coordinates and per-event GPS.
+ */
+const withoutPunchLocation = (record) => {
+  if (!record) return record;
+  const {
+    checkInLocation, checkOutLocation, checkInLatitude, checkInLongitude, checkOutLatitude, checkOutLongitude,
+    ...rest
+  } = record;
+  if (Array.isArray(rest.events)) {
+    rest.events = rest.events.map(({ latitude, longitude, accuracy, ...event }) => event);
+  }
+  return rest;
+};
 
 /** Namespaces device/offline ids so two employees can reuse the same local key. */
 const durableClientEventId = (organizationId, userId, clientEventId) => {
@@ -218,7 +249,7 @@ const isWorkingDay = (shift, date, timezone = DEFAULT_TIMEZONE) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Standard check-in with GPS geofence enforcement.
+ * Standard punch-in with GPS geofence enforcement.
  * Now:
  *   - Uses resolveShift() to support ShiftOverride
  *   - Detects WEEK_OFF and auto-creates week-off record
@@ -242,6 +273,25 @@ const assertTrustedDevice = async (employee, organizationId, policy, deviceId) =
   await prisma.employeeDevice.update({ where: { id: device.id }, data: { lastUsedAt: new Date() } });
 };
 
+/** True when an admin is recording a punch for another person, not for themselves. */
+const isOnBehalf = (employee, userId) => Boolean(userId && employee?.userId && employee.userId !== userId);
+
+/**
+ * A punch is only saved with a captured GPS position, so the record always says where the person was.
+ * Not required for an admin recording a punch for someone else, or for biometric / device punches, which have
+ * no phone location.
+ */
+const assertLocationCaptured = ({ latitude, longitude, action, skip }) => {
+  if (skip) return;
+  const missing = (value) => value === undefined || value === null || value === "" || !Number.isFinite(Number(value));
+  if (missing(latitude) || missing(longitude)) {
+    const error = new Error(`Turn on location (GPS) to punch ${action}. We need to capture where you are before your punch can be saved.`);
+    error.statusCode = 403;
+    error.code = "LOCATION_REQUIRED";
+    throw error;
+  }
+};
+
 const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude, accuracy, timestamp, workMode = "OFFICE", note, actorRole = null, deviceId = null, skipGeofence = false, source = "WEB", clientEventId = null, locationLabel = null }) => {
   const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
   const checkInTime = assertPunchTimestamp(timestamp, { actorRole, source });
@@ -249,17 +299,18 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
   const today = getLocalDateOnly(checkInTime, timezone);
   const policy = await getPolicy(organizationId);
   if (workMode === "WORK_FROM_HOME" && !policy.allowWfh) {
-    const error = new Error("Work From Home check-in is not enabled for this organization.");
+    const error = new Error("Work From Home punch-in is not enabled for this organization.");
     error.statusCode = 403;
     throw error;
   }
   await assertTrustedDevice(employee, organizationId, policy, deviceId);
+  assertLocationCaptured({ latitude, longitude, action: "in", skip: skipGeofence || source === "BIOMETRIC" || (isOnBehalf(employee, userId) && ADMIN_ROLES.includes(actorRole)) });
 
   // ── Week-Off / Holiday / Leave Detection ──────────────────────────────────
   const shift = await resolveShift(employee, organizationId, checkInTime);
   const isOffDay = shift ? !isWorkingDay(shift, checkInTime, timezone) : false;
 
-  const [holiday, approvedLeave] = await Promise.all([
+  const [holidayRow, approvedLeave, companyLeave] = await Promise.all([
     prisma.holiday.findFirst({
       where: {
         organizationId,
@@ -276,11 +327,41 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
         endDate: { gte: today },
       },
     }),
+    prisma.companyLeave.findFirst({
+      where: {
+        organizationId,
+        startDate: { lte: today },
+        endDate: { gte: today },
+        OR: [{ branchId: null }, ...(employee.branchId ? [{ branchId: employee.branchId }] : [])],
+      },
+      select: { title: true, reason: true, isPaid: true },
+    }),
   ]);
+  // Company leave (for example Diwali) is a day off for everyone it covers, like a holiday.
+  const holiday = holidayRow || (companyLeave ? { name: companyLeave.title } : null);
 
   const isHoliday = Boolean(holiday);
   const isOnLeave = Boolean(approvedLeave);
   const isOvertimeShift = isOffDay || isHoliday || isOnLeave;
+
+  // Weekly off, holiday and company leave are closed for punching unless HR or an admin approved work today.
+  await assertDayOffWorkApproved({
+    employee,
+    organizationId,
+    today,
+    at: checkInTime,
+    timezone,
+    actorRole,
+    onBehalf: isOnBehalf(employee, userId),
+    source,
+    dayOff: companyLeave
+      ? { kind: "COMPANY_LEAVE", title: companyLeave.title }
+      : holidayRow
+        ? { kind: "HOLIDAY", title: holidayRow.name }
+        : isOffDay
+          ? { kind: "WEEK_OFF", title: weekdayName(checkInTime, timezone) }
+          : null,
+  });
 
   // ── Geofence Check ──────────────────────────────────────────────────────────
   let matchedBranch = employee.branch;
@@ -392,7 +473,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
 
   if (existingAttendance?.checkIn) {
     const timeStr = new Date(existingAttendance.checkIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    const error = new Error(`Already checked in for today at ${timeStr}`);
+    const error = new Error(`Already punched in for today at ${timeStr}`);
     error.statusCode = 400;
     error.attendance = existingAttendance;
     throw error;
@@ -404,7 +485,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
     latitude,
     longitude,
     workMode,
-    branchName: matchedBranch?.name,
+    branchName: geofenceResult?.isInside ? matchedBranch?.name : undefined,
   });
 
   // ── Persist ─────────────────────────────────────────────────────────────────
@@ -457,10 +538,10 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
     return { ...record, event };
   });
 
-  let checkInMessage = status === "LATE" ? `Checked in late by ${formatMinutes(lateMinutes)}` : "Checked in successfully on time";
+  let checkInMessage = status === "LATE" ? `Punched in late by ${formatMinutes(lateMinutes)}` : "Punched in successfully on time";
   if (isOvertimeShift) {
     const reason = isOffDay ? "Weekend / Rest Day" : holiday ? `Holiday (${holiday.name})` : "Approved Leave Day";
-    checkInMessage = `Checked in on ${reason} — all hours worked will be logged as Overtime (OT).`;
+    checkInMessage = `Punched in on ${reason} — all hours worked will be logged as Overtime (OT).`;
   }
 
   return {
@@ -476,7 +557,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// WFH Check-In (No geofence, sets WORK_FROM_HOME status)
+// WFH Punch-In (No geofence, sets WORK_FROM_HOME status)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNote, actorRole = null, deviceId = null }) => {
@@ -488,7 +569,7 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
   await assertTrustedDevice(employee, organizationId, policy, deviceId);
 
   if (!policy.allowWfh) {
-    const error = new Error("Work From Home check-in is not enabled for this organization.");
+    const error = new Error("Work From Home punch-in is not enabled for this organization.");
     error.statusCode = 403;
     throw error;
   }
@@ -496,7 +577,7 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
   const shift = await resolveShift(employee, organizationId, checkInTime);
   const isOffDay = shift ? !isWorkingDay(shift, checkInTime, timezone) : false;
 
-  const [holiday, approvedLeave] = await Promise.all([
+  const [holidayRow, approvedLeave, companyLeave] = await Promise.all([
     prisma.holiday.findFirst({
       where: {
         organizationId,
@@ -513,18 +594,47 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
         endDate: { gte: today },
       },
     }),
+    prisma.companyLeave.findFirst({
+      where: {
+        organizationId,
+        startDate: { lte: today },
+        endDate: { gte: today },
+        OR: [{ branchId: null }, ...(employee.branchId ? [{ branchId: employee.branchId }] : [])],
+      },
+      select: { title: true, reason: true, isPaid: true },
+    }),
   ]);
+  // Company leave (for example Diwali) is a day off for everyone it covers, like a holiday.
+  const holiday = holidayRow || (companyLeave ? { name: companyLeave.title } : null);
 
   const isHoliday = Boolean(holiday);
   const isOnLeave = Boolean(approvedLeave);
   const isOvertimeShift = isOffDay || isHoliday || isOnLeave;
+
+  await assertDayOffWorkApproved({
+    employee,
+    organizationId,
+    today,
+    at: checkInTime,
+    timezone,
+    actorRole,
+    onBehalf: isOnBehalf(employee, userId),
+    source: "WEB",
+    dayOff: companyLeave
+      ? { kind: "COMPANY_LEAVE", title: companyLeave.title }
+      : holidayRow
+        ? { kind: "HOLIDAY", title: holidayRow.name }
+        : isOffDay
+          ? { kind: "WEEK_OFF", title: weekdayName(checkInTime, timezone) }
+          : null,
+  });
 
   // Duplicate check
   const existing = await prisma.attendance.findUnique({
     where: { employeeId_date: { employeeId: employee.id, date: today } },
   });
   if (existing?.checkIn) {
-    const error = new Error("Already checked in for today.");
+    const error = new Error("Already punched in for today.");
     error.statusCode = 400;
     throw error;
   }
@@ -577,10 +687,10 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
     return record;
   });
 
-  let wfhMessage = lateMinutes > 0 ? `WFH check-in recorded. Late by ${formatMinutes(lateMinutes)}.` : "WFH check-in recorded successfully.";
+  let wfhMessage = lateMinutes > 0 ? `WFH punch-in recorded. Late by ${formatMinutes(lateMinutes)}.` : "WFH punch-in recorded successfully.";
   if (isOvertimeShift) {
     const reason = isOffDay ? "Weekend / Rest Day" : holiday ? `Holiday (${holiday.name})` : "Approved Leave Day";
-    wfhMessage = `WFH check-in recorded on ${reason} — all hours worked will be logged as Overtime (OT).`;
+    wfhMessage = `WFH punch-in recorded on ${reason} — all hours worked will be logged as Overtime (OT).`;
   }
 
   return {
@@ -598,6 +708,7 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
 const checkOut = async ({ userId, employeeId, organizationId, latitude, longitude, accuracy, timestamp, workMode, note, actorRole = null, deviceId = null, skipGeofence = false, source = "WEB", clientEventId = null, locationLabel = null }) => {
   const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
   const policy = await getPolicy(organizationId);
+  assertLocationCaptured({ latitude, longitude, action: "out", skip: skipGeofence || source === "BIOMETRIC" || (isOnBehalf(employee, userId) && ADMIN_ROLES.includes(actorRole)) });
   await assertTrustedDevice(employee, organizationId, policy, deviceId);
   const checkOutTime = assertPunchTimestamp(timestamp, { actorRole, source: source || "WEB" });
   const timezone = await getOrgTimezone(organizationId);
@@ -613,7 +724,7 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
 
   // A night shift that starts before midnight belongs to the previous calendar
   // day. Without this, the 06:00 checkout of a 22:00 shift looks for today's
-  // record, finds nothing, and the employee can never clock out.
+  // record, finds nothing, and the employee can never punch out.
   if (!attendance || !attendance.checkIn) {
     const openShift = await prisma.attendance.findFirst({
       where: {
@@ -643,14 +754,14 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
   }
 
   if (!attendance || !attendance.checkIn) {
-    const error = new Error("No check-in record found for today. You must check in before checking out.");
+    const error = new Error("No punch-in record found for today. You must punch in before punching out.");
     error.statusCode = 400;
     throw error;
   }
 
   if (attendance.checkOut) {
     const timeStr = new Date(attendance.checkOut).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    const error = new Error(`Already checked out for today at ${timeStr}`);
+    const error = new Error(`Already punched out for today at ${timeStr}`);
     error.statusCode = 400;
     error.attendance = attendance;
     throw error;
@@ -664,7 +775,7 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
   let shift = attendance.shift || (await resolveShift(employee, organizationId, attendanceDate));
   const isOffDay = shift ? !isWorkingDay(shift, attendanceDate, timezone) : false;
 
-  const [holiday, approvedLeave] = await Promise.all([
+  const [holidayRow, approvedLeave, companyLeave] = await Promise.all([
     prisma.holiday.findFirst({
       where: {
         organizationId,
@@ -681,7 +792,17 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
         endDate: { gte: attendanceDate },
       },
     }),
+    prisma.companyLeave.findFirst({
+      where: {
+        organizationId,
+        startDate: { lte: attendanceDate },
+        endDate: { gte: attendanceDate },
+        OR: [{ branchId: null }, ...(employee.branchId ? [{ branchId: employee.branchId }] : [])],
+      },
+      select: { title: true, reason: true, isPaid: true },
+    }),
   ]);
+  const holiday = holidayRow || (companyLeave ? { name: companyLeave.title } : null);
 
   const isNonWorkingDay = isOffDay || Boolean(holiday) || Boolean(approvedLeave);
 
@@ -772,7 +893,7 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
     latitude,
     longitude,
     workMode,
-    branchName: attendance.branch?.name || employee.branch?.name,
+    branchName: branchNameIfInside(attendance.branch || employee.branch, latitude, longitude),
   });
 
   const updatedAttendance = await prisma.$transaction(async (tx) => {
@@ -893,10 +1014,10 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
   });
 
   const checkoutMessage = metrics.isNonWorkingDay
-    ? `Checked out. ${metrics.workingFormatted} logged as Overtime (OT worked on rest day/leave).`
+    ? `Punched out. ${metrics.workingFormatted} logged as Overtime (OT worked on rest day/leave).`
     : metrics.lateArrivalWaived
-    ? `Checked out. ${metrics.workingFormatted} logged (Full shift completed — late arrival waived).`
-    : `Checked out. Working: ${metrics.workingFormatted}, Breaks: ${metrics.breakFormatted || "0m"}`;
+    ? `Punched out. ${metrics.workingFormatted} logged (Full shift completed — late arrival waived).`
+    : `Punched out. Working: ${metrics.workingFormatted}, Breaks: ${metrics.breakFormatted || "0m"}`;
 
   return {
     success: true,
@@ -934,11 +1055,26 @@ const startPause = async ({ userId, employeeId, organizationId, latitude, longit
   const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
   const eventTime = assertPunchTimestamp(timestamp, { actorRole, source: "WEB" });
   const attendance = await findOpenAttendance(employee.id, organizationId, eventTime, { events: { orderBy: { timestamp: "desc" } } });
-  if (!attendance?.checkIn) { const error = new Error(`You must check in before taking ${config.label.toLowerCase()}`); error.statusCode = 400; throw error; }
-  if (attendance.checkOut) { const error = new Error(`Cannot take ${config.label.toLowerCase()} after checking out`); error.statusCode = 400; throw error; }
+  if (!attendance?.checkIn) { const error = new Error(`You must punch in before taking ${config.label.toLowerCase()}`); error.statusCode = 400; throw error; }
+  if (attendance.checkOut) { const error = new Error(`Cannot take ${config.label.toLowerCase()} after punching out`); error.statusCode = 400; throw error; }
   const lastEvent = attendance.events[0];
   if (lastEvent && (lastEvent.type === "BREAK_START" || lastEvent.type === "LUNCH_START")) { const error = new Error(`You are already on ${lastEvent.type === "LUNCH_START" ? "lunch" : "a break"}`); error.statusCode = 400; throw error; }
   const event = await prisma.attendanceEvent.create({ data: { attendanceId: attendance.id, type: config.start, timestamp: eventTime, latitude: latitude ? String(latitude) : null, longitude: longitude ? String(longitude) : null, isBypassed: false } });
+  
+  // Notify Admin and HR of break/lunch start
+  try {
+    const notificationService = require("./notification.service");
+    void notificationService.notifyReviewersOfRequest({
+      organizationId,
+      employeeId: employee.id,
+      title: `${config.label} Started`,
+      summary: `started ${config.label.toLowerCase()} at ${eventTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+      type: "ATTENDANCE",
+    });
+  } catch (err) {
+    console.warn("[PauseNotification] Failed to alert reviewers:", err.message);
+  }
+
   return { success: true, message: `${config.label} started at ${eventTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`, event, attendance };
 };
 
@@ -958,6 +1094,21 @@ const endPause = async ({ userId, employeeId, organizationId, latitude, longitud
     const event = await tx.attendanceEvent.create({ data: { attendanceId: attendance.id, type: config.end, timestamp: eventTime, latitude: latitude ? String(latitude) : null, longitude: longitude ? String(longitude) : null, isBypassed: false } });
     return { ...record, event };
   });
+
+  // Notify Admin and HR of break/lunch end with duration
+  try {
+    const notificationService = require("./notification.service");
+    void notificationService.notifyReviewersOfRequest({
+      organizationId,
+      employeeId: employee.id,
+      title: `${config.label} Ended`,
+      summary: `ended ${config.label.toLowerCase()} (Duration: ${formatDurationSeconds(durationSeconds)})`,
+      type: "ATTENDANCE",
+    });
+  } catch (err) {
+    console.warn("[PauseNotification] Failed to alert reviewers:", err.message);
+  }
+
   return { success: true, message: `${config.label} ended. Duration: ${formatDurationSeconds(durationSeconds)}`, durationMinutes, durationSeconds, totalBreakMinutes: updatedAttendance.breakMinutes, totalLunchMinutes: updatedAttendance.lunchMinutes, attendance: updatedAttendance };
 };
 
@@ -1136,6 +1287,73 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
 // Read Operations
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Why today is a day off for this employee, for the punch screen: a holiday or a company leave
+ * (for example Diwali) set by admin or HR. Null on a normal working day.
+ */
+const weekdayName = (at, timezone) => new Intl.DateTimeFormat("en-IN", { weekday: "long", timeZone: timezone }).format(at);
+
+/**
+ * Why today is a day off for this employee, if it is: a company holiday, company leave, or their weekly off.
+ * Personal approved leave is not included on purpose: that person may still choose to work.
+ */
+const getDayOff = async (organizationId, employee, at = new Date()) => {
+  const timezone = await getOrgTimezone(organizationId);
+  const date = getLocalDateOnly(at, timezone);
+  const off = await findDayOff(organizationId, employee, date);
+  if (off) return { ...off, date };
+  const shift = await resolveShift(employee, organizationId, at);
+  if (shift && !isWorkingDay(shift, at, timezone)) {
+    const day = weekdayName(at, timezone);
+    return { kind: "WEEK_OFF", title: day, reason: null, isPaid: true, date };
+  }
+  return null;
+};
+
+/** The sentence shown when punching is closed, naming the day and why. */
+const dayOffMessage = (dayOff, at, timezone) => {
+  const day = weekdayName(at, timezone);
+  if (dayOff.kind === "WEEK_OFF") return `Today is ${day}, your weekly off. Punching is closed. If you have to work today, ask HR or an admin to approve it.`;
+  if (dayOff.kind === "HOLIDAY") return `Today is a company holiday (${dayOff.title}). Punching is closed. If you have to work today, ask HR or an admin to approve it.`;
+  return `Today is company leave (${dayOff.title}). Punching is closed. If you have to work today, ask HR or an admin to approve it.`;
+};
+
+/**
+ * Punching is closed on a weekly off, holiday or company leave unless HR or an admin approved work for
+ * that date. Admins marking someone else's attendance and biometric devices are not blocked.
+ */
+const assertDayOffWorkApproved = async ({ employee, organizationId, today, at, timezone, dayOff, actorRole, onBehalf, source }) => {
+  if (!dayOff) return null;
+  if (source === "BIOMETRIC" || (onBehalf && ADMIN_ROLES.includes(actorRole))) return null;
+  const approved = await prisma.dayOffWorkRequest.findFirst({
+    where: { employeeId: employee.id, date: today, status: "APPROVED" },
+    select: { id: true, reasonType: true },
+  });
+  if (approved) return approved;
+  const error = new Error(dayOffMessage(dayOff, at, timezone));
+  error.statusCode = 403;
+  error.code = "DAY_OFF_APPROVAL_REQUIRED";
+  error.dayOff = { kind: dayOff.kind, title: dayOff.title };
+  throw error;
+};
+
+const findDayOff = async (organizationId, employee, date) => {
+  const branchScope = [{ branchId: null }, ...(employee.branchId ? [{ branchId: employee.branchId }] : [])];
+  const [holiday, companyLeave] = await Promise.all([
+    prisma.holiday.findFirst({
+      where: { organizationId, date, isOptional: false, OR: branchScope },
+      select: { name: true },
+    }),
+    prisma.companyLeave.findFirst({
+      where: { organizationId, startDate: { lte: date }, endDate: { gte: date }, OR: branchScope },
+      select: { title: true, reason: true, isPaid: true },
+    }),
+  ]);
+  if (companyLeave) return { kind: "COMPANY_LEAVE", title: companyLeave.title, reason: companyLeave.reason || null, isPaid: companyLeave.isPaid };
+  if (holiday) return { kind: "HOLIDAY", title: holiday.name, reason: null, isPaid: true };
+  return null;
+};
+
 const getTodayStatus = async (userId, organizationId) => {
   const employee = await prisma.employee.findFirst({
     where: { userId, organizationId },
@@ -1155,14 +1373,24 @@ const getTodayStatus = async (userId, organizationId) => {
     };
   }
 
-  const [attendance, policy] = await Promise.all([
+  const todayDate = await getOrgDateOnly(organizationId, new Date());
+  const [attendance, policy, dayOffBase, workRequest] = await Promise.all([
     findOpenAttendance(employee.id, organizationId, new Date(), {
       shift: true,
       branch: true,
       events: { orderBy: { timestamp: "desc" } },
     }),
     getPolicy(organizationId),
+    getDayOff(organizationId, employee, new Date()),
+    prisma.dayOffWorkRequest.findFirst({
+      where: { employeeId: employee.id, date: todayDate },
+      select: { id: true, status: true, reasonType: true, note: true, reviewNote: true, createdAt: true, reviewedAt: true },
+    }),
   ]);
+  // Someone already punched in (an approved day of work, or an admin marked them) is never locked out of punching out.
+  const dayOff = dayOffBase
+    ? { kind: dayOffBase.kind, title: dayOffBase.title, reason: dayOffBase.reason, isPaid: dayOffBase.isPaid, workRequest: workRequest || null, canPunch: workRequest?.status === "APPROVED" }
+    : null;
 
   const hasCheckedIn = Boolean(attendance?.checkIn);
   const hasCheckedOut = Boolean(attendance?.checkOut);
@@ -1198,6 +1426,8 @@ const getTodayStatus = async (userId, organizationId) => {
       branch: employee.branch,
       shift: employee.shift,
     },
+    // Set when today is a holiday or company leave, so the punch screen can say why before anyone punches.
+    dayOff,
     // Lets the punch screen tell employees the rule before they tap.
     locationPolicy: {
       mode: policy.geofenceStrict ? "OFFICE_ONLY" : "ANYWHERE",
@@ -1282,7 +1512,7 @@ const getLiveToday = async (organizationId) => {
   };
 };
 
-const getMyAttendance = async (userId, organizationId, { limit = 30, page = 1 }) => {
+const getMyAttendance = async (userId, organizationId, { limit = 30, page = 1 }, role) => {
   const employee = await prisma.employee.findFirst({ where: { userId, organizationId } });
   if (!employee) return { records: [], total: 0 };
 
@@ -1303,16 +1533,23 @@ const getMyAttendance = async (userId, organizationId, { limit = 30, page = 1 })
     prisma.attendance.count({ where: { employeeId: employee.id, organizationId } }),
   ]);
 
-  return { records, total, page: curPage, totalPages: Math.ceil(total / take) };
+  return {
+    records: ADMIN_ROLES.includes(role) ? records : records.map(withoutPunchLocation),
+    total,
+    page: curPage,
+    totalPages: Math.ceil(total / take),
+  };
 };
 
 const getAllAttendance = async (organizationId, query = {}) => {
-  const { date, employeeId, branchId, status, page = 1, limit = 50 } = query;
+  const { date, employeeId, branchId, employeeBranchId, status, page = 1, limit = 50 } = query;
 
   const where = { organizationId };
   if (date) where.date = getTodayDateOnly(new Date(date));
   if (employeeId) where.employeeId = employeeId;
   if (branchId && branchId !== "ALL" && branchId !== "") where.branchId = branchId;
+  // The branch the employee is assigned to, as opposed to the branch their punch matched.
+  if (employeeBranchId && employeeBranchId !== "ALL") where.employee = { branchId: String(employeeBranchId) };
   if (status && status !== "ALL") where.status = status;
 
   const { limit: take, skip, page: curPage } = parsePagination({ page, limit }, { defaultLimit: 50 });
@@ -1434,8 +1671,79 @@ const getAttendanceSummary = async (organizationId, targetDate, branchId = null)
   };
 };
 
+/**
+ * Today's attendance for every branch: how many of the branch's people are in, on leave, off, or absent.
+ * People are counted under their assigned branch. "Off" is a company holiday, company leave or the weekly off;
+ * those people are neither present nor absent.
+ */
+const getBranchSummary = async (organizationId) => {
+  const timezone = await getOrgTimezone(organizationId);
+  const now = new Date();
+  const date = getLocalDateOnly(now, timezone);
+  const weekday = getLocalDayOfWeek(now, timezone);
+
+  const [branches, employees, attendances, leaves, holidays, companyLeaves] = await Promise.all([
+    prisma.branch.findMany({ where: { organizationId }, select: { id: true, name: true } }),
+    prisma.employee.findMany({
+      where: { organizationId, status: { in: WORKING_STATUSES }, deletedAt: null },
+      select: { id: true, branchId: true, shift: { select: { workingDays: true } } },
+    }),
+    prisma.attendance.findMany({ where: { organizationId, date }, select: { employeeId: true, status: true } }),
+    prisma.leaveRequest.findMany({
+      where: { organizationId, status: "APPROVED", startDate: { lte: date }, endDate: { gte: date } },
+      select: { employeeId: true },
+    }),
+    prisma.holiday.findMany({ where: { organizationId, date, isOptional: false }, select: { branchId: true } }),
+    prisma.companyLeave.findMany({ where: { organizationId, startDate: { lte: date }, endDate: { gte: date } }, select: { branchId: true } }),
+  ]);
+
+  const statusOf = new Map(attendances.map((a) => [a.employeeId, a.status]));
+  const onLeave = new Set(leaves.map((l) => l.employeeId));
+  const closedAll = holidays.some((h) => !h.branchId) || companyLeaves.some((c) => !c.branchId);
+  const closedBranches = new Set([...holidays, ...companyLeaves].filter((x) => x.branchId).map((x) => x.branchId));
+
+  const blank = (id, name) => ({ id, name, total: 0, present: 0, late: 0, wfh: 0, onLeave: 0, off: 0, absent: 0 });
+  const rows = new Map(branches.map((b) => [b.id, blank(b.id, b.name)]));
+  const NONE = "none";
+
+  for (const emp of employees) {
+    const key = emp.branchId && rows.has(emp.branchId) ? emp.branchId : NONE;
+    if (!rows.has(key)) rows.set(key, blank(null, "No branch"));
+    const row = rows.get(key);
+    row.total += 1;
+
+    const status = statusOf.get(emp.id);
+    if (status) {
+      if (["PRESENT", "LATE", "HALF_DAY", "WORK_FROM_HOME"].includes(status)) {
+        row.present += 1;
+        if (status === "LATE") row.late += 1;
+        if (status === "WORK_FROM_HOME") row.wfh += 1;
+      } else if (status === "ON_LEAVE") row.onLeave += 1;
+      else if (status === "HOLIDAY" || status === "WEEK_OFF") row.off += 1;
+      else row.absent += 1;
+      continue;
+    }
+
+    // No record yet today.
+    const workingDays = emp.shift?.workingDays;
+    const weeklyOff = workingDays ? !workingDays.split(",").map((d) => parseInt(d.trim(), 10)).includes(weekday) : false;
+    if (closedAll || (emp.branchId && closedBranches.has(emp.branchId)) || weeklyOff) row.off += 1;
+    else if (onLeave.has(emp.id)) row.onLeave += 1;
+    else row.absent += 1;
+  }
+
+  const list = [...rows.values()].filter((r) => r.total > 0 || r.id).sort((a, b) => (a.id === null) - (b.id === null) || a.name.localeCompare(b.name));
+  const totals = list.reduce((sum, r) => {
+    for (const k of ["total", "present", "late", "wfh", "onLeave", "off", "absent"]) sum[k] += r[k];
+    return sum;
+  }, { total: 0, present: 0, late: 0, wfh: 0, onLeave: 0, off: 0, absent: 0 });
+
+  return { success: true, date: date.toISOString().split("T")[0], timezone, branches: list, totals };
+};
+
 const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, from, to, status, page = 1, limit = 20 }) => {
   const where = { organizationId };
+  const canSeeLocation = ADMIN_ROLES.includes(role);
 
   // Only admins and managers see the team; every other role sees only itself.
   if (!ADMIN_ROLES.includes(role)) {
@@ -1467,7 +1775,7 @@ const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, 
             user: { select: { email: true, role: true } },
           },
         },
-        branch: { select: { id: true, name: true, radiusMeters: true } },
+        branch: { select: { id: true, name: true, radiusMeters: true, ...(canSeeLocation ? { latitude: true, longitude: true } : {}) } },
         shift: { select: { id: true, name: true, startTime: true, endTime: true, graceMinutes: true } },
         events: { orderBy: { timestamp: "asc" } },
       },
@@ -1478,7 +1786,14 @@ const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, 
     prisma.attendance.count({ where }),
   ]);
 
-  return { success: true, page: curPage, limit: take, total, totalPages: Math.ceil(total / take) || 1, records };
+  return {
+    success: true,
+    page: curPage,
+    limit: take,
+    total,
+    totalPages: Math.ceil(total / take) || 1,
+    records: canSeeLocation ? records : records.map(withoutPunchLocation),
+  };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1504,7 +1819,7 @@ const syncOfflinePunches = async (userId, organizationId, punches) => {
     return { success: true, synced: 0, skipped: 0, failed: 0, results: [] };
   }
 
-  // Sort punches chronologically so check-in always comes before check-out
+  // Sort punches chronologically so punch-in always comes before punch-out
   const sorted = [...punches].sort(
     (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
   );
@@ -1574,7 +1889,7 @@ const syncOfflinePunches = async (userId, organizationId, punches) => {
       // Already checked-in / already checked-out = considered "skipped" not "failed"
       const isAlreadyProcessed =
         err.statusCode === 400 &&
-        (err.message.includes("Already checked in") || err.message.includes("Already checked out"));
+        (err.message.includes("Already punched in") || err.message.includes("Already punched out"));
 
       if (isAlreadyProcessed) {
         results.push({ localId, status: "SKIPPED", reason: err.message });
@@ -1610,11 +1925,13 @@ module.exports = {
   getBreakDetails,
   adminMarkAttendance,
   getTodayStatus,
+  getDayOff,
   getLiveToday,
   getMyAttendance,
   getAllAttendance,
   getAttendanceHistory,
   getAttendanceSummary,
+  getBranchSummary,
   getTodayDateOnly,
   getOrgTimezone,
   getOrgDateOnly,

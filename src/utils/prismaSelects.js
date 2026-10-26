@@ -43,6 +43,7 @@ const policySelect = {
   allowWfh: true,
   requireOtApproval: true,
   geofenceStrict: true,
+  weeklyOffDays: true,
   createdAt: true,
   updatedAt: true,
 };

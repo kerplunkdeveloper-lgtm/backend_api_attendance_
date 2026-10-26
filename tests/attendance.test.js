@@ -34,6 +34,10 @@ const prisma = mockPrisma({
   holiday: {
     findFirst: async () => null,
   },
+  companyLeave: {
+    findFirst: async () => null,
+    findMany: async () => [],
+  },
   leaveRequest: {
     findFirst: async () => null,
   },
@@ -59,7 +63,7 @@ describe("attendance", () => {
           longitude: 0,
           workMode: "WORK_FROM_HOME",
         }),
-      /Already checked in/
+      /Already punched in/
     );
   });
 

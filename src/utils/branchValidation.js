@@ -1,4 +1,4 @@
-/** Geofence inputs. A bad radius or coordinate silently breaks (or disables) check-in rules for the whole branch. */
+/** Geofence inputs. A bad radius or coordinate silently breaks (or disables) punch-in rules for the whole branch. */
 
 const MIN_RADIUS_METERS = 20;
 const MAX_RADIUS_METERS = 10000;
@@ -30,7 +30,7 @@ const parseRadius = (value, fallback = 200) => {
   if (isBlank(value)) return fallback;
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < MIN_RADIUS_METERS || parsed > MAX_RADIUS_METERS) {
-    fail(`Check-in radius must be a whole number of metres between ${MIN_RADIUS_METERS} and ${MAX_RADIUS_METERS}.`);
+    fail(`Punch-in radius must be a whole number of metres between ${MIN_RADIUS_METERS} and ${MAX_RADIUS_METERS}.`);
   }
   return parsed;
 };
