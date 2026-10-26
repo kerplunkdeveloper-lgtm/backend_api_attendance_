@@ -1,4 +1,5 @@
 const brevoService = require("./brevo.service");
+const gmailService = require("./gmail.service");
 const { generateOfferLetterPdf } = require("./offer-letter-pdf.service");
 
  const escapeHtml = (value) =>
@@ -25,6 +26,7 @@ const getEmailLogo = (value) => {
 
 class EmailService {
   constructor() {
+    this.gmailService = gmailService;
     this.brevoService = brevoService;
   }
 
@@ -103,25 +105,32 @@ class EmailService {
       return { success: false, message: "Recipient required" };
     }
 
-    // 1. Try Brevo if ready
-    if (this.brevoService && this.brevoService.isReady()) {
+    // Try each live provider in order: Gmail SMTP first, then Brevo.
+    const providers = [
+      ["GMAIL", this.gmailService],
+      ["BREVO", this.brevoService],
+    ].filter(([, svc]) => svc && svc.isReady());
+
+    let lastError = null;
+    for (const [name, svc] of providers) {
       try {
-        const result = await this.brevoService.sendEmail({ to, subject, html, text, attachments });
-        if (result.success) {
-          console.log(`[EmailService:BREVO_LIVE] Sent email to ${to} via Brevo API (ID: ${result.id})`);
-          return { success: true, live: true, provider: "BREVO", ...result };
+        const result = await svc.sendEmail({ to, subject, html, text, attachments });
+        if (result && result.success) {
+          console.log(`[EmailService:${name}_LIVE] Sent email to ${to} via ${name} (ID: ${result.id})`);
+          return { ...result, success: true, live: true, provider: name };
         }
-        console.warn(`[EmailService:BREVO_FAIL] Brevo dispatch failed for ${to}: ${result.error}.`);
-        if (process.env.NODE_ENV === "production") {
-          return { success: false, error: result.error, provider: "BREVO" };
-        }
+        lastError = result?.error || "Unknown error";
+        console.warn(`[EmailService:${name}_FAIL] ${name} dispatch failed for ${to}: ${lastError}.`);
       } catch (err) {
-        console.warn(`[EmailService:BREVO_ERROR] Brevo exception: ${err.message}.`);
-        if (process.env.NODE_ENV === "production") {
-          return { success: false, error: err.message, provider: "BREVO" };
-        }
+        lastError = err.message;
+        console.warn(`[EmailService:${name}_ERROR] ${name} exception: ${err.message}.`);
       }
-    } else if (process.env.NODE_ENV === "production") {
+    }
+
+    if (providers.length && process.env.NODE_ENV === "production") {
+      return { success: false, error: lastError, provider: providers[providers.length - 1][0] };
+    }
+    if (!providers.length && process.env.NODE_ENV === "production") {
       console.error("[EmailService] No live email provider is configured.");
       return {
         success: false,
