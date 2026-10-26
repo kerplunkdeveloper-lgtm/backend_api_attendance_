@@ -63,7 +63,7 @@ class OvertimeService {
       throw error;
     }
     if (!attendance.checkOut) {
-      const error = new Error("Cannot request overtime before checking out");
+      const error = new Error("Cannot request overtime before punching out");
       error.statusCode = 400;
       throw error;
     }
@@ -116,6 +116,13 @@ class OvertimeService {
         employee: { select: { id: true, firstName: true, lastName: true, employeeCode: true } },
         attendance: { select: { id: true, date: true, workingMinutes: true, overtimeMinutes: true } },
       },
+    });
+
+    void require("./notification.service").notifyReviewersOfRequest({
+      organizationId,
+      employeeId: employee.id,
+      title: "New overtime request",
+      summary: `requested ${requested} minute(s) of overtime.`,
     });
 
     return { success: true, message: "Overtime request submitted for approval", request };

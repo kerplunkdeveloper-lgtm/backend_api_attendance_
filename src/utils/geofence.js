@@ -51,7 +51,7 @@ const verifyGeofence = (userCoords, branchCoords) => {
     };
   }
 
-  // If branch doesn't have coordinates configured, permit check-in
+  // If branch doesn't have coordinates configured, permit punch-in
   if (!branchCoords?.latitude || !branchCoords?.longitude) {
     return {
       isInside: true,
@@ -82,7 +82,7 @@ const formatDistance = (meters) =>
   meters < 1000 ? `${Math.round(meters)} m` : `${(meters / 1000).toFixed(meters < 10000 ? 1 : 0)} km`;
 
 /**
- * Decides whether an "office only" check-in should be refused and, if so, why,
+ * Decides whether an "office only" punch-in should be refused and, if so, why,
  * in words an employee can act on.
  *
  * @param {object} input
@@ -101,7 +101,7 @@ const officeOnlyRejection = ({ latitude, longitude, accuracy, branches, allowWfh
     return {
       code: "LOCATION_REQUIRED",
       message:
-        "Turn on location to check in. Your company allows check-in only from the office, so we need your location to confirm you're there.",
+        "Turn on location to punch in. Your company allows punch-in only from the office, so we need your location to confirm you're there.",
       details: {},
     };
   }
@@ -141,7 +141,7 @@ const officeOnlyRejection = ({ latitude, longitude, accuracy, branches, allowWfh
 
   return {
     code: "OUTSIDE_OFFICE",
-    message: `You're about ${formatDistance(nearest.distance)} from ${nearest.name || "your office"}. Check-in is allowed within ${formatDistance(nearest.radius)} of the office. Working somewhere else today? Choose ${allowWfh ? "Work from home, " : ""}Client visit or Travel when you check in.`,
+    message: `You're about ${formatDistance(nearest.distance)} from ${nearest.name || "your office"}. Punch-in is allowed within ${formatDistance(nearest.radius)} of the office. Working somewhere else today? Choose ${allowWfh ? "Work from home, " : ""}Client visit or Travel when you punch in.`,
     details,
   };
 };

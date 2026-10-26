@@ -3,6 +3,7 @@ const prisma = require("../config/database");
 const { parsePagination } = require("../utils/pagination");
 const { evaluateAttendanceAgainstShift, calculateLateMinutes } = require("../utils/shiftCalculator");
 const { getOrgDateOnly, resolveShift } = require("./attendance.service");
+const notificationService = require("./notification.service");
 
 const parseRequestedTimestamp = (value, fieldName) => {
   if (value === undefined || value === null || value === "") return null;
@@ -70,7 +71,27 @@ class CorrectionService {
       throw error;
     }
 
-    const targetDate = await getOrgDateOnly(organizationId, submittedDate);
+    // The client sends the attendance row's date (UTC midnight of the local calendar day). Converting that
+    // instant into the tenant's timezone would move it to the previous day for any zone behind UTC.
+    const dayPrefix = typeof date === "string" ? date.match(/^(\d{4}-\d{2}-\d{2})/)?.[1] : null;
+    const targetDate = dayPrefix ? new Date(`${dayPrefix}T00:00:00.000Z`) : await getOrgDateOnly(organizationId, submittedDate);
+
+    const today = await getOrgDateOnly(organizationId, new Date());
+    if (targetDate.getTime() > today.getTime()) {
+      const error = new Error("Attendance can only be corrected for today or an earlier date");
+      error.statusCode = 400;
+      throw error;
+    }
+    if (!checkIn && !checkOut) {
+      const error = new Error("Enter the corrected punch-in time, punch-out time, or both");
+      error.statusCode = 400;
+      throw error;
+    }
+    if (checkIn && checkOut && checkOut.getTime() <= checkIn.getTime()) {
+      const error = new Error("Punch-out time must be after punch-in time");
+      error.statusCode = 400;
+      throw error;
+    }
     await assertPayrollMonthUnlocked(organizationId, targetDate);
 
     // Check if a pending request already exists for this date
@@ -106,6 +127,25 @@ class CorrectionService {
       },
     });
 
+    // Admins and HR are told straight away with clear punch times & reason.
+    const inTimeStr = checkIn ? new Date(checkIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null;
+    const outTimeStr = checkOut ? new Date(checkOut).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null;
+    const timesPart = inTimeStr && outTimeStr
+      ? `(Check-in: ${inTimeStr}, Check-out: ${outTimeStr})`
+      : inTimeStr
+      ? `(Check-in: ${inTimeStr})`
+      : outTimeStr
+      ? `(Check-out: ${outTimeStr})`
+      : "";
+
+    void notificationService.notifyReviewersOfRequest({
+      organizationId,
+      employeeId: employee.id,
+      title: "Attendance Correction Request",
+      summary: `requested attendance correction for ${targetDate.toISOString().slice(0, 10)} ${timesPart}. Reason: ${String(reason).trim().slice(0, 120)}`,
+      type: "APPROVAL",
+    });
+
     return correction;
   }
 
@@ -133,7 +173,8 @@ class CorrectionService {
    */
   async getAllRequests(organizationId, query = {}, reviewerRole = "COMPANY_ADMIN") {
     const { status, employeeId, page = 1, limit = 50 } = query;
-    const where = { organizationId, ...visibleToReviewer(reviewerRole) };
+    const visible = { organizationId, ...visibleToReviewer(reviewerRole) };
+    const where = { ...visible };
 
     if (status && status !== "ALL") {
       where.status = status;
@@ -144,7 +185,7 @@ class CorrectionService {
 
     const { limit: take, skip, page: curPage } = parsePagination({ page, limit }, { defaultLimit: 50 });
 
-    const [records, total] = await Promise.all([
+    const [records, total, grouped] = await Promise.all([
       prisma.attendanceCorrection.findMany({
         where,
         include: {
@@ -154,6 +195,7 @@ class CorrectionService {
               firstName: true,
               lastName: true,
               employeeCode: true,
+              department: { select: { name: true } },
               user: { select: { email: true } },
             },
           },
@@ -164,9 +206,14 @@ class CorrectionService {
         skip,
       }),
       prisma.attendanceCorrection.count({ where }),
+      // Counts ignore the status filter, so the Pending / Approved / Rejected chips always show real totals.
+      prisma.attendanceCorrection.groupBy({ by: ["status"], where: visible, _count: { _all: true } }),
     ]);
 
-    return { records, total, page: curPage, totalPages: Math.ceil(total / take) };
+    const counts = { PENDING: 0, APPROVED: 0, REJECTED: 0 };
+    for (const row of grouped) counts[row.status] = row._count._all;
+
+    return { records, total, page: curPage, totalPages: Math.ceil(total / take), counts };
   }
 
   /**
@@ -212,7 +259,7 @@ class CorrectionService {
       await assertPayrollMonthUnlocked(organizationId, correction.date);
     }
 
-    return await prisma.$transaction(async (tx) => {
+    const reviewed = await prisma.$transaction(async (tx) => {
       // If approved, update target Attendance record
       if (status === "APPROVED") {
         const employee = correction.employee;
@@ -295,6 +342,23 @@ class CorrectionService {
 
       return updated;
     });
+
+    // Tell the employee how it was decided.
+    if (correction.employee?.userId) {
+      void notificationService
+        .createNotification({
+          organizationId,
+          userId: correction.employee.userId,
+          title: `Regularization ${status.toLowerCase()}`,
+          message:
+            `Your punch correction for ${correction.date.toISOString().slice(0, 10)} was ${status.toLowerCase()}.` +
+            (reviewNote ? ` Note: ${reviewNote}` : ""),
+          type: "REGULARIZATION",
+        })
+        .catch((err) => console.warn("[CorrectionNotification] Employee alert failed:", err.message));
+    }
+
+    return reviewed;
   }
 }
 

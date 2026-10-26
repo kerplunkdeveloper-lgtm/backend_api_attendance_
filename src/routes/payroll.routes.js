@@ -74,6 +74,8 @@ router.get(
 
 // Detailed Payslip View with Company Letterhead & Amount in Words for PDF
 router.get("/payslips/:id/details", payrollController.getPayslipDetails);
+// Direct PDF Download route for Employee and Admin
+router.get("/payslips/:id/pdf", payrollController.getPayslipPdf);
 // Mobile client compatibility: GET /payslips/:id (without /details).
 router.get("/payslips/:id", payrollController.getPayslipDetails);
 

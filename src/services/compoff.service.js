@@ -116,6 +116,15 @@ class CompOffService {
         transaction,
       };
     });
+
+    void require("./notification.service").notifyReviewersOfRequest({
+      organizationId,
+      employeeId,
+      title: "New comp-off request",
+      summary: `asked to take ${numDays} comp-off day(s) from ${startDate.toISOString().slice(0, 10)}.`,
+    });
+
+    return submitted;
   }
 
   /**
@@ -151,7 +160,7 @@ class CompOffService {
     const endDate = new Date(startDate);
     endDate.setUTCDate(endDate.getUTCDate() + Math.ceil(numDays) - 1);
 
-    return await prisma.$transaction(async (tx) => {
+    const submitted = await prisma.$transaction(async (tx) => {
       const current = await tx.compOffBalance.upsert({
         where: { employeeId },
         update: {},

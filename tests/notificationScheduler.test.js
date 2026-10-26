@@ -6,9 +6,12 @@ const { getLocalDateOnly } = require("../src/utils/datetime");
 // Stub only the outbound side effects — NOT notification.service itself,
 // which is the module under test (stubSideEffects() would replace it with a
 // no-op and silently turn every assertion below into "undefined").
-const noop = new Proxy({}, { get: () => async () => ({}) });
-installModule(require.resolve("../src/services/email.service"), noop);
-installModule(require.resolve("../src/services/whatsapp.service"), noop);
+// Records every send so the tests can assert who was messaged, on which channel.
+const sent = [];
+const recorder = (channel) =>
+  new Proxy({}, { get: (_, fn) => async (...args) => { sent.push({ channel, fn, to: args[0] }); return {}; } });
+installModule(require.resolve("../src/services/email.service"), recorder("email"));
+installModule(require.resolve("../src/services/whatsapp.service"), recorder("whatsapp"));
 
 // The service works in each organization's own calendar day, and the employee
 // fixture below belongs to an IST organization, so "today" is the IST date no
@@ -57,9 +60,12 @@ const prisma = {
   attendance: {
     findMany: async ({ where }) => {
       track("attendance.findMany");
+      db.lastAttendanceWhere = where;
       return db.attendance.filter((a) => {
         if (!inSet(a.employeeId, where.employeeId?.in)) return false;
-        if (where.date && a.date.getTime() !== where.date.getTime()) return false;
+        if (where.date?.gte) {
+          if (a.date.getTime() < where.date.gte.getTime()) return false;
+        } else if (where.date && a.date.getTime() !== where.date.getTime()) return false;
         if (where.checkIn?.not === null && a.checkIn == null) return false;
         return true;
       });
@@ -76,16 +82,28 @@ const prisma = {
       return { count };
     },
   },
+  companyLeave: {
+    findMany: async () => [],
+  },
   holiday: {
     findMany: async ({ where }) => {
       track("holiday.findMany");
-      return db.holidays.filter((h) => inSet(h.organizationId, where.organizationId?.in) && h.date.getTime() === where.date.getTime() && h.isOptional === where.isOptional);
+      return db.holidays.filter((h) => {
+        if (!inSet(h.organizationId, where.organizationId?.in) || h.isOptional !== where.isOptional) return false;
+        if (where.date?.gte) return h.date.getTime() >= where.date.gte.getTime() && h.date.getTime() <= where.date.lte.getTime();
+        return h.date.getTime() === where.date.getTime();
+      });
     },
   },
   leaveRequest: {
     findMany: async ({ where }) => {
       track("leaveRequest.findMany");
-      return db.leaveRequests.filter((l) => inSet(l.employeeId, where.employeeId?.in) && l.status === where.status);
+      return db.leaveRequests.filter((l) => {
+        if (!inSet(l.employeeId, where.employeeId?.in) || l.status !== where.status) return false;
+        if (where.startDate?.lte && l.startDate.getTime() > where.startDate.lte.getTime()) return false;
+        if (where.endDate?.gte && l.endDate.getTime() < where.endDate.gte.getTime()) return false;
+        return true;
+      });
     },
   },
   shift: {
@@ -295,7 +313,7 @@ describe("sendMorningCheckInReminders (batched)", () => {
     const { getLocalDateOnly } = require("../src/utils/datetime");
     const startOfToday = getLocalDateOnly(new Date(), "Asia/Kolkata");
     db.attendance[0].date = startOfToday;
-    db.notifications = [{ userId: "u-3", title: "Morning Shift Check-In Reminder", createdAt: new Date(startOfToday.getTime() + 1000) }];
+    db.notifications = [{ userId: "u-3", title: "Morning Shift Punch-In Reminder", createdAt: new Date(startOfToday.getTime() + 1000) }];
 
     const result = await notificationService.sendMorningCheckInReminders(null, false);
 
@@ -337,12 +355,96 @@ describe("sendEveningCheckOutReminders (batched)", () => {
       { employeeId: "already-out", date: startOfToday, checkIn: new Date(), checkOut: new Date() },
       { employeeId: "already-notified", date: startOfToday, checkIn: new Date(), checkOut: null },
     ];
-    db.notifications = [{ userId: "u-4", title: "Shift Completion & Check-Out Reminder", createdAt: new Date(startOfToday.getTime() + 1000) }];
+    db.notifications = [{ userId: "u-4", title: "Shift Completion & Punch-Out Reminder", createdAt: new Date(startOfToday.getTime() + 1000) }];
 
     const result = await notificationService.sendEveningCheckOutReminders(null, false);
 
     assert.deepEqual(result.sentUsers, ["Employee (u-1)"]);
     assert.equal(calls["attendance.findMany"], 1);
     assert.equal(calls["notification.findMany"], 1);
+  });
+});
+
+describe("punch reminders: delivery and query bounds", () => {
+  beforeEach(() => {
+    resetDb();
+    sent.length = 0;
+  });
+
+  it("sends the punch-out reminder by email and WhatsApp too, only to people still punched in", async () => {
+    const startOfToday = getLocalDateOnly(new Date(), "Asia/Kolkata");
+    db.employees = [
+      employee({ id: "still-working", userId: "u-1", phone: "919876543210", user: { email: "a@x.com" } }),
+      employee({ id: "already-out", userId: "u-2", phone: "919876500000", user: { email: "b@x.com" } }),
+    ];
+    db.attendance = [
+      { employeeId: "still-working", date: startOfToday, checkIn: new Date(), checkOut: null },
+      { employeeId: "already-out", date: startOfToday, checkIn: new Date(), checkOut: new Date() },
+    ];
+
+    const result = await notificationService.sendEveningCheckOutReminders(null, false);
+
+    assert.deepEqual(result.sentUsers, ["Employee (u-1)"]);
+    assert.deepEqual(
+      sent.map((s) => [s.channel, s.fn, s.to]),
+      [
+        ["email", "sendShiftEndReminderEmail", "a@x.com"],
+        ["whatsapp", "sendShiftEndReminderWhatsApp", "919876543210"],
+      ],
+    );
+  });
+
+  it("sends the punch-in reminder by in-app, email and WhatsApp to people who have not punched in", async () => {
+    db.employees = [employee({ id: "late", userId: "u-9", phone: "919800000000", user: { email: "late@x.com" } })];
+
+    const result = await notificationService.sendMorningCheckInReminders(null, false);
+
+    assert.deepEqual(result.sentUsers, ["Employee (u-9)"]);
+    assert.equal(db.notifications.length, 1);
+    assert.deepEqual(sent.map((s) => s.channel).sort(), ["email", "whatsapp"]);
+  });
+
+  it("only reads attendance from today onward, never the whole history", async () => {
+    db.employees = [employee({ id: "e1", userId: "u-1" })];
+    await notificationService.sendMorningCheckInReminders(null, false);
+    assert.ok(db.lastAttendanceWhere.date?.gte instanceof Date, "morning lookup must be date-bounded");
+
+    db.lastAttendanceWhere = null;
+    await notificationService.sendEveningCheckOutReminders(null, false);
+    assert.ok(db.lastAttendanceWhere.date?.gte instanceof Date, "evening lookup must be date-bounded");
+  });
+});
+
+describe("punch-in reminder skips people who are not expected to punch", () => {
+  beforeEach(() => {
+    resetDb();
+    sent.length = 0;
+  });
+
+  it("sends nothing to someone on approved leave or a holiday, but still reminds everyone else", async () => {
+    const today = getLocalDateOnly(new Date(), "Asia/Kolkata");
+    db.employees = [
+      employee({ id: "on-leave", userId: "u-1" }),
+      employee({ id: "branch-holiday", userId: "u-2", branchId: "b-1" }),
+      employee({ id: "other-branch", userId: "u-3", branchId: "b-2" }),
+      employee({ id: "working", userId: "u-4" }),
+    ];
+    db.leaveRequests = [{ employeeId: "on-leave", status: "APPROVED", startDate: today, endDate: today }];
+    db.holidays = [{ organizationId: "org-1", branchId: "b-1", date: today, isOptional: false }];
+
+    const result = await notificationService.sendMorningCheckInReminders(null, false);
+
+    assert.deepEqual(result.sentUsers.sort(), ["Employee (u-3)", "Employee (u-4)"]);
+    assert.deepEqual(db.notifications.map((n) => n.userId).sort(), ["u-3", "u-4"]);
+  });
+
+  it("a company-wide holiday skips everyone in that company", async () => {
+    const today = getLocalDateOnly(new Date(), "Asia/Kolkata");
+    db.employees = [employee({ id: "a", userId: "u-1" }), employee({ id: "b", userId: "u-2" })];
+    db.holidays = [{ organizationId: "org-1", branchId: null, date: today, isOptional: false }];
+
+    const result = await notificationService.sendMorningCheckInReminders(null, false);
+
+    assert.equal(result.sentCount, 0);
   });
 });

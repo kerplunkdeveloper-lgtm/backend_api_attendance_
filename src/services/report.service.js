@@ -9,7 +9,7 @@ class ReportService {
   async getDailyReport(organizationId, targetDate = new Date()) {
     const dateOnly = await getOrgDateOnly(organizationId, new Date(targetDate));
 
-    const [allEmployees, attendances, approvedLeaves, org] = await Promise.all([
+    const [allEmployees, attendances, approvedLeaves, org, holidays] = await Promise.all([
       prisma.employee.findMany({
         where: { organizationId, status: { in: WORKING_STATUSES } },
         select: {
@@ -55,7 +55,14 @@ class ReportService {
         where: { id: organizationId },
         select: { name: true },
       }),
+      prisma.holiday.findMany({
+        where: { organizationId, date: dateOnly, isOptional: false },
+        select: { name: true, branchId: true },
+      }),
     ]);
+
+    // A company-wide holiday (no branch) or one for the employee's own branch.
+    const holidayFor = (emp) => holidays.find((h) => !h.branchId || h.branchId === emp.branch?.id);
 
     const attendanceMap = new Map(attendances.map((a) => [a.employeeId, a]));
     const leaveMap = new Map(approvedLeaves.map((l) => [l.employeeId, l]));
@@ -66,6 +73,8 @@ class ReportService {
     let onLeave = 0;
     let wfh = 0;
     let absent = 0;
+    let holidayCount = 0;
+    let weekOff = 0;
 
     const fullRecords = allEmployees.map((emp) => {
       const att = attendanceMap.get(emp.id);
@@ -76,6 +85,8 @@ class ReportService {
         else if (att.status === "WORK_FROM_HOME") wfh++;
         else if (att.status === "ON_LEAVE") onLeave++;
         else if (att.status === "ABSENT") absent++;
+        else if (att.status === "HOLIDAY") holidayCount++;
+        else if (att.status === "WEEK_OFF") weekOff++;
 
         return {
           id: att.id,
@@ -88,6 +99,8 @@ class ReportService {
           checkOut: att.checkOut,
           workHours: att.workHours || (att.workingMinutes ? att.workingMinutes / 60 : 0),
           workingMinutes: att.workingMinutes || 0,
+          breakMinutes: att.breakMinutes || 0,
+          lunchMinutes: att.lunchMinutes || 0,
           lateMinutes: att.lateMinutes || 0,
           status: att.status,
           wfhNote: att.wfhNote,
@@ -108,11 +121,36 @@ class ReportService {
           checkOut: null,
           workHours: 0,
           workingMinutes: 0,
+          breakMinutes: 0,
+          lunchMinutes: 0,
           lateMinutes: 0,
           status: "ON_LEAVE",
           wfhNote: leave.leaveType?.name
             ? `Approved Leave (${leave.leaveType.name})`
             : "Approved Leave",
+        };
+      }
+
+      // Nobody is absent on a holiday: they were not expected to work.
+      const holiday = holidayFor(emp);
+      if (holiday) {
+        holidayCount++;
+        return {
+          id: `holiday-${emp.id}`,
+          date: dateOnly,
+          employeeId: emp.id,
+          employee: emp,
+          branch: emp.branch,
+          shift: emp.shift,
+          checkIn: null,
+          checkOut: null,
+          workHours: 0,
+          workingMinutes: 0,
+          breakMinutes: 0,
+          lunchMinutes: 0,
+          lateMinutes: 0,
+          status: "HOLIDAY",
+          wfhNote: holiday.name ? `Holiday (${holiday.name})` : "Holiday",
         };
       }
 
@@ -128,6 +166,8 @@ class ReportService {
         checkOut: null,
         workHours: 0,
         workingMinutes: 0,
+        breakMinutes: 0,
+        lunchMinutes: 0,
         lateMinutes: 0,
         status: "ABSENT",
         wfhNote: "Unexcused Absence / Missed Punch",
@@ -148,6 +188,8 @@ class ReportService {
         wfh,
         onLeave,
         absent,
+        holiday: holidayCount,
+        weekOff,
         attendanceRate: totalEmployees > 0 ? Math.round(((present + late + wfh) / totalEmployees) * 100) : 0,
       },
       records: fullRecords,

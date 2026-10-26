@@ -1,3 +1,6 @@
+
+
+
 const authService = require("../services/auth.service");
 const { sendControllerError } = require("../utils/controllerError");
 
@@ -8,10 +11,9 @@ const isWebClient = (req) => {
   return Boolean(req.headers.origin) || platform === "web" || platform === "browser";
 };
 
-// Native clients cannot use the browser's HTTP-only cookie jar. Browser clients
-// must never receive refresh credentials in JSON where script can read them.
+// Web clients use secure HTTP-only cookies; native/mobile clients receive the refresh token in the response payload.
 const refreshTokenForClient = (req, token) =>
-  isWebClient(req) ? {} : { refreshToken: token };
+  isWebClient(req) ? {} : (token ? { refreshToken: token } : {});
 
 const isInfrastructureError = (error) => {
   const seen = new Set();

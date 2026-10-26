@@ -158,6 +158,32 @@ model Organization {
   webhookDeliveries    WebhookDelivery[]
   ssoLoginCodes        SsoLoginCode[]
   lateComingLopRules   LateComingLopRule[]
+  dayOffWorkRequests   DayOffWorkRequest[]
+}
+
+// ─── Working on a day off (weekly off, holiday, company leave) ───────────────
+// Punching is closed on those days. An employee who has to work anyway (a shoot, travel, client work)
+// asks for approval for that one date; HR or an admin approves it, and only then can they punch in.
+model DayOffWorkRequest {
+  id             String        @id @default(uuid())
+  organizationId String
+  employeeId     String
+  date           DateTime      @db.Date
+  dayKind        String // WEEK_OFF | HOLIDAY | COMPANY_LEAVE
+  reasonType     String // SHOOT | TRAVEL | CLIENT_VISIT | OTHER
+  note           String?
+  status         RequestStatus @default(PENDING)
+  reviewedBy     String?
+  reviewNote     String?
+  reviewedAt     DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  employee     Employee     @relation(fields: [employeeId], references: [id])
+
+  @@unique([employeeId, date])
+  @@index([organizationId, status])
 }
 
 model Subscription {
@@ -200,6 +226,7 @@ model AttendancePolicy {
   requireOtApproval           Boolean  @default(false) // OT must be approved before payroll
   geofenceStrict              Boolean  @default(false) // When true, reject punches outside branch radius
   requireTrustedDevice        Boolean  @default(false)
+  weeklyOffDays               String   @default("0") // Company weekly off as CSV, 0 = Sunday ... 6 = Saturday. Default: Sunday off, Mon-Sat working
   createdAt                   DateTime @default(now())
   updatedAt                   DateTime @updatedAt
 
@@ -478,6 +505,7 @@ model Employee {
   form16Records      Form16Record[]
   loanAdvances       LoanAdvance[]
   appraisals         AppraisalReview[]
+  dayOffWorkRequests DayOffWorkRequest[]
 
   @@unique([organizationId, employeeCode])
   @@index([organizationId])

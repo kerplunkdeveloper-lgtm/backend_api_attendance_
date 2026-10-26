@@ -17,6 +17,7 @@ mockPrisma(
           return [];
         },
         count: async () => 0,
+        groupBy: async () => [],
       }),
     },
   ),

@@ -150,9 +150,29 @@ class WhatsAppService {
       `Good morning ${employeeName} 👋,`,
       ``,
       `Your shift *${shiftName || "General Shift"}* starts at *${shiftTime || "09:00 AM"}*.`,
-      `Please remember to clock in when you arrive!`,
+      `Please remember to punch in when you arrive!`,
       ``,
-      `📍 Clock in here: ${link}`,
+      `📍 Punch in here: ${link}`,
+    ].join("\n");
+
+    return await this.sendMessage({ to: toPhone, message: text });
+  }
+
+  /**
+   * Evening reminder: the shift has ended and the employee has not punched out yet.
+   */
+  async sendShiftEndReminderWhatsApp(toPhone, employeeName, { shiftName, shiftEndTime, punchUrl }) {
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+    const link = punchUrl || frontendUrl;
+
+    const text = [
+      `*WorkPluse Attendance Reminder* ⏰`,
+      `Hi ${employeeName} 👋,`,
+      ``,
+      `Your shift *${shiftName || "General Shift"}* ended at *${shiftEndTime || "06:00 PM"}*.`,
+      `Please punch out to close your shift.`,
+      ``,
+      `📍 Punch out here: ${link}`,
     ].join("\n");
 
     return await this.sendMessage({ to: toPhone, message: text });
