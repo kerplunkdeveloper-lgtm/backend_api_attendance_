@@ -148,11 +148,12 @@ class LeaveService {
         { name: "Unpaid Leave (LWP)", code: "LWP", daysAllowed: 30, isPaid: false },
       ];
 
-      for (const d of defaults) {
-        await prisma.leaveType.create({
-          data: { ...d, organizationId },
-        });
-      }
+      // Upsert instead of create: concurrent first-page loads must be safe.
+      await Promise.all(defaults.map((d) => prisma.leaveType.upsert({
+        where: { organizationId_code: { organizationId, code: d.code } },
+        update: {},
+        create: { ...d, organizationId },
+      })));
 
       types = await prisma.leaveType.findMany({
         where: { organizationId },
@@ -188,8 +189,16 @@ class LeaveService {
         });
 
         if (!balance) {
-          balance = await prisma.leaveBalance.create({
-            data: {
+          balance = await prisma.leaveBalance.upsert({
+            where: {
+              employeeId_leaveTypeId_year: {
+                employeeId: employee.id,
+                leaveTypeId: type.id,
+                year: parseInt(year),
+              },
+            },
+            update: {},
+            create: {
               organizationId,
               employeeId: employee.id,
               leaveTypeId: type.id,

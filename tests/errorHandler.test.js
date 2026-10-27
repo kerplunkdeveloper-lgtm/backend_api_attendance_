@@ -51,7 +51,10 @@ describe("error handler", () => {
     assert.equal(errors.length, 0, "a 404 is not an incident");
     assert.equal(warnings.length, 1);
     assert.equal(warnings[0].length, 1, "no error object (and so no stack) is attached");
-    assert.match(warnings[0][0], /client-error/);
+    const record = JSON.parse(warnings[0][0]);
+    assert.equal(record.event, "http.client_error");
+    assert.equal(record.requestId, "req-1");
+    assert.equal(record.error.message, "Invalid or expired onboarding invitation link");
   });
 
   it("logs a server fault in full so it can be debugged", () => {
@@ -61,7 +64,10 @@ describe("error handler", () => {
 
     assert.equal(res.statusCode, 500);
     assert.equal(errors.length, 1);
-    assert.equal(errors[0][1], err);
+    const record = JSON.parse(errors[0][0]);
+    assert.equal(record.event, "http.request_failed");
+    assert.equal(record.error.message, "boom");
+    assert.equal(record.requestId, "req-1");
   });
 
   it("never logs the request URL, which can carry invite or reset tokens", () => {

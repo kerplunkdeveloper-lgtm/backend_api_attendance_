@@ -112,7 +112,7 @@ describe("daily workflow, end to end", { skip: !url && "TEST_DATABASE_URL not se
     if (server) await new Promise((resolve) => server.close(resolve));
     if (prisma && orgIds.length) {
       // Children first; the tenant guard is bypassed by deleting through raw SQL per table.
-      for (const table of ["AttendanceCorrection", "Attendance", "Employee", "User", "Shift", "Branch", "Subscription", "Organization"]) {
+      for (const table of ["AttendanceCorrection", "Attendance", "WorkFromHomeRequest", "ShootRequestParticipant", "ShootRequest", "Notification", "Employee", "Department", "User", "Shift", "Branch", "Subscription", "Organization"]) {
         const col = table === "Organization" ? "id" : "organizationId";
         await prisma.$executeRawUnsafe(`DELETE FROM "${table}" WHERE "${col}" = ANY($1::text[])`, orgIds).catch(() => {});
       }
@@ -131,6 +131,20 @@ describe("daily workflow, end to end", { skip: !url && "TEST_DATABASE_URL not se
   it("an employee punches in and out and the day shows on their history", async () => {
     const before = await call("GET", "/attendance/today", { token: tokens.worker });
     assert.equal(before.status, 200);
+
+    const shootDate = new Date().toISOString().slice(0, 10);
+    const wfhRequest = await call("POST", "/work-from-home", {
+      token: tokens.worker,
+      body: { startDate: shootDate, endDate: shootDate, reason: "Integration test work from home" },
+    });
+    assert.equal(wfhRequest.status, 201, `WFH request failed: ${wfhRequest.status} ${JSON.stringify(wfhRequest.body)}`);
+    const wfhRequestId = wfhRequest.body?.data?.id;
+    assert.ok(wfhRequestId, "the WFH request has an id");
+    const wfhApproval = await call("POST", `/work-from-home/${wfhRequestId}/review`, {
+      token: tokens.hr,
+      body: { status: "APPROVED", reviewNote: "Approved for integration test" },
+    });
+    assert.equal(wfhApproval.status, 200, `WFH approval failed: ${wfhApproval.status} ${JSON.stringify(wfhApproval.body)}`);
 
     const punchIn = await call("POST", "/attendance/check-in-wfh", {
       token: tokens.worker,
@@ -156,6 +170,7 @@ describe("daily workflow, end to end", { skip: !url && "TEST_DATABASE_URL not se
 
   it("an employee asks for a correction and HR approves it", async () => {
     const row = await prisma.attendance.findFirst({ where: { employeeId: a.worker.employee.id } });
+    assert.ok(row, "the attendance row exists before creating a correction");
     const day = row.date.toISOString().slice(0, 10);
     const early = new Date(`${day}T03:30:00.000Z`).toISOString();
     const late = new Date(`${day}T12:30:00.000Z`).toISOString();
@@ -200,6 +215,7 @@ describe("daily workflow, end to end", { skip: !url && "TEST_DATABASE_URL not se
     assert.ok(!JSON.stringify(employees.body).includes(a.worker.employee.id));
 
     const request = await prisma.attendanceCorrection.findFirst({ where: { employeeId: a.worker.employee.id } });
+    assert.ok(request, "company A has a correction request");
     const poke = await call("PUT", `/attendance/corrections/${request.id}/review`, {
       token: tokens.otherAdmin,
       body: { status: "REJECTED" },
