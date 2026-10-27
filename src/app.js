@@ -139,7 +139,7 @@ app.use(
       timestamp: new Date().toISOString(),
       requestId: req.requestId,
       method: tokens.method(req, res),
-      path: tokens.url(req, res),
+      path: String(tokens.url(req, res)).split("?")[0],
       status: Number(tokens.status(req, res)),
       responseTimeMs: Number(tokens["response-time"](req, res)),
       contentLength: Number(tokens.res(req, res, "content-length")) || 0,

@@ -1,3 +1,5 @@
+const logger = require("./logger");
+
 const infrastructureCodes = new Set(["EACCES", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND", "ECONNRESET"]);
 
 const isUnexpectedServerError = (error) => {
@@ -11,7 +13,7 @@ function sendControllerError(res, error, { fallbackStatus = 400, fallbackMessage
   const serverFailure = !Number.isInteger(explicit) && isUnexpectedServerError(error);
   const status = serverFailure ? 500 : (Number.isInteger(explicit) && explicit >= 400 && explicit < 600 ? explicit : fallbackStatus);
   if (status >= 500) {
-    console.error("[controller] request failed:", error);
+    logger.error("controller.request_failed", { requestId: res.req?.requestId, method: res.req?.method, route: res.req?.route?.path || res.req?.baseUrl, status, error });
   }
   return res.status(status).json({
     success: false,

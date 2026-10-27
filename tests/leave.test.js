@@ -14,6 +14,9 @@ const employee = {
   shift: { id: "shift-1", workingDays: "1,2,3,4,5" },
 };
 
+let defaultTypes = [];
+let balanceUpserts = 0;
+
 const leaveType = {
   id: "lt-1",
   organizationId: "org-1",
@@ -73,12 +76,24 @@ const prisma = {
   },
   leaveType: {
     findFirst: async () => leaveType,
+    findMany: async () => defaultTypes,
+    upsert: async ({ create }) => {
+      const existing = defaultTypes.find((item) => item.code === create.code);
+      if (existing) return existing;
+      const item = { ...create, id: `lt-${defaultTypes.length + 1}` };
+      defaultTypes.push(item);
+      return item;
+    },
   },
   leaveBalance: {
     findUnique: async () => ({ allocatedDays: 12, usedDays: 2 }),
-    upsert: async ({ update }) => {
-      prisma._usedDays = 2 + (update.usedDays.increment || 0);
-      return { usedDays: prisma._usedDays };
+    upsert: async ({ update, create }) => {
+      if (update?.usedDays?.increment !== undefined) {
+        prisma._usedDays = 2 + update.usedDays.increment;
+        return { usedDays: prisma._usedDays };
+      }
+      balanceUpserts += 1;
+      return { id: `bal-${balanceUpserts}`, year: create.year, allocatedDays: create.allocatedDays, usedDays: 0 };
     },
   },
   attendance: {
@@ -96,6 +111,23 @@ mockPrisma(prisma);
 const leaveService = require("../src/services/leave.service");
 
 describe("leave", () => {
+  it("initializes leave types and balances safely when the page loads", async () => {
+    defaultTypes = [];
+    balanceUpserts = 0;
+    const [typesA, typesB] = await Promise.all([
+      leaveService.getLeaveTypes("org-1"),
+      leaveService.getLeaveTypes("org-1"),
+    ]);
+    assert.equal(typesA.length, 4);
+    assert.equal(typesB.length, 4);
+    assert.equal(new Set(defaultTypes.map((item) => item.code)).size, 4);
+
+    prisma.leaveBalance.findUnique = async () => null;
+    const balances = await leaveService.getLeaveBalances("user-1", "org-1", 2026);
+    assert.equal(balances.length, 4);
+    assert.equal(balanceUpserts, 4);
+  });
+
   it("applies a leave request and approval increments used balance", async () => {
     const applied = await leaveService.createLeaveRequest("user-1", "org-1", {
       leaveTypeId: "lt-1",

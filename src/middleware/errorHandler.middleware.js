@@ -11,6 +11,8 @@
  * Request URLs are not logged here: some carry secrets (invite and reset tokens).
  */
 
+const logger = require("../utils/logger");
+
 const statusOf = (err) => {
   const raw = Number(err?.statusCode ?? err?.status);
   return Number.isInteger(raw) && raw >= 400 && raw <= 599 ? raw : 500;
@@ -30,9 +32,9 @@ function errorHandler(err, req, res, next) {
   const statusCode = statusOf(err);
   const route = req.route?.path ?? "-";
   if (statusCode >= 500) {
-    console.error(`[error] ${req.method} ${route} request=${req.requestId} -> ${statusCode}`, err);
+    logger.error("http.request_failed", { requestId: req.requestId, method: req.method, route, status: statusCode, error: err });
   } else {
-    console.warn(`[client-error] ${req.method} ${route} request=${req.requestId} -> ${statusCode}: ${err?.message}`);
+    logger.warn("http.client_error", { requestId: req.requestId, method: req.method, route, status: statusCode, error: err });
   }
 
   const hideDetail = statusCode >= 500 && process.env.NODE_ENV === "production";
