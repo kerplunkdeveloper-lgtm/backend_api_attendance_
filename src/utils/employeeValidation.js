@@ -77,6 +77,14 @@ const normalizeEmploymentType = (value) => {
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+/** Blank means "not recorded"; otherwise a lower-cased, well-formed address. */
+const normalizePersonalEmail = (value) => {
+  if (blank(value)) return null;
+  const email = String(value).trim().toLowerCase();
+  if (!EMAIL_PATTERN.test(email)) fail("Personal email is not valid.");
+  return email;
+};
+
 /**
  * Fields a new employee record must carry, by manual entry or email invite. PAN, UAN and ESI are the
  * only optional ones: not every employee has them yet. The employee code is auto-generated and the
@@ -143,6 +151,7 @@ const validateNewEmployeeProfile = (data) => {
     bankName: text(data.bankName),
     ctc: parseAnnualCtc(data.ctc),
     // Optional: null when left blank.
+    personalEmail: normalizePersonalEmail(data.personalEmail),
     panNumber: identity.panNumber ?? null,
     uanNumber: identity.uanNumber ?? null,
     esiNumber: identity.esiNumber ?? null,
@@ -167,6 +176,7 @@ module.exports = {
   assertRequiredNotCleared,
   normalizeGender,
   normalizeEmploymentType,
+  normalizePersonalEmail,
   assertStatus,
   parsePastDate,
   EMPLOYEE_STATUSES,

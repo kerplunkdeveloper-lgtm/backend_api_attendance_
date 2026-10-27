@@ -3,11 +3,13 @@ const { uploadBuffer } = require("../config/cloudinary");
 const { assertRealImage } = require("../middleware/upload.middleware");
 const ssoService = require("./sso.service");
 const { isValidTimeZone } = require("../utils/datetime");
+const HR_ACCESS_AREAS = ["DASHBOARD", "ATTENDANCE", "EMPLOYEES", "ROLES", "APPROVALS", "ONBOARDING", "PAYROLL", "REPORTS", "ANNOUNCEMENTS", "BRANCHES", "POLICIES", "SHOOTS"];
+const DEFAULT_HR_ACCESS = Object.fromEntries(HR_ACCESS_AREAS.map((area) => [area, true]));
 
 const presentOrganization = (organization) => {
   if (!organization) return organization;
   const { ssoClientSecretCiphertext, ...safe } = organization;
-  return { ...safe, sso: ssoService.getConfiguration(organization) };
+  return { ...safe, hrAccess: organization.hrAccess || DEFAULT_HR_ACCESS, sso: ssoService.getConfiguration(organization) };
 };
 
 async function getSettings(organizationId) {
@@ -25,6 +27,12 @@ async function getSettings(organizationId) {
 
 async function updateSettings(organizationId, payload, actor = {}) {
   const data = {};
+  if (payload.hrAccess !== undefined) {
+    if (!payload.hrAccess || typeof payload.hrAccess !== "object" || Array.isArray(payload.hrAccess)) throw Object.assign(new Error("HR access settings must be an object."), { statusCode: 400 });
+    const next = {};
+    for (const area of HR_ACCESS_AREAS) if (payload.hrAccess[area] !== undefined) next[area] = payload.hrAccess[area] === true;
+    data.hrAccess = { ...DEFAULT_HR_ACCESS, ...next };
+  }
   if (payload.requireAdminTwoFactor !== undefined) {
     const enable = payload.requireAdminTwoFactor === true || payload.requireAdminTwoFactor === "true";
     // Turning the policy on would immediately lock out an admin who has not

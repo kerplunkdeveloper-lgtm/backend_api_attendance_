@@ -33,7 +33,15 @@ const {
 const MIN_PASSWORD_LENGTH = 8;
 const VERIFICATION_CODE_TTL_MS = 15 * 60 * 1000;
 
-const generateVerificationCode = () => String(crypto.randomInt(0, 1000000)).padStart(6, "0");
+// An employee signs in with the office email (User.email) or the personal email on their profile.
+const emailIdentityWhere = (email) => ({
+  OR: [
+    { email: { equals: email, mode: "insensitive" } },
+    { employee: { is: { personalEmail: { equals: email, mode: "insensitive" }, deletedAt: null } } },
+  ],
+});
+
+const generateVerificationCode =() => String(crypto.randomInt(0, 1000000)).padStart(6, "0");
 
 // Refresh tokens are bearer credentials. Persist only a deterministic digest
 // so a database read cannot be turned directly into an authenticated session.
@@ -50,7 +58,7 @@ const issueRefreshToken = async (userId, tokenPayload) => {
     data: {
       userId,
       token: hashRefreshToken(refreshToken),
-      expiresAt: new Date(Date.now() + getSessionMaxAgeMs(tokenPayload?.role)),
+      expiresAt: new Date(Date.now() + (Number.isFinite(getSessionMaxAgeMs(tokenPayload?.role)) ? getSessionMaxAgeMs(tokenPayload?.role) : 100 * 365 * 24 * 60 * 60 * 1000)),
     },
   });
   return refreshToken;
@@ -374,6 +382,7 @@ const verifyEmail = async (email, code) => {
 const resendVerificationCode = async (email) => {
   const cleanEmail = String(email || "").trim().toLowerCase();
   const genericMessage = "If that email address has a pending verification, a new code has been sent.";
+  let deliveryFailed = false;
 
   const candidates = await prisma.user.findMany({
     include: { organization: organizationWithSubscription },
@@ -391,14 +400,28 @@ const resendVerificationCode = async (email) => {
       },
     });
 
-    await emailService
-      .sendVerificationEmail(cleanEmail, "there", {
+    try {
+      const result = await emailService.sendVerificationEmail(cleanEmail, "there", {
         code: verificationCode,
         expiresIn: "15 minutes",
         companyName: candidate.organization?.name,
         companyLogoUrl: candidate.organization?.logoUrl,
-      })
-      .catch((err) => console.warn("[ResendVerification] Email dispatch failed:", err.message));
+      });
+      if (!result?.success) {
+        deliveryFailed = true;
+        console.warn("[ResendVerification] Email dispatch failed:", result?.error || "unknown provider error");
+      }
+    } catch (err) {
+      deliveryFailed = true;
+      console.warn("[ResendVerification] Email dispatch failed:", err.message);
+    }
+  }
+
+  if (deliveryFailed) {
+    const err = new Error("Verification email delivery failed. Please try again in a moment.");
+    err.statusCode = 502;
+    err.code = "VERIFICATION_EMAIL_FAILED";
+    throw err;
   }
 
   return { success: true, message: genericMessage };
@@ -429,7 +452,7 @@ const login = async (email, password, client = null, employeeCode = null) => {
   const candidates = await prisma.user.findMany({
     omit: WITH_SECRETS,
     where: cleanEmail
-      ? { email: { equals: cleanEmail, mode: "insensitive" } }
+      ? emailIdentityWhere(cleanEmail)
       : cleanCode
         ? { employee: { employeeCode: { equals: cleanCode, mode: "insensitive" }, deletedAt: null } }
         : { id: "__never__" },
@@ -684,7 +707,7 @@ const refreshAccessToken = async (refreshToken) => {
   // Rotate the refresh token while preserving the original login timestamp.
   const sessionPayload = { ...tokenPayload, sessionStartedAt: decoded.sessionStartedAt };
   const newRefreshToken = generateRefreshToken(sessionPayload);
-  const refreshExpiresAt = new Date(Date.now() + getSessionMaxAgeMs(user.role));
+  const refreshExpiresAt = new Date(Date.now() + (Number.isFinite(getSessionMaxAgeMs(user.role)) ? getSessionMaxAgeMs(user.role) : 100 * 365 * 24 * 60 * 60 * 1000));
   await prisma.$transaction([
     prisma.refreshToken.delete({ where: { token: hashRefreshToken(refreshToken) } }),
     prisma.refreshToken.create({
@@ -929,7 +952,7 @@ const forgotPassword = async (email) => {
   const normalizedEmail = email.toLowerCase().trim();
   const users = await prisma.user.findMany({
     omit: WITH_SECRETS,
-    where: { email: { equals: normalizedEmail, mode: "insensitive" }, isActive: true },
+    where: { ...emailIdentityWhere(normalizedEmail), isActive: true },
     include: { employee: true, organization: organizationWithSubscription },
   });
 
@@ -960,7 +983,8 @@ const forgotPassword = async (email) => {
       ? `${user.employee.firstName} ${user.employee.lastName || ""}`.trim()
       : user.email.split("@")[0];
 
-    lastEmailResult = await emailService.sendPasswordResetEmail(user.email, userName, {
+    // normalizedEmail matched either the office or the personal address, so the link goes to the one asked for.
+    lastEmailResult = await emailService.sendPasswordResetEmail(normalizedEmail, userName, {
       resetUrl,
       expiresIn: "60 minutes",
       companyName: user.organization?.name,
@@ -1117,7 +1141,7 @@ const loginWithGoogle = async (idToken, client = null) => {
   }
   const cleanEmail = String(profile.email).trim().toLowerCase();
   const users = await prisma.user.findMany({
-    where: { email: { equals: cleanEmail, mode: "insensitive" } },
+    where: emailIdentityWhere(cleanEmail),
     include: {
       organization: organizationWithSubscription,
       employee: { include: { branch: true, shift: true, department: true } },

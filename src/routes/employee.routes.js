@@ -83,6 +83,13 @@ router.post(
   employeeController.uploadEmployeeAvatar,
 );
 
+// Bulk delete employees
+router.post(
+  "/bulk-delete",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
+  employeeController.bulkDelete,
+);
+
 // Delete employee
 router.delete(
   "/:id",

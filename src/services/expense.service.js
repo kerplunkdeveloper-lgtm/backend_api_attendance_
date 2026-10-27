@@ -193,6 +193,7 @@ class ExpenseService {
     }
 
     return await prisma.expenseClaim.findMany({
+      take: 500, // safety cap: a person's own history can grow for years
       where,
       include: {
         employee: {
@@ -228,6 +229,7 @@ class ExpenseService {
     if (category) where.category = category;
 
     return await prisma.expenseClaim.findMany({
+      take: 500, // safety cap: a person's own history can grow for years
       where,
       include: {
         payslip: {

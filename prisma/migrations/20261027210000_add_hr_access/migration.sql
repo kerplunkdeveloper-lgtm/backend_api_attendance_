@@ -1,0 +1,1 @@
+ALTER TABLE "Organization" ADD COLUMN IF NOT EXISTS "hrAccess" JSONB;

@@ -56,6 +56,20 @@ describe("auth", () => {
     });
   });
 
+  it("matches an email against both the office login and the personal email", async () => {
+    let query;
+    prisma.user.findMany = async (input) => {
+      query = input;
+      return [];
+    };
+
+    await assert.rejects(() => authService.login("Asha.Rao@Gmail.com", "wrong-password"), /Invalid email or password/);
+    assert.deepEqual(query.where.OR, [
+      { email: { equals: "asha.rao@gmail.com", mode: "insensitive" } },
+      { employee: { is: { personalEmail: { equals: "asha.rao@gmail.com", mode: "insensitive" }, deletedAt: null } } },
+    ]);
+  });
+
   it("allows employees to sign in through the web attendance portal", async () => {
     const password = "Password123";
     prisma.user.findMany = async () => [{

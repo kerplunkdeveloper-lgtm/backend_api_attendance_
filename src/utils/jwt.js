@@ -44,12 +44,14 @@ const generateAccessToken = (payload) => {
 };
 
 const generateRefreshToken = (payload) => {
-  return jwt.sign(payload, getRefreshSecret(), {
-    expiresIn: Math.floor(getSessionMaxAgeMs(payload?.role) / 1000),
+  const maxAgeMs = getSessionMaxAgeMs(payload?.role);
+  const options = {
     // Without a unique id, tokens created with the same payload in the same
     // second are identical and rotation can accidentally return the old token.
+    ...(Number.isFinite(maxAgeMs) ? { expiresIn: Math.floor(maxAgeMs / 1000) } : {}),
     jwtid: crypto.randomUUID(),
-  });
+  };
+  return jwt.sign(payload, getRefreshSecret(), options);
 };
 
 const verifyAccessToken = (token) => {

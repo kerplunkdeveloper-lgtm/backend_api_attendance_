@@ -64,6 +64,12 @@ test("rejects bad email, phone, gender, employment type and CTC", () => {
   }
 });
 
+test("personal email is optional, lower-cased and format-checked", () => {
+  assert.equal(validateNewEmployeeProfile(completeProfile()).personalEmail, null);
+  assert.equal(validateNewEmployeeProfile({ ...completeProfile(), personalEmail: " Asha.Rao@Gmail.com " }).personalEmail, "asha.rao@gmail.com");
+  assert.throws(() => validateNewEmployeeProfile({ ...completeProfile(), personalEmail: "nope" }), /Personal email is not valid/);
+});
+
 test("an edit cannot clear a required field", () => {
   assert.doesNotThrow(() => assertRequiredNotCleared({ panNumber: "", uanNumber: "", esiNumber: "", firstName: "Asha" }));
   assert.throws(() => assertRequiredNotCleared({ gender: "" }), /Gender/);

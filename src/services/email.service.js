@@ -112,14 +112,10 @@ class EmailService {
           return { success: true, live: true, provider: "BREVO", ...result };
         }
         console.warn(`[EmailService:BREVO_FAIL] Brevo dispatch failed for ${to}: ${result.error}.`);
-        if (process.env.NODE_ENV === "production") {
-          return { success: false, error: result.error, provider: "BREVO" };
-        }
+        return { success: false, error: result.error, provider: "BREVO" };
       } catch (err) {
         console.warn(`[EmailService:BREVO_ERROR] Brevo exception: ${err.message}.`);
-        if (process.env.NODE_ENV === "production") {
-          return { success: false, error: err.message, provider: "BREVO" };
-        }
+        return { success: false, error: err.message, provider: "BREVO" };
       }
     } else if (process.env.NODE_ENV === "production") {
       console.error("[EmailService] No live email provider is configured.");

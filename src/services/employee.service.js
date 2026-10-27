@@ -5,6 +5,7 @@ const {
   assertRequiredNotCleared,
   normalizeGender,
   normalizeEmploymentType,
+  normalizePersonalEmail,
   assertStatus,
   parsePastDate,
 } = require("../utils/employeeValidation");
@@ -18,7 +19,14 @@ const { assertSeatAvailable, assertBranchAvailable } = require("./entitlement.se
 const { getNextEmployeeCode, organizationPrefix } = require("../utils/employeeCode");
 const webhookService = require("./webhook.service");
 
+function badRequest(message) {
+  const err = new Error(message);
+  err.statusCode = 400;
+  return err;
+}
+
 const SENSITIVE_EMPLOYEE_FIELDS = [
+  "personalEmail",
   "panNumber",
   "uanNumber",
   "esiNumber",
@@ -44,7 +52,7 @@ const MANAGER_UPDATE_FIELDS = new Set([
   "firstName", "lastName", "phone", "status", "branchId", "departmentId",
   "shiftId", "designation", "employmentType", "reportingManagerId", "avatarUrl",
   "profileImage", "profilePicture", "avatar", "role", "gender", "dateOfBirth",
-  "dateOfJoining", "workEmail", "address", "emergencyContactName", "emergencyContactPhone",
+  "dateOfJoining", "workEmail", "personalEmail", "address", "emergencyContactName", "emergencyContactPhone",
   "panNumber", "uanNumber", "esiNumber", "bankName", "bankAccountNumber", "bankIfsc",
 ]);
 
@@ -58,6 +66,7 @@ const employeeProfileColumns = (profile) => ({
   dateOfJoining: profile.dateOfJoining,
   designation: profile.designation,
   employmentType: profile.employmentType,
+  personalEmail: profile.personalEmail,
   address: profile.address,
   emergencyContactName: profile.emergencyContactName,
   emergencyContactPhone: profile.emergencyContactPhone,
@@ -68,6 +77,37 @@ const employeeProfileColumns = (profile) => ({
   bankAccountNumber: profile.bankAccountNumber,
   bankIfsc: profile.bankIfsc,
 });
+
+/**
+ * Login accepts the office email (User.email) or the personal email, so within one workspace an
+ * address may identify only one person. `userId` and `employeeId` are the records being edited, if any.
+ */
+const assertLoginEmailsFree = async (organizationId, emails, { userId = null, employeeId = null } = {}) => {
+  const addresses = [...new Set(emails.filter(Boolean))];
+  if (!addresses.length) return;
+  const [userClash, personalClash] = await Promise.all([
+    prisma.user.findFirst({
+      where: {
+        organizationId,
+        email: { in: addresses, mode: "insensitive" },
+        ...(userId ? { NOT: { id: userId } } : {}),
+      },
+      select: { id: true },
+    }),
+    prisma.employee.findFirst({
+      where: {
+        organizationId,
+        deletedAt: null,
+        personalEmail: { in: addresses, mode: "insensitive" },
+        ...(employeeId ? { NOT: { id: employeeId } } : {}),
+      },
+      select: { id: true },
+    }),
+  ]);
+  if (userClash || personalClash) {
+    throw badRequest("That email address is already used by another employee in this organization.");
+  }
+};
 
 /** Seeds a default salary split from the annual CTC; payroll can refine it later. */
 const seedSalaryStructure = async (organizationId, employeeId, annualCtc, label) => {
@@ -92,6 +132,7 @@ const seedSalaryStructure = async (organizationId, employeeId, annualCtc, label)
  * 1. POST /api/employees - Create Employee
  */
 const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN") => {
+  await assertRolesAccess(organizationId, actorRole);
   const {
     password,
     role = "EMPLOYEE",
@@ -117,8 +158,9 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
   if (existingUser) {
     throw new Error(`A user account with email '${cleanEmail}' already exists in this organization`);
   }
+  await assertLoginEmailsFree(organizationId, [cleanEmail, profile.personalEmail]);
 
-  const userRole = resolveAssignableRole(role, actorRole);
+  const userRole = resolveAssignableRole(role, actorRole, { allowManagerRole: actorRole === "MANAGER" && (await hasRolesAccess(organizationId, actorRole)) === true });
 
   const org = await prisma.organization.findUnique({
     where: { id: organizationId },
@@ -128,7 +170,7 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
 
   // Generate or validate one common company-prefixed employee code, e.g. KM002.
   const finalEmployeeCode =
-    employeeCode?.trim() || await getNextEmployeeCode(organizationId, prisma, userRole, org.name);
+    employeeCode?.trim() || await getNextEmployeeCode(organizationId, prisma, userRole, org.name, profile.dateOfJoining);
 
   const existingCode = await prisma.employee.findUnique({
     where: {
@@ -224,6 +266,7 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
         branch: true,
         department: true,
         shift: true,
+      reportingManager: { select: { id: true, firstName: true, lastName: true, employeeCode: true } },
       },
     });
 
@@ -259,7 +302,8 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
 /**
  * 2. GET /api/employees - List Employees
  */
-const getEmployees = async (organizationId, query = {}) => {
+const getEmployees = async (organizationId, query = {}, actorRole = "EMPLOYEE") => {
+  await assertRolesAccess(organizationId, actorRole);
   const take = Math.min(500, Math.max(1, parseInt(query.limit, 10) || 50));
   const page = Math.max(1, parseInt(query.page, 10) || 1);
   const skip = (page - 1) * take;
@@ -287,6 +331,7 @@ const getEmployees = async (organizationId, query = {}) => {
         { employeeCode: { contains: q, mode: "insensitive" } },
         { designation: { contains: q, mode: "insensitive" } },
         { user: { email: { contains: q, mode: "insensitive" } } },
+        { personalEmail: { contains: q, mode: "insensitive" } },
       ];
     }
   }
@@ -301,6 +346,7 @@ const getEmployees = async (organizationId, query = {}) => {
         branch: true,
         department: true,
         shift: true,
+      reportingManager: { select: { id: true, firstName: true, lastName: true, employeeCode: true } },
         // Route is limited to admins and managers, so the salary column is safe here.
         salaryStructure: { select: { annualCtc: true, monthlyCtc: true } },
       },
@@ -324,6 +370,7 @@ const getEmployees = async (organizationId, query = {}) => {
  * 3. GET /api/employees/:id - Get Employee by ID
  */
 const getEmployeeById = async (organizationId, employeeId, actorRole = "EMPLOYEE") => {
+  await assertRolesAccess(organizationId, actorRole);
   const employee = await prisma.employee.findFirst({
     where: { id: employeeId, organizationId, deletedAt: null },
     include: {
@@ -333,6 +380,7 @@ const getEmployeeById = async (organizationId, employeeId, actorRole = "EMPLOYEE
       branch: true,
       department: true,
       shift: true,
+      reportingManager: { select: { id: true, firstName: true, lastName: true, employeeCode: true } },
       attendances: {
         take: 10,
         orderBy: { date: "desc" },
@@ -355,6 +403,7 @@ const getEmployeeById = async (organizationId, employeeId, actorRole = "EMPLOYEE
  */
 const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
   const actorRole = actor.actorRole || actor.role || "COMPANY_ADMIN";
+  await assertRolesAccess(organizationId, actorRole);
   const actorUserId = actor.actorUserId || actor.id || null;
 
   if (actorRole === "MANAGER") {
@@ -398,6 +447,7 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
     employmentType,
     reportingManagerId,
     workEmail,
+    personalEmail,
     panNumber,
     uanNumber,
     esiNumber,
@@ -424,6 +474,10 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
     emergencyContactPhone,
   });
   if (workEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(workEmail).trim())) throw badRequest("Work email is not valid.");
+  const personalEmailToSet = personalEmail !== undefined ? normalizePersonalEmail(personalEmail) : undefined;
+  if (personalEmailToSet) {
+    await assertLoginEmailsFree(organizationId, [personalEmailToSet], { userId: employee.userId, employeeId });
+  }
   const statusToSet = status ? assertStatus(status) : undefined;
   const birthDateToSet = dateOfBirth !== undefined ? parsePastDate("Date of birth", dateOfBirth) : undefined;
   const joiningDateToSet = dateOfJoining !== undefined ? parsePastDate("Date of joining", dateOfJoining, { allowFuture: true }) : undefined;
@@ -480,6 +534,7 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
           actorUserId,
           targetUserId: employee.userId,
           targetRole: employee.user?.role,
+          allowManagerRole: actorRole === "MANAGER" && (await hasRolesAccess(organizationId, actorRole)) === true,
         });
       }
       if (avatarToSet !== undefined) {
@@ -510,6 +565,7 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
         ...(employmentTypeToSet !== undefined ? { employmentType: employmentTypeToSet } : {}),
         ...(reportingManagerId !== undefined ? { reportingManagerId: reportingManagerId || null } : {}),
         ...(workEmail !== undefined ? { workEmail: workEmail ? String(workEmail).trim().toLowerCase() : null } : {}),
+        ...(personalEmailToSet !== undefined ? { personalEmail: personalEmailToSet } : {}),
         ...(identity.panNumber !== undefined ? { panNumber: identity.panNumber } : {}),
         ...(identity.uanNumber !== undefined ? { uanNumber: identity.uanNumber } : {}),
         ...(identity.esiNumber !== undefined ? { esiNumber: identity.esiNumber } : {}),
@@ -525,6 +581,7 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
         branch: true,
         department: true,
         shift: true,
+      reportingManager: { select: { id: true, firstName: true, lastName: true, employeeCode: true } },
       },
     });
   });
@@ -534,13 +591,24 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
 /**
  * 5. DELETE /api/employees/:id - Delete Employee
  */
-const deleteEmployee = async (organizationId, employeeId) => {
+const deleteEmployee = async (organizationId, employeeId, actor = {}) => {
   const employee = await prisma.employee.findFirst({
-    where: { id: employeeId, organizationId },
+    where: { id: employeeId, organizationId, deletedAt: null },
+    include: {
+      user: { select: { id: true, role: true } },
+    },
   });
 
   if (!employee) {
-    throw new Error("Employee not found");
+    throw badRequest("Employee not found or already deleted");
+  }
+
+  if (employee.userId && employee.userId === actor.userId) {
+    throw badRequest("You cannot delete your own account");
+  }
+
+  if (ADMIN_ROLES.includes(employee.user?.role) && actor.role !== "SUPER_ADMIN") {
+    throw badRequest("Only a super admin can delete an admin account");
   }
 
   return await prisma.$transaction(async (tx) => {
@@ -563,8 +631,82 @@ const deleteEmployee = async (organizationId, employeeId) => {
   });
 };
 
+const bulkDeleteEmployees = async (organizationId, employeeIds, actor = {}) => {
+  const ids = [...new Set((Array.isArray(employeeIds) ? employeeIds : []).filter((id) => typeof id === "string" && id.trim()))];
+  if (ids.length === 0) throw badRequest("Select at least one employee to delete");
+  if (ids.length > BULK_ACCESS_MAX) throw badRequest(`You can delete up to ${BULK_ACCESS_MAX} employees at a time`);
+
+  const found = await prisma.employee.findMany({
+    where: { id: { in: ids }, organizationId, deletedAt: null },
+    select: {
+      id: true,
+      userId: true,
+      employeeCode: true,
+      firstName: true,
+      lastName: true,
+      user: { select: { id: true, role: true } },
+    },
+  });
+
+  const byId = new Map(found.map((e) => [e.id, e]));
+  const nameOf = (e) => `${e.firstName} ${e.lastName || ""}`.trim();
+
+  const eligible = [];
+  const failed = [];
+
+  for (const id of ids) {
+    const emp = byId.get(id);
+    if (!emp) {
+      failed.push({ id, reason: "Employee not found or already deleted" });
+      continue;
+    }
+    const name = nameOf(emp);
+    if (emp.userId && emp.userId === actor.userId) {
+      failed.push({ id, name, reason: "You cannot delete your own account" });
+    } else if (ADMIN_ROLES.includes(emp.user?.role) && actor.role !== "SUPER_ADMIN") {
+      failed.push({ id, name, reason: "Only a super admin can delete admin accounts" });
+    } else {
+      eligible.push(emp);
+    }
+  }
+
+  if (eligible.length > 0) {
+    const employeeIdsToDelete = eligible.map((e) => e.id);
+    const userIdsToDeactivate = eligible.map((e) => e.userId).filter(Boolean);
+
+    await prisma.$transaction(
+      async (tx) => {
+        await tx.employee.updateMany({
+          where: { id: { in: employeeIdsToDelete }, organizationId },
+          data: {
+            deletedAt: new Date(),
+            status: "INACTIVE",
+          },
+        });
+
+        if (userIdsToDeactivate.length > 0) {
+          await tx.user.updateMany({
+            where: { id: { in: userIdsToDeactivate }, organizationId },
+            data: { isActive: false },
+          });
+        }
+      },
+      { timeout: 20000, maxWait: 10000 },
+    );
+  }
+
+  return {
+    deletedCount: eligible.length,
+    failedCount: failed.length,
+    deleted: eligible.map((e) => ({ id: e.id, name: nameOf(e) })),
+    failed,
+  };
+};
+
 const BULK_ACCESS_MAX = 200;
 const ADMIN_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN"];
+const hasRolesAccess = async (organizationId, actorRole) => { if (actorRole !== "MANAGER" && actorRole !== "HR") return true; if (typeof prisma.organization?.findUnique !== "function") return null; const org = await prisma.organization.findUnique({ where: { id: organizationId }, select: { hrAccess: true } }); return !org?.hrAccess || org.hrAccess.ROLES !== false; };
+const assertRolesAccess = async (organizationId, actorRole) => { if ((await hasRolesAccess(organizationId, actorRole)) === false) { const error = new Error("HR roles and user access is disabled for this workspace."); error.statusCode = 403; throw error; } };
 
 /**
  * Deactivate or reactivate several employees' logins at once.
@@ -580,6 +722,7 @@ const ADMIN_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN"];
  *  - terminated employees cannot be reactivated here
  */
 const setEmployeesAccess = async (organizationId, employeeIds, action, actor = {}) => {
+  await assertRolesAccess(organizationId, actor.role);
   if (action !== "DEACTIVATE" && action !== "ACTIVATE") throw badRequest("Action must be DEACTIVATE or ACTIVATE");
   const ids = [...new Set((Array.isArray(employeeIds) ? employeeIds : []).filter((id) => typeof id === "string" && id.trim()))];
   if (ids.length === 0) throw badRequest("Select at least one employee");
@@ -702,6 +845,7 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
     where: { organizationId_email: { organizationId, email: cleanEmail } },
   });
   if (existing) throw new Error(`A user with email '${cleanEmail}' already exists in this organization.`);
+  await assertLoginEmailsFree(organizationId, [cleanEmail, profile.personalEmail]);
 
   const org = await prisma.organization.findUnique({ where: { id: organizationId } });
   if (!org) throw new Error("Organization not found.");
@@ -711,9 +855,9 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
   const salt = await bcrypt.genSalt(10);
   const passwordHash = await bcrypt.hash(tempPassword, salt);
 
-  const userRole = resolveAssignableRole(role, actorRole);
+  const userRole = resolveAssignableRole(role, actorRole, { allowManagerRole: actorRole === "MANAGER" && (await hasRolesAccess(organizationId, actorRole)) === true });
   // HR uses the same company-wide employee-code sequence as every other employee.
-  const employeeCode = data.employeeCode?.trim() || await getNextEmployeeCode(organizationId, prisma, userRole, org.name);
+  const employeeCode = data.employeeCode?.trim() || await getNextEmployeeCode(organizationId, prisma, userRole, org.name, profile.dateOfJoining);
   const avatarUrl = resolveAvatarUrl({
     avatarUrl: data.avatarUrl,
     profileImage: data.profileImage,
@@ -759,6 +903,7 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
         branch: true,
         department: true,
         shift: true,
+      reportingManager: { select: { id: true, firstName: true, lastName: true, employeeCode: true } },
       },
     });
 
@@ -882,6 +1027,18 @@ const updateMyProfile = async (organizationId, userId, data) => {
   const employee = await getMyEmployee(organizationId, userId);
   const identity = validateIdentityFields({ bankAccountNumber: data.bankAccountNumber, bankIfsc: data.bankIfsc });
   const birthDate = data.dateOfBirth !== undefined ? parsePastDate("Date of birth", data.dateOfBirth) : undefined;
+  const joiningDate = data.dateOfJoining !== undefined
+    ? parsePastDate("Date of joining", data.dateOfJoining, { allowFuture: true })
+    : undefined;
+  // Self-service is fill-once: payroll, leave accrual and employee codes key off these dates,
+  // so once recorded only HR can correct them.
+  if (birthDate && employee.dateOfBirth) throw badRequest("Date of birth is already recorded. Contact HR to change it.");
+  if (joiningDate && employee.dateOfJoining) throw badRequest("Date of joining is already recorded. Contact HR to change it.");
+  const effectiveBirth = birthDate || employee.dateOfBirth;
+  const effectiveJoining = joiningDate || employee.dateOfJoining;
+  if (effectiveBirth && effectiveJoining && effectiveJoining < effectiveBirth) {
+    throw badRequest("Date of joining cannot be before date of birth.");
+  }
   if (data.branchId) {
     const branch = await prisma.branch.findFirst({
       where: { id: String(data.branchId), organizationId },
@@ -914,7 +1071,8 @@ const updateMyProfile = async (organizationId, userId, data) => {
         ...(data.emergencyContactPhone !== undefined
           ? { emergencyContactPhone: data.emergencyContactPhone ? String(data.emergencyContactPhone).trim() : null }
           : {}),
-        ...(birthDate !== undefined ? { dateOfBirth: birthDate } : {}),
+        ...(birthDate ? { dateOfBirth: birthDate } : {}),
+        ...(joiningDate ? { dateOfJoining: joiningDate } : {}),
         ...(data.bankName !== undefined ? { bankName: data.bankName ? String(data.bankName).trim() : null } : {}),
         ...(identity.bankAccountNumber !== undefined ? { bankAccountNumber: identity.bankAccountNumber } : {}),
         ...(identity.bankIfsc !== undefined ? { bankIfsc: identity.bankIfsc } : {}),
@@ -940,11 +1098,6 @@ const BULK_IMPORT_MAX_ROWS = 200;
 const BULK_HASH_CONCURRENCY = 20;
 const BULK_HASH_COST = 8;
 
-const badRequest = (message) => {
-  const err = new Error(message);
-  err.statusCode = 400;
-  return err;
-};
 
 const bulkImportEmployees = async (organizationId, employeesList, actorRole = "COMPANY_ADMIN") => {
   if (!Array.isArray(employeesList) || employeesList.length === 0) {
@@ -1327,6 +1480,7 @@ module.exports = {
   getEmployeeById,
   updateEmployee,
   deleteEmployee,
+  bulkDeleteEmployees,
   inviteEmployee,
   resendEmployeeInvite,
   getMyEmployee,

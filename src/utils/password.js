@@ -9,7 +9,7 @@ const generateTempPassword = () =>
  * SUPER_ADMIN and COMPANY_ADMIN are never accepted from a request body —
  * tenant administrators must not be able to grant platform-owner privileges.
  */
-const resolveAssignableRole = (requestedRole, actorRole = "COMPANY_ADMIN") => {
+const resolveAssignableRole = (requestedRole, actorRole = "COMPANY_ADMIN", options = {}) => {
   const requested = requestedRole === "HR" ? "MANAGER" : requestedRole || "EMPLOYEE";
 
   if (requested === "SUPER_ADMIN" || requested === "COMPANY_ADMIN") {
@@ -24,7 +24,7 @@ const resolveAssignableRole = (requestedRole, actorRole = "COMPANY_ADMIN") => {
     throw error;
   }
 
-  if (actorRole === "MANAGER" && requested !== "EMPLOYEE") {
+  if (actorRole === "MANAGER" && requested !== "EMPLOYEE" && !options.allowManagerRole) {
     const error = new Error("Managers can only assign the employee role");
     error.statusCode = 403;
     throw error;
@@ -45,6 +45,7 @@ const assertRoleAssignment = ({
   actorUserId,
   targetUserId,
   targetRole,
+  allowManagerRole = false,
 }) => {
   if (actorUserId && targetUserId && actorUserId === targetUserId) {
     const error = new Error("You cannot change your own role");
@@ -58,13 +59,13 @@ const assertRoleAssignment = ({
     throw error;
   }
 
-  if (actorRole === "MANAGER" && targetRole && targetRole !== "EMPLOYEE") {
+  if (actorRole === "MANAGER" && targetRole && targetRole !== "EMPLOYEE" && !allowManagerRole) {
     const error = new Error("Managers can only update employee accounts");
     error.statusCode = 403;
     throw error;
   }
 
-  return resolveAssignableRole(requestedRole, actorRole);
+  return resolveAssignableRole(requestedRole, actorRole, { allowManagerRole });
 };
 
 module.exports = { generateTempPassword, resolveAssignableRole, assertRoleAssignment };
