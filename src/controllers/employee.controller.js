@@ -23,6 +23,7 @@ const list = async (req, res) => {
     const result = await employeeService.getEmployees(
       req.user.organizationId,
       req.query,
+      req.user.role,
     );
 
     return res.json({
@@ -109,12 +110,30 @@ const bulkSetAccess = async (req, res) => {
 const remove = async (req, res) => {
   try {
     const { id } = req.params;
-    await employeeService.deleteEmployee(req.user.organizationId, id);
+    await employeeService.deleteEmployee(req.user.organizationId, id, {
+      userId: req.user.id,
+      role: req.user.role,
+    });
 
     return res.json({
       success: true,
       message: "Employee and account removed successfully",
     });
+  } catch (error) { return sendControllerError(res, error); }
+};
+
+const bulkDelete = async (req, res) => {
+  try {
+    const result = await employeeService.bulkDeleteEmployees(
+      req.user.organizationId,
+      req.body?.ids,
+      { userId: req.user.id, role: req.user.role },
+    );
+    const message =
+      result.failedCount > 0
+        ? `Deleted ${result.deletedCount} employee(s). ${result.failedCount} could not be deleted.`
+        : `Deleted ${result.deletedCount} employee(s) successfully.`;
+    return res.json({ success: true, message, data: result });
   } catch (error) { return sendControllerError(res, error); }
 };
 
@@ -232,6 +251,7 @@ module.exports = {
   getById,
   update,
   remove,
+  bulkDelete,
   invite,
   resendInvite,
   getMe,

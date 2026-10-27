@@ -10,7 +10,7 @@ const TENANT_MODELS = new Set([
   "CompOffBalance", "OvertimeRequest", "Branch", "Department", "User",
   "SsoLoginCode", "Employee", "Shift", "Attendance", "AttendanceCorrection",
   "LeaveType", "LeaveRequest", "LeaveBalance", "PermissionRequest",
-  "CompanyLeave", "Holiday", "SalaryStructure", "Payslip", "PayslipTemplate",
+  "CompanyLeave", "WorkFromHomeRequest", "ShootRequest", "Holiday", "SalaryStructure", "Payslip", "PayslipTemplate",
   "SalaryRevision", "Notification", "AuditLog", "EmployeeDevice",
   "OnboardingCandidate", "ExpenseClaim", "EmployeeInvite", "EmployeeDocument",
   "EmployeeExit", "EmployeeClearance", "ExitInterview", "FinalSettlement",

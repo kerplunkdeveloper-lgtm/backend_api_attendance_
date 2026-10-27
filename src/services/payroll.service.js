@@ -758,6 +758,7 @@ class PayrollService {
     if (!employee) return [];
 
     return await prisma.payslip.findMany({
+      take: 120, // safety cap: a person's own history can grow for years
       where: { employeeId: employee.id, organizationId },
       include: {
         expenses: {

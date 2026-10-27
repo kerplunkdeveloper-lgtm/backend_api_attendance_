@@ -459,6 +459,7 @@ class OnboardingService {
     }
 
     return await prisma.onboardingCandidate.findMany({
+      take: 500, // safety cap: a person's own history can grow for years
       where,
       orderBy: { createdAt: "desc" },
       include: {
@@ -495,7 +496,11 @@ class OnboardingService {
       throw error;
     }
 
-    return candidate;
+    // Aadhaar, PAN and bank files are stored privately, so their raw URL is refused. Hand out signed ones.
+    return {
+      ...candidate,
+      documents: (candidate.documents || []).map((doc) => ({ ...doc, fileUrl: signedDeliveryUrl(doc.fileUrl) })),
+    };
   }
 
   /**

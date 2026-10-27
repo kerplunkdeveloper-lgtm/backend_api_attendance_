@@ -102,28 +102,52 @@ const SENSITIVE_DOCUMENT_TYPES = new Set([
 const isSensitiveDocumentType = (type) =>
   SENSITIVE_DOCUMENT_TYPES.has(String(type || "").toUpperCase());
 
-const publicIdFromUrl = (fileUrl) => {
+/**
+ * Reads the parts of a stored Cloudinary URL that decide how it must be delivered: the resource type
+ * (image, raw or video), the delivery type (upload = public, authenticated, private), the version and the
+ * file name. Returns null for anything that is not a Cloudinary delivery URL.
+ */
+const parseDeliveryUrl = (fileUrl) => {
   if (!fileUrl || typeof fileUrl !== "string") return null;
-  const match = fileUrl.match(/\/(?:image|raw|video|auto)\/(?:upload|authenticated|private)\/(?:v\d+\/)?(.+)$/);
+  const match = fileUrl.split(/[?#]/)[0].match(/\/(image|raw|video)\/(upload|authenticated|private)\/(?:s--[\w-]+--\/)?(?:v(\d+)\/)?(.+)$/);
   if (!match) return null;
-  return match[1].replace(/\.[a-zA-Z0-9]+$/, "");
+  const [, resourceType, deliveryType, version, path] = match;
+  let name;
+  try {
+    name = decodeURIComponent(path);
+  } catch {
+    name = path;
+  }
+  // Images and videos are addressed without their extension (it is the format); raw files keep it in the id.
+  const dot = name.match(/\.([a-zA-Z0-9]+)$/);
+  const keepsExtension = resourceType === "raw";
+  return {
+    resourceType,
+    deliveryType,
+    version: version ? Number(version) : undefined,
+    publicId: dot && !keepsExtension ? name.slice(0, -dot[0].length) : name,
+    format: dot && !keepsExtension ? dot[1] : undefined,
+  };
 };
 
 /**
- * Time-limited Cloudinary URL for identity and bank documents.
- * Legacy public URLs still resolve if signing is unavailable.
+ * A link that opens an uploaded document. It is built from how the file was actually stored, so it works for
+ * every upload: public files keep their URL, and files stored as "authenticated" get a signed URL (a plain
+ * authenticated URL is refused by Cloudinary). The "authenticated" option is kept for older callers and is
+ * ignored: the stored URL is the source of truth, and asking for the wrong type returns "not found".
  */
-const signedDeliveryUrl = (fileUrl, { ttlSeconds = 300, authenticated = false } = {}) => {
+const signedDeliveryUrl = (fileUrl) => {
   if (!fileUrl || !isConfigured) return fileUrl;
-  const publicId = publicIdFromUrl(fileUrl);
-  if (!publicId) return fileUrl;
+  const parsed = parseDeliveryUrl(fileUrl);
+  if (!parsed || parsed.deliveryType === "upload") return fileUrl;
   try {
-    return cloudinary.url(publicId, {
-      resource_type: "auto",
-      type: authenticated ? "authenticated" : "upload",
+    return cloudinary.url(parsed.publicId, {
+      resource_type: parsed.resourceType,
+      type: parsed.deliveryType,
+      version: parsed.version,
+      format: parsed.format,
       sign_url: true,
       secure: true,
-      expires_at: Math.floor(Date.now() / 1000) + ttlSeconds,
     });
   } catch {
     return fileUrl;
@@ -137,5 +161,6 @@ module.exports = {
   uploadBuffer,
   deleteImage,
   signedDeliveryUrl,
+  parseDeliveryUrl,
   isSensitiveDocumentType,
 };

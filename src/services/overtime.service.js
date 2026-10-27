@@ -280,6 +280,7 @@ class OvertimeService {
     if (!employee) return [];
 
     return await prisma.overtimeRequest.findMany({
+      take: 500, // safety cap: a person's own history can grow for years
       where: { employeeId: employee.id, organizationId },
       include: { attendance: { select: { id: true, date: true, workingMinutes: true } } },
       orderBy: { createdAt: "desc" },

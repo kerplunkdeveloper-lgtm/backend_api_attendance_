@@ -46,6 +46,7 @@ enum RequestStatus {
   PENDING
   APPROVED
   REJECTED
+  CANCELLED
 }
 
 enum SubscriptionPlan {
@@ -100,6 +101,7 @@ model Organization {
   // When on, company admins must turn on two-step verification before they
   // can use anything beyond the sign-in and 2FA setup endpoints.
   requireAdminTwoFactor Boolean @default(false)
+  hrAccess              Json?
 
   // Optional tenant-scoped OpenID Connect single sign-on configuration.
   ssoEnabled                Boolean @default(false)
@@ -159,6 +161,8 @@ model Organization {
   ssoLoginCodes        SsoLoginCode[]
   lateComingLopRules   LateComingLopRule[]
   dayOffWorkRequests   DayOffWorkRequest[]
+  shootRequests        ShootRequest[]
+  workFromHomeRequests WorkFromHomeRequest[]
 }
 
 // ─── Working on a day off (weekly off, holiday, company leave) ───────────────
@@ -176,6 +180,10 @@ model DayOffWorkRequest {
   reviewedBy     String?
   reviewNote     String?
   reviewedAt     DateTime?
+  cancellationRequested Boolean @default(false)
+  cancellationRequestedBy String?
+  cancellationRequestedAt DateTime?
+  cancellationReviewNote String?
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
@@ -184,6 +192,76 @@ model DayOffWorkRequest {
 
   @@unique([employeeId, date])
   @@index([organizationId, status])
+}
+
+model WorkFromHomeRequest {
+  id             String        @id @default(uuid())
+  organizationId String
+  employeeId     String
+  startDate      DateTime      @db.Date
+  endDate        DateTime      @db.Date
+  reason         String
+  status         RequestStatus @default(PENDING)
+  reviewedBy     String?
+  reviewNote     String?
+  reviewedAt     DateTime?
+  cancellationRequested Boolean @default(false)
+  cancellationRequestedBy String?
+  cancellationRequestedAt DateTime?
+  cancellationReviewNote String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  employee     Employee     @relation(fields: [employeeId], references: [id])
+
+  @@index([organizationId, status])
+  @@index([employeeId, startDate, endDate])
+}
+
+// Planned off-site shoot work. Approval is required before an employee can
+// punch in with SHOOT mode outside the office geofence on the requested date.
+model ShootRequest {
+  id             String        @id @default(uuid())
+  organizationId String
+  employeeId     String
+  date           DateTime      @db.Date
+  shootName      String
+  location       String
+  startTime      String // HH:mm, local organization time
+  endTime        String // HH:mm, local organization time
+  note           String?
+  status         RequestStatus @default(PENDING)
+  reviewedBy     String?
+  reviewNote     String?
+  reviewedAt     DateTime?
+  cancellationRequested Boolean @default(false)
+  cancellationRequestedBy String?
+  cancellationRequestedAt DateTime?
+  cancellationReviewNote String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization Organization              @relation(fields: [organizationId], references: [id])
+  employee     Employee                  @relation(fields: [employeeId], references: [id])
+  participants ShootRequestParticipant[]
+
+  @@unique([employeeId, date])
+  @@index([organizationId, status, date])
+  @@index([employeeId, date])
+}
+
+model ShootRequestParticipant {
+  id             String   @id @default(uuid())
+  shootRequestId String
+  employeeId     String
+  createdAt      DateTime @default(now())
+
+  shootRequest ShootRequest @relation(fields: [shootRequestId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([shootRequestId, employeeId])
+  @@index([employeeId])
 }
 
 model Subscription {
@@ -371,8 +449,24 @@ model Department {
   organization         Organization          @relation(fields: [organizationId], references: [id])
   employees            Employee[]
   onboardingCandidates OnboardingCandidate[]
+  designations         Designation[]
 
   @@unique([organizationId, name])
+}
+
+// A job title that belongs to one department (for example "Senior Editor" in Production). Employees keep their
+// designation as plain text, so removing a title here never changes anyone's profile.
+model Designation {
+  id             String   @id @default(uuid())
+  organizationId String
+  departmentId   String
+  name           String
+  createdAt      DateTime @default(now())
+
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@unique([departmentId, name])
+  @@index([organizationId])
 }
 
 model User {
@@ -457,6 +551,8 @@ model Employee {
   employmentType        String? // FULL_TIME, PART_TIME, CONTRACT, INTERN
   reportingManagerId    String?
   workEmail             String?
+  // Alternate login: the employee can sign in with this address as well as the office email on User.
+  personalEmail         String?
   emergencyContactName  String?
   emergencyContactPhone String?
   address               String?
@@ -476,40 +572,44 @@ model Employee {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  organization       Organization           @relation(fields: [organizationId], references: [id])
-  user               User?                  @relation(fields: [userId], references: [id])
-  branch             Branch?                @relation(fields: [branchId], references: [id])
-  department         Department?            @relation(fields: [departmentId], references: [id])
-  shift              Shift?                 @relation(fields: [shiftId], references: [id])
-  reportingManager   Employee?              @relation("EmployeeReports", fields: [reportingManagerId], references: [id])
-  directReports      Employee[]             @relation("EmployeeReports")
-  attendances        Attendance[]
-  corrections        AttendanceCorrection[]
-  leaveRequests      LeaveRequest[]
-  leaveBalances      LeaveBalance[]
-  salaryStructure    SalaryStructure?
-  payslips           Payslip[]
-  permissionRequests PermissionRequest[]
-  devices            EmployeeDevice[]
-  salaryRevisions    SalaryRevision[]
-  expenses           ExpenseClaim[]
-  shiftOverrides     ShiftOverride[]
-  compOffBalance     CompOffBalance?
-  overtimeRequests   OvertimeRequest[]
-  documents          EmployeeDocument[]
-  exits              EmployeeExit[]
-  finalSettlements   FinalSettlement[]
-  assignedAssets     Asset[]
-  assetAssignments   AssetAssignment[]
-  itDeclarations     ItDeclaration[]
-  form16Records      Form16Record[]
-  loanAdvances       LoanAdvance[]
-  appraisals         AppraisalReview[]
-  dayOffWorkRequests DayOffWorkRequest[]
+  organization             Organization              @relation(fields: [organizationId], references: [id])
+  user                     User?                     @relation(fields: [userId], references: [id])
+  branch                   Branch?                   @relation(fields: [branchId], references: [id])
+  department               Department?               @relation(fields: [departmentId], references: [id])
+  shift                    Shift?                    @relation(fields: [shiftId], references: [id])
+  reportingManager         Employee?                 @relation("EmployeeReports", fields: [reportingManagerId], references: [id])
+  directReports            Employee[]                @relation("EmployeeReports")
+  attendances              Attendance[]
+  corrections              AttendanceCorrection[]
+  leaveRequests            LeaveRequest[]
+  workFromHomeRequests     WorkFromHomeRequest[]
+  shootRequests            ShootRequest[]
+  shootRequestParticipants ShootRequestParticipant[]
+  leaveBalances            LeaveBalance[]
+  salaryStructure          SalaryStructure?
+  payslips                 Payslip[]
+  permissionRequests       PermissionRequest[]
+  devices                  EmployeeDevice[]
+  salaryRevisions          SalaryRevision[]
+  expenses                 ExpenseClaim[]
+  shiftOverrides           ShiftOverride[]
+  compOffBalance           CompOffBalance?
+  overtimeRequests         OvertimeRequest[]
+  documents                EmployeeDocument[]
+  exits                    EmployeeExit[]
+  finalSettlements         FinalSettlement[]
+  assignedAssets           Asset[]
+  assetAssignments         AssetAssignment[]
+  itDeclarations           ItDeclaration[]
+  form16Records            Form16Record[]
+  loanAdvances             LoanAdvance[]
+  appraisals               AppraisalReview[]
+  dayOffWorkRequests       DayOffWorkRequest[]
 
   @@unique([organizationId, employeeCode])
   @@index([organizationId])
   @@index([organizationId, status])
+  @@index([personalEmail])
   @@index([branchId])
   @@index([departmentId])
   @@index([shiftId])
@@ -1807,7 +1907,7 @@ model WebhookEndpoint {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   deliveries   WebhookDelivery[]
 
   @@index([organizationId, isActive])

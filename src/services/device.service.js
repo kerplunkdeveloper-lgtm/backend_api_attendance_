@@ -69,6 +69,7 @@ class DeviceService {
    */
   async getAllDevices(organizationId) {
     return await prisma.employeeDevice.findMany({
+      take: 1000, // safety cap: a person's own history can grow for years
       where: { organizationId },
       include: {
         employee: {

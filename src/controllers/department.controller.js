@@ -87,7 +87,37 @@ const remove = async (req, res) => {
   }
 };
 
+const addDesignation = async (req, res) => {
+  try {
+    const designation = await departmentService.createDesignation(req.user.organizationId, req.params.id, req.body?.name);
+    return res.status(201).json({ success: true, message: "Designation added", data: designation });
+  } catch (error) {
+    return sendControllerError(res, error);
+  }
+};
+
+const renameDesignation = async (req, res) => {
+  try {
+    const designation = await departmentService.updateDesignation(req.user.organizationId, req.params.designationId, req.body?.name);
+    return res.json({ success: true, message: "Designation updated", data: designation });
+  } catch (error) {
+    return sendControllerError(res, error);
+  }
+};
+
+const removeDesignation = async (req, res) => {
+  try {
+    await departmentService.deleteDesignation(req.user.organizationId, req.params.designationId);
+    return res.json({ success: true, message: "Designation removed" });
+  } catch (error) {
+    return sendControllerError(res, error);
+  }
+};
+
 module.exports = {
+  addDesignation,
+  renameDesignation,
+  removeDesignation,
   create,
   list,
   getById,

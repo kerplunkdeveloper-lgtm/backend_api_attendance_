@@ -1,0 +1,13 @@
+const express = require("express");
+const controller = require("../controllers/shoot-request.controller");
+const { authenticate, authorizeRoles } = require("../middleware/auth.middleware");
+const router = express.Router();
+router.use(authenticate);
+router.post("/", controller.create);
+router.get("/my", controller.mine);
+const reviewers = authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR");
+router.get("/", reviewers, controller.list);
+router.post("/:id/cancel", controller.cancel);
+router.post("/:id/cancel-review", reviewers, controller.reviewCancellation);
+router.post("/:id/review", reviewers, controller.review);
+module.exports = router;

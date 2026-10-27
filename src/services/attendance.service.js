@@ -21,6 +21,7 @@ const {
 const { assertPunchTimestamp } = require("../utils/punchTime");
 const { parsePagination } = require("../utils/pagination");
 const { resolvePunchLocation } = require("../utils/reverseGeocode");
+const shootRequestService = require("./shoot-request.service");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -303,8 +304,44 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
     error.statusCode = 403;
     throw error;
   }
-  await assertTrustedDevice(employee, organizationId, policy, deviceId);
+
   assertLocationCaptured({ latitude, longitude, action: "in", skip: skipGeofence || source === "BIOMETRIC" || (isOnBehalf(employee, userId) && ADMIN_ROLES.includes(actorRole)) });
+
+  if (workMode === "SHOOT") {
+    const approvedShoot = await shootRequestService.getApprovedForDate(employee.id, organizationId, today);
+    if (!approvedShoot) {
+      const error = new Error("An approved Shoot Request is required for this date before punching in.");
+      error.statusCode = 403;
+      error.code = "SHOOT_APPROVAL_REQUIRED";
+      throw error;
+    }
+    const currentMinutes = getZonedParts(checkInTime, timezone).hour * 60 + getZonedParts(checkInTime, timezone).minute;
+    const [startHour, startMinute] = approvedShoot.startTime.split(":").map(Number);
+    const [endHour, endMinute] = approvedShoot.endTime.split(":").map(Number);
+    const startMinutes = startHour * 60 + startMinute;
+    const endMinutes = endHour * 60 + endMinute;
+    if (currentMinutes < startMinutes || currentMinutes > endMinutes) {
+      const error = new Error(`Shoot punch-in is allowed only between ${approvedShoot.startTime} and ${approvedShoot.endTime}.`);
+      error.statusCode = 403;
+      error.code = "SHOOT_OUTSIDE_APPROVED_TIME";
+      throw error;
+    }
+    const departmentName = String(employee.department?.name || "").trim().toLowerCase();
+    if (departmentName !== "cinematographer") {
+      const error = new Error("Shoot time is available only for the Cinematographer department.");
+      error.statusCode = 403;
+      error.code = "SHOOT_DEPARTMENT_REQUIRED";
+      throw error;
+    }
+    if (!String(note || "").trim()) {
+      const error = new Error("Enter the shoot name or location before starting the shoot.");
+      error.statusCode = 400;
+      error.code = "SHOOT_NOTE_REQUIRED";
+      throw error;
+    }
+  }
+  await assertTrustedDevice(employee, organizationId, policy, deviceId);
+
 
   // ── Week-Off / Holiday / Leave Detection ──────────────────────────────────
   const shift = await resolveShift(employee, organizationId, checkInTime);
@@ -479,7 +516,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
     throw error;
   }
 
-  const formattedNote = note || (workMode !== "OFFICE" ? workMode.replace(/_/g, " ") : null);
+  const formattedNote = workMode === "SHOOT" ? "SHOOT: " + String(note).trim() : (note || (workMode !== "OFFICE" ? workMode.replace(/_/g, " ") : null));
   const checkInLocation = await resolvePunchLocation({
     locationLabel,
     latitude,
@@ -572,6 +609,29 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
     const error = new Error("Work From Home punch-in is not enabled for this organization.");
     error.statusCode = 403;
     throw error;
+  }
+
+  // Regular employees must have an approved request for the day they are
+  // punching in from home. Privileged users can record WFH attendance on
+  // behalf of employees and are not blocked by the self-service gate.
+  if (actorRole === "EMPLOYEE") {
+    const approvedWorkFromHome = await prisma.workFromHomeRequest.findFirst({
+      where: {
+        organizationId,
+        employeeId: employee.id,
+        status: "APPROVED",
+        startDate: { lte: today },
+        endDate: { gte: today },
+      },
+      select: { id: true },
+    });
+
+    if (!approvedWorkFromHome) {
+      const error = new Error("Submit a Work From Home request and wait for approval before checking in from home.");
+      error.statusCode = 403;
+      error.code = "WFH_APPROVAL_REQUIRED";
+      throw error;
+    }
   }
 
   const shift = await resolveShift(employee, organizationId, checkInTime);
@@ -704,6 +764,7 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
 // ─────────────────────────────────────────────────────────────────────────────
 // Clock-Out
 // ─────────────────────────────────────────────────────────────────────────────
+
 
 const checkOut = async ({ userId, employeeId, organizationId, latitude, longitude, accuracy, timestamp, workMode, note, actorRole = null, deviceId = null, skipGeofence = false, source = "WEB", clientEventId = null, locationLabel = null }) => {
   const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
@@ -1063,8 +1124,7 @@ const startPause = async ({ userId, employeeId, organizationId, latitude, longit
   
   // Notify Admin and HR of break/lunch start
   try {
-    const notificationService = require("./notification.service");
-    void notificationService.notifyReviewersOfRequest({
+        void notificationService.notifyReviewersOfRequest({
       organizationId,
       employeeId: employee.id,
       title: `${config.label} Started`,
@@ -1097,8 +1157,7 @@ const endPause = async ({ userId, employeeId, organizationId, latitude, longitud
 
   // Notify Admin and HR of break/lunch end with duration
   try {
-    const notificationService = require("./notification.service");
-    void notificationService.notifyReviewersOfRequest({
+        void notificationService.notifyReviewersOfRequest({
       organizationId,
       employeeId: employee.id,
       title: `${config.label} Ended`,
@@ -1357,7 +1416,7 @@ const findDayOff = async (organizationId, employee, date) => {
 const getTodayStatus = async (userId, organizationId) => {
   const employee = await prisma.employee.findFirst({
     where: { userId, organizationId },
-    include: { branch: true, shift: true },
+    include: { branch: true, shift: true, department: true },
   });
 
   if (!employee) {
@@ -1374,7 +1433,7 @@ const getTodayStatus = async (userId, organizationId) => {
   }
 
   const todayDate = await getOrgDateOnly(organizationId, new Date());
-  const [attendance, policy, dayOffBase, workRequest] = await Promise.all([
+  const [attendance, policy, dayOffBase, workRequest, approvedShoot] = await Promise.all([
     findOpenAttendance(employee.id, organizationId, new Date(), {
       shift: true,
       branch: true,
@@ -1385,6 +1444,10 @@ const getTodayStatus = async (userId, organizationId) => {
     prisma.dayOffWorkRequest.findFirst({
       where: { employeeId: employee.id, date: todayDate },
       select: { id: true, status: true, reasonType: true, note: true, reviewNote: true, createdAt: true, reviewedAt: true },
+    }),
+    prisma.shootRequest.findFirst({
+      where: { organizationId, date: todayDate, status: "APPROVED", participants: { some: { employeeId: employee.id } } },
+      select: { id: true, shootName: true, location: true, startTime: true, endTime: true },
     }),
   ]);
   // Someone already punched in (an approved day of work, or an admin marked them) is never locked out of punching out.
@@ -1425,9 +1488,11 @@ const getTodayStatus = async (userId, organizationId) => {
       employeeCode: employee.employeeCode,
       branch: employee.branch,
       shift: employee.shift,
+      department: employee.department ? { id: employee.department.id, name: employee.department.name } : null,
     },
     // Set when today is a holiday or company leave, so the punch screen can say why before anyone punches.
     dayOff,
+    approvedShoot,
     // Lets the punch screen tell employees the rule before they tap.
     locationPolicy: {
       mode: policy.geofenceStrict ? "OFFICE_ONLY" : "ANYWHERE",

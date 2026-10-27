@@ -160,6 +160,7 @@ class CorrectionService {
     if (!employee) return [];
 
     return await prisma.attendanceCorrection.findMany({
+      take: 500, // safety cap: a person's own history can grow for years
       where: { employeeId: employee.id, organizationId },
       include: {
         attendance: true,
