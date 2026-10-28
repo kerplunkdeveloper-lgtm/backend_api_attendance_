@@ -59,7 +59,16 @@ async function getConfiguredOffer(code) {
 let planCatalogCache = null;
 let planCatalogCacheExpiresAt = 0;
 
+const clearPlanCatalogCache = () => {
+  planCatalogCache = null;
+  planCatalogCacheExpiresAt = 0;
+};
+
 async function getPlanCatalog() {
+  if (planCatalogCache && Date.now() < planCatalogCacheExpiresAt) {
+    return planCatalogCache;
+  }
+
   // This public endpoint must stay fast during rolling deploys. A missing or
   // unreachable optional billing table falls back to the static server catalog.
   const lookup = (work) => Promise.race([
@@ -757,6 +766,7 @@ module.exports = {
   handleWebhook,
   calculateCheckout,
   getPlanCatalog,
+  clearPlanCatalogCache,
   getConfiguredPrice,
   applyPaidPlan,
   getConfiguredLimits,

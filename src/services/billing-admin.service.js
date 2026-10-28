@@ -1,5 +1,5 @@
 const prisma = require("../config/database");
-const { PLAN_INR, BILLING_OFFERS, PLAN_KEYS, BILLING_CYCLES } = require("./billing.service");
+const { PLAN_INR, BILLING_OFFERS, PLAN_KEYS, BILLING_CYCLES, clearPlanCatalogCache } = require("./billing.service");
 const { getPlan } = require("../config/plans");
 
 const normalizePlan = (value) => String(value || "").trim().toUpperCase();
@@ -57,6 +57,7 @@ async function upsertPlanPrice({ plan, billingCycle, priceInr, isActive = true, 
     update: { priceInr: value, isActive: Boolean(isActive), updatedByUserId: userId || null },
     create: { plan: normalizedPlan, billingCycle: normalizedCycle, priceInr: value, isActive: Boolean(isActive), updatedByUserId: userId || null },
   });
+  clearPlanCatalogCache();
   return serializePrice(row);
 }
 
@@ -79,11 +80,13 @@ async function upsertPlanLimit({ plan, maxEmployees, maxBranches, hasGeofence, h
   const seats = Number(maxEmployees); const branches = Number(maxBranches);
   if (!Number.isInteger(seats) || seats < 1 || seats > 10000000) throw Object.assign(new Error("Employee limit must be a whole number between 1 and 10,000,000"), { statusCode: 400 });
   if (!Number.isInteger(branches) || branches < 1 || branches > 100000) throw Object.assign(new Error("Branch limit must be a whole number between 1 and 100,000"), { statusCode: 400 });
-  return serializeLimit(await prisma.billingPlanLimit.upsert({
+  const row = await prisma.billingPlanLimit.upsert({
     where: { plan: normalizedPlan },
     update: { maxEmployees: seats, maxBranches: branches, hasGeofence: Boolean(hasGeofence), hasPayroll: Boolean(hasPayroll), hasShiftPlanner: Boolean(hasShiftPlanner), hasApiAccess: Boolean(hasApiAccess), updatedByUserId: userId || null },
     create: { plan: normalizedPlan, maxEmployees: seats, maxBranches: branches, hasGeofence: Boolean(hasGeofence), hasPayroll: Boolean(hasPayroll), hasShiftPlanner: Boolean(hasShiftPlanner), hasApiAccess: Boolean(hasApiAccess), updatedByUserId: userId || null },
-  }));
+  });
+  clearPlanCatalogCache();
+  return serializeLimit(row);
 }
 
 async function listOffers() {

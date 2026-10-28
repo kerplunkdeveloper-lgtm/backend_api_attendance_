@@ -10,6 +10,7 @@ const { resolveAvatarUrl } = require("../utils/avatar");
 const { assertSeatAvailable } = require("./entitlement.service");
 const { normalizeIndianPhone } = require("../utils/phone");
 const { getNextEmployeeCode } = require("../utils/employeeCode");
+const { releaseDeletedEmployeeEmail } = require("../utils/releaseDeletedAccountEmail");
 
 // The onboarding database enum predates the employee-document enum. Accept the
 // names used by the current portal and persist the values supported by
@@ -107,9 +108,12 @@ class OnboardingService {
       where: { organizationId_email: { organizationId, email: cleanEmail } },
     });
     if (existingUser) {
-      const error = new Error(`A user account with email '${cleanEmail}' already exists in this organization`);
-      error.statusCode = 400;
-      throw error;
+      const released = await releaseDeletedEmployeeEmail(prisma, organizationId, cleanEmail);
+      if (!released) {
+        const error = new Error(`A user account with email '${cleanEmail}' already exists in this organization`);
+        error.statusCode = 400;
+        throw error;
+      }
     }
 
     // Check if an onboarding candidate with this email is currently active in the pipeline

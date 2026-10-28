@@ -885,22 +885,12 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
       isNonWorkingDay: true,
     };
   } else if (shift) {
-    const policy = await getPolicy(organizationId);
     metrics = evaluateAttendanceAgainstShift(shift, attendance.checkIn, checkOutTime, totalBreakMinutes, {
       timeZone: timezone,
       lunchMinutes: totalLunchMinutes,
       halfDayThresholdMinutes: policy.halfDayThresholdMinutes,
     });
 
-    // When the org requires OT sign-off, minutes are parked on a request rather
-    // than credited straight to the payslip.
-    if (policy.requireOtApproval && metrics.overtimeMinutes > 0) {
-      metrics.pendingOvertimeMinutes = metrics.overtimeMinutes;
-      metrics.overtimeMinutes = 0;
-      metrics.overtimeHours = "0.0";
-      metrics.overtimeFormatted = formatMinutes(0);
-      metrics.overtimeRequiresApproval = true;
-    }
   } else {
     metrics = {
       scheduledMinutes: 480,
@@ -922,6 +912,17 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
       overtimeFormatted: formatMinutes(Math.max(0, calculatedWorkingMinutes - 480)),
       status: attendance.status,
     };
+  }
+
+  // Apply the approval gate to every overtime source, including holidays,
+  // weekly offs, approved leave days, and employees without a shift. Payroll
+  // must never pay these minutes until a reviewer approves the request.
+  if (policy.requireOtApproval && metrics.overtimeMinutes > 0) {
+    metrics.pendingOvertimeMinutes = metrics.overtimeMinutes;
+    metrics.overtimeMinutes = 0;
+    metrics.overtimeHours = "0.0";
+    metrics.overtimeFormatted = formatMinutes(0);
+    metrics.overtimeRequiresApproval = true;
   }
 
   // Preserve WFH status through checkout
@@ -1791,10 +1792,12 @@ const getBranchSummary = async (organizationId) => {
 
 const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, from, to, status, page = 1, limit = 20 }) => {
   const where = { organizationId };
-  const canSeeLocation = ADMIN_ROLES.includes(role);
+  const teamRoles = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"];
+  const canSeeTeam = teamRoles.includes(role);
+  const canSeeLocation = ADMIN_ROLES.includes(role) || role === "HR";
 
   // Only admins and managers see the team; every other role sees only itself.
-  if (!ADMIN_ROLES.includes(role)) {
+  if (!canSeeTeam) {
     const employee = await prisma.employee.findFirst({ where: { userId, organizationId } });
     if (!employee) return { success: true, total: 0, page: 1, limit: parsePagination({ page, limit }, { defaultLimit: 20 }).limit, totalPages: 0, records: [] };
     where.employeeId = employee.id;
@@ -1834,13 +1837,70 @@ const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, 
     prisma.attendance.count({ where }),
   ]);
 
+  // Absence is a derived state during the day. The scheduled EOD marker may
+  // not have created an ABSENT row yet, so Today + Absent also includes
+  // working employees with no attendance row and no approved day off.
+  let virtualAbsent = [];
+  const timezone = await getOrgTimezone(organizationId);
+  const today = getLocalDateOnly(new Date(), timezone);
+  const todayKey = today.toISOString().slice(0, 10);
+  const exactToday = from && to && from === todayKey && to === todayKey;
+  if (canSeeTeam && exactToday && (!status || status === "ALL" || status === "ABSENT")) {
+    const [employees, todayAttendances, approvedLeaves, holidays, companyLeaves] = await Promise.all([
+      prisma.employee.findMany({
+        where: { organizationId, deletedAt: null, status: { in: WORKING_STATUSES }, ...(employeeId ? { id: employeeId } : {}) },
+        select: {
+          id: true, firstName: true, lastName: true, employeeCode: true, designation: true, avatarUrl: true, branchId: true,
+          department: { select: { id: true, name: true } },
+          user: { select: { email: true, role: true } },
+          branch: { select: { id: true, name: true, radiusMeters: true, ...(canSeeLocation ? { latitude: true, longitude: true } : {}) } },
+          shift: { select: { id: true, name: true, startTime: true, endTime: true, graceMinutes: true, workingDays: true } },
+        },
+      }),
+      prisma.attendance.findMany({ where: { organizationId, date: today }, select: { employeeId: true } }),
+      prisma.leaveRequest.findMany({ where: { organizationId, status: "APPROVED", startDate: { lte: today }, endDate: { gte: today } }, select: { employeeId: true } }),
+      prisma.holiday.findMany({ where: { organizationId, date: today, isOptional: false }, select: { branchId: true } }),
+      prisma.companyLeave.findMany({ where: { organizationId, startDate: { lte: today }, endDate: { gte: today } }, select: { branchId: true } }),
+    ]);
+    const marked = new Set(todayAttendances.map((row) => row.employeeId));
+    const onLeave = new Set(approvedLeaves.map((row) => row.employeeId));
+    const closedAll = holidays.some((row) => !row.branchId) || companyLeaves.some((row) => !row.branchId);
+    const closedBranches = new Set([...holidays, ...companyLeaves].filter((row) => row.branchId).map((row) => row.branchId));
+    const weekday = today.getUTCDay();
+
+    virtualAbsent = employees.filter((employee) => {
+      const workingDays = employee.shift?.workingDays;
+      const weeklyOff = workingDays ? !workingDays.split(",").map((day) => Number(day.trim())).includes(weekday) : false;
+      const off = closedAll || (employee.branchId && closedBranches.has(employee.branchId)) || weeklyOff;
+      return !marked.has(employee.id) && !onLeave.has(employee.id) && !off;
+    }).map((employee) => ({
+      id: `virtual-absent-${employee.id}-${todayKey}`,
+      organizationId,
+      employeeId: employee.id,
+      date: today,
+      status: "ABSENT",
+      checkIn: null,
+      checkOut: null,
+      checkInLocation: null,
+      checkOutLocation: null,
+      employee,
+      branch: employee.branch,
+      shift: employee.shift,
+      events: [],
+    }));
+  }
+
+  const combined = status === "ABSENT" || status === "ALL" ? [...records, ...virtualAbsent] : records;
+  combined.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  const paged = combined.slice(skip, skip + take);
+  const combinedTotal = total + virtualAbsent.length;
   return {
     success: true,
     page: curPage,
     limit: take,
-    total,
-    totalPages: Math.ceil(total / take) || 1,
-    records: canSeeLocation ? records : records.map(withoutPunchLocation),
+    total: combinedTotal,
+    totalPages: Math.ceil(combinedTotal / take) || 1,
+    records: canSeeLocation ? paged : paged.map(withoutPunchLocation),
   };
 };
 

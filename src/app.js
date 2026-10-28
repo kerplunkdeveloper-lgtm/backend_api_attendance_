@@ -206,6 +206,14 @@ app.use("/attendance/regularization", correctionRoutes);
 app.use("/attendance/regularizations", correctionRoutes);
 app.use("/corrections", correctionRoutes);
 app.use("/attendance", attendanceRoutes);
+// Alpha's reverse proxy forwards requests after stripping the /api prefix.
+// Keep the feature routers mounted at both their canonical API paths and the
+// legacy /attendance paths used by older browser bundles.
+app.use("/attendance/shoot-requests", shootRequestRoutes);
+app.use("/attendance/permissions", permissionRoutes);
+app.use("/attendance/company-leaves", companyLeaveRoutes);
+app.use("/permissions", permissionRoutes);
+app.use("/company-leaves", companyLeaveRoutes);
 app.use("/leaves", leaveRoutes);
 app.use("/work-from-home", workFromHomeRoutes);
 app.use("/payroll", payrollRoutes);

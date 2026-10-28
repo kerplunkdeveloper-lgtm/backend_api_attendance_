@@ -18,6 +18,7 @@ const { resolveAvatarUrl } = require("../utils/avatar");
 const { assertSeatAvailable, assertBranchAvailable } = require("./entitlement.service");
 const { getNextEmployeeCode, organizationPrefix } = require("../utils/employeeCode");
 const webhookService = require("./webhook.service");
+const { releaseDeletedEmployeeEmail } = require("../utils/releaseDeletedAccountEmail");
 
 function badRequest(message) {
   const err = new Error(message);
@@ -156,7 +157,8 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
   });
 
   if (existingUser) {
-    throw new Error(`A user account with email '${cleanEmail}' already exists in this organization`);
+    const released = await releaseDeletedEmployeeEmail(prisma, organizationId, cleanEmail);
+    if (!released) throw new Error(`A user account with email '${cleanEmail}' already exists in this organization`);
   }
   await assertLoginEmailsFree(organizationId, [cleanEmail, profile.personalEmail]);
 
@@ -623,7 +625,12 @@ const deleteEmployee = async (organizationId, employeeId, actor = {}) => {
     if (employee.userId) {
       await tx.user.update({
         where: { id: employee.userId },
-        data: { isActive: false },
+        data: {
+          // Keep the historical account, but release the tenant-unique login
+          // email so the employee can be rehired or replaced with that address.
+          email: `deleted+${employee.userId}@deleted.workpulse.local`,
+          isActive: false,
+        },
       });
     }
 
@@ -685,10 +692,13 @@ const bulkDeleteEmployees = async (organizationId, employeeIds, actor = {}) => {
         });
 
         if (userIdsToDeactivate.length > 0) {
-          await tx.user.updateMany({
-            where: { id: { in: userIdsToDeactivate }, organizationId },
-            data: { isActive: false },
-          });
+          await Promise.all(userIdsToDeactivate.map((userId) => tx.user.update({
+            where: { id: userId },
+            data: {
+              email: `deleted+${userId}@deleted.workpulse.local`,
+              isActive: false,
+            },
+          })));
         }
       },
       { timeout: 20000, maxWait: 10000 },
@@ -844,7 +854,10 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
   const existing = await prisma.user.findUnique({
     where: { organizationId_email: { organizationId, email: cleanEmail } },
   });
-  if (existing) throw new Error(`A user with email '${cleanEmail}' already exists in this organization.`);
+  if (existing) {
+    const released = await releaseDeletedEmployeeEmail(prisma, organizationId, cleanEmail);
+    if (!released) throw new Error(`A user with email '${cleanEmail}' already exists in this organization.`);
+  }
   await assertLoginEmailsFree(organizationId, [cleanEmail, profile.personalEmail]);
 
   const org = await prisma.organization.findUnique({ where: { id: organizationId } });

@@ -38,13 +38,14 @@ class PolicyService {
     });
 
     if (!policy) {
-      return { ...DEFAULT_POLICY, organizationId, isDefault: true };
+      return { ...DEFAULT_POLICY, organizationId, leaveEligibilityActive: true, isDefault: true };
     }
 
     return {
       ...policy,
       lateDeductionPercent: Number(policy.lateDeductionPercent),
       monthlyPermissionHours: Number(policy.monthlyPermissionHours),
+      leaveEligibilityActive: Boolean(policy.permissionRequiresProbation),
       isDefault: false,
     };
   }
@@ -59,6 +60,7 @@ class PolicyService {
       probationMonths,
       monthlyPermissionHours,
       permissionRequiresProbation,
+      leaveEligibilityActive,
       payrollCycleStartDay,
       payrollCycleEndDay,
       payrollDayBasis,
@@ -77,6 +79,7 @@ class PolicyService {
     if (probationMonths !== undefined) payload.probationMonths = boundedNumber("Probation months", probationMonths, { min: 0, max: 36, integer: true });
     if (monthlyPermissionHours !== undefined) payload.monthlyPermissionHours = boundedNumber("Monthly permission hours", monthlyPermissionHours, { min: 0, max: 100 });
     if (permissionRequiresProbation !== undefined) payload.permissionRequiresProbation = parseBoolean(permissionRequiresProbation);
+    if (leaveEligibilityActive !== undefined) payload.permissionRequiresProbation = parseBoolean(leaveEligibilityActive);
     if (payrollCycleStartDay !== undefined) payload.payrollCycleStartDay = normalizeCycleDay(payrollCycleStartDay, DEFAULT_POLICY.payrollCycleStartDay);
     if (payrollCycleEndDay !== undefined) payload.payrollCycleEndDay = normalizeCycleDay(payrollCycleEndDay, DEFAULT_POLICY.payrollCycleEndDay);
     if (payrollDayBasis !== undefined) payload.payrollDayBasis = normalizeDayBasis(payrollDayBasis, DEFAULT_POLICY.payrollDayBasis);
@@ -117,6 +120,7 @@ class PolicyService {
       ...policy,
       lateDeductionPercent: Number(policy.lateDeductionPercent),
       monthlyPermissionHours: Number(policy.monthlyPermissionHours),
+      leaveEligibilityActive: Boolean(policy.permissionRequiresProbation),
       ...(payload.weeklyOffDays !== undefined ? { shiftsUpdated } : {}),
     };
   }
