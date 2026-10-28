@@ -68,12 +68,18 @@ class OvertimeService {
       throw error;
     }
 
-    // Check for existing pending OT request for same attendance
+    // A punch can only be paid once. A rejected request may be corrected and
+    // submitted again, but an approved request must never be duplicated.
     const existing = await prisma.overtimeRequest.findFirst({
-      where: { attendanceId, status: "PENDING" },
+      where: { attendanceId, status: { in: ["PENDING", "APPROVED"] } },
+      orderBy: { createdAt: "desc" },
     });
     if (existing) {
-      const error = new Error("A pending overtime request already exists for this date");
+      const error = new Error(
+        existing.status === "APPROVED"
+          ? "Overtime for this punch has already been approved"
+          : "A pending overtime request already exists for this date"
+      );
       error.statusCode = 400;
       throw error;
     }

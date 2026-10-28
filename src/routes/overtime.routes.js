@@ -18,12 +18,12 @@ router.get("/my", overtimeController.getMyRequests);
 // Manager/Admin views all OT requests
 router.get(
   "/",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   overtimeController.getAllRequests,
 );
 router.get(
   "/pending",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   (req, res) => {
     req.pendingOnly = true;
     return overtimeController.getAllRequests(req, res);
@@ -33,13 +33,13 @@ router.get(
 // Manager/Admin approves or rejects
 router.patch(
   "/:id/review",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   validate(schemas.reviewRequest),
   overtimeController.reviewRequest,
 );
 router.post(
   "/:id/review",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   validate(schemas.reviewRequest),
   overtimeController.reviewRequest,
 );

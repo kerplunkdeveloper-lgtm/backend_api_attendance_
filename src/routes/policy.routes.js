@@ -18,7 +18,7 @@ router.delete("/late-coming-lop/:id", authorizeRoles("SUPER_ADMIN", "COMPANY_ADM
 // Only Admin can update the policy
 router.put(
   "/",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   policyController.upsertPolicy,
 );
 

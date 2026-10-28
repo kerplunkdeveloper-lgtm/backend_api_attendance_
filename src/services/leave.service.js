@@ -73,7 +73,8 @@ class LeaveService {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     eligibleFrom.setHours(0, 0, 0, 0);
-    const eligible = !policy.permissionRequiresProbation || today >= eligibleFrom;
+    const leaveEligibilityActive = policy.leaveEligibilityActive ?? policy.permissionRequiresProbation;
+    const eligible = !leaveEligibilityActive || today >= eligibleFrom;
     const remainingDays = eligible ? 0 : Math.max(0, Math.ceil((eligibleFrom - today) / 86400000));
     return {
       eligible,
@@ -83,6 +84,7 @@ class LeaveService {
       probationMonths: Number(policy.probationMonths || 0),
       monthlyPermissionHours: Number(policy.monthlyPermissionHours || 0),
       permissionRequiresProbation: Boolean(policy.permissionRequiresProbation),
+      leaveEligibilityActive: Boolean(leaveEligibilityActive),
     };
   }
 
