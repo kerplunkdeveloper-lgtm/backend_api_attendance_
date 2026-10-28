@@ -61,7 +61,10 @@ const {
   requestContext,
 } = require("./middleware/requestSecurity.middleware");
 
-const app = express();
+const app = express();const API_ROUTE_GROUPS = [
+  ["auth", "/api/auth"], ["departments", "/api/departments"], ["branches", "/api/branches"], ["employees", "/api/employees"], ["shifts", "/api/shifts"], ["attendance", "/api/attendance"], ["corrections", "/api/attendance/corrections"], ["day-off-work", "/api/attendance/day-off-work"], ["shoot-requests", "/api/attendance/shoot-requests"], ["leaves", "/api/leaves"], ["work-from-home", "/api/work-from-home"], ["permissions", "/api/permissions"], ["company-leaves", "/api/company-leaves"], ["payroll", "/api/payroll"], ["reports", "/api/reports"], ["notifications", "/api/notifications"], ["devices", "/api/devices"], ["audit-logs", "/api/audit-logs"], ["holidays", "/api/holidays"], ["onboarding", "/api/onboarding"], ["upload", "/api/upload"], ["expenses", "/api/expenses"], ["policy", "/api/policy"], ["compoff", "/api/compoff"], ["overtime", "/api/overtime"], ["shift-overrides", "/api/shift-overrides"], ["offboarding", "/api/offboarding"], ["assets", "/api/assets"], ["billing", "/api/billing"], ["admin-billing", "/api/admin/billing"], ["platform-admin", "/api/admin/platform"], ["chat", "/api/chat"], ["biometric", "/api/biometric"], ["organization", "/api/organization"], ["loans", "/api/loans"], ["announcements", "/api/announcements"], ["appraisals", "/api/appraisals"], ["api-keys", "/api/api-keys"], ["webhooks", "/api/webhooks"],
+];
+
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -254,6 +257,28 @@ app.get(["/health", "/api/health"], (req, res) => {
     success: true,
     message: "Attendance API is running",
     services: { storage: cloudinaryConfigured ? "configured" : "not_configured" },
+    endpointAudit: { url: "/api/health/endpoints", registeredRouteGroups: API_ROUTE_GROUPS.length },
+  });
+});
+// Read-only API inventory. State-changing routes are not executed by health checks.
+app.get(["/health/endpoints", "/api/health/endpoints"], async (req, res) => {
+  const startedAt = Date.now();
+  let database = "connected";
+  try {
+    const prismaInstance = require("./config/database");
+    await prismaInstance.$queryRaw`SELECT 1`;
+  } catch (error) {
+    database = "error";
+  }
+  const routeGroups = API_ROUTE_GROUPS.map(([name, basePath]) => ({ name, basePath, status: "registered", probe: "not_run" }));
+  const healthy = database === "connected";
+  res.status(healthy ? 200 : 503).json({
+    success: healthy,
+    message: healthy ? "API route inventory is healthy" : "API route inventory found a database readiness problem",
+    checkedAt: new Date().toISOString(), durationMs: Date.now() - startedAt,
+    services: { api: "running", database, storage: cloudinaryConfigured ? "configured" : "not_configured" },
+    summary: { registeredRouteGroups: routeGroups.length, registered: routeGroups.length, failed: 0, limitation: "State-changing endpoints require contract-specific credentials and payloads." },
+    routes: routeGroups,
   });
 });
 const databaseHealthcheckTimeoutMs = Math.max(

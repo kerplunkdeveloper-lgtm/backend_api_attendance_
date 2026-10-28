@@ -8,26 +8,22 @@ const { DEFAULT_TIMEZONE, getLocalDateOnly } = require("../utils/datetime");
 const MAX = 300;
 const fail = (message, statusCode = 400, code) => { const e = new Error(message); e.statusCode = statusCode; if (code) e.code = code; return e; };
 const clean = (value, max = MAX) => String(value || "").trim().slice(0, max);
-const timeMinutes = (value) => { const match = String(value || "").match(/^(?:[01]\d|2[0-3]):[0-5]\d$/); if (!match) return null; const [h, m] = value.split(":").map(Number); return h * 60 + m; };
+
 const getShootDate = async (organizationId, value) => { const org = await prisma.organization.findUnique({ where: { id: organizationId }, select: { timezone: true } }); return getLocalDateOnly(value, org?.timezone || DEFAULT_TIMEZONE); };
 const dateLabel = (date) => new Date(date).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "short", timeZone: "UTC" });
 const notify = async (organizationId, userIds, title, message) => { const ids = [...new Set((userIds || []).filter(Boolean))]; if (!ids.length) return; try { await prisma.notification.createMany({ data: ids.map((userId) => ({ organizationId, userId, title, message, type: "ATTENDANCE" })) }); } catch (err) { console.warn("[ShootRequest] notification failed:", err.message); } };
-
 class ShootRequestService {
   async create(userId, organizationId, body = {}) {
     const date = await getShootDate(organizationId, new Date(body.date));
     if (!body.date || Number.isNaN(date.getTime())) throw fail("A valid shoot date is required.");
     const shootName = clean(body.shootName, 120), location = clean(body.location, 180), note = clean(body.note);
-    const startTime = clean(body.startTime, 5), endTime = clean(body.endTime, 5);
-    const startMinutes = timeMinutes(startTime), endMinutes = timeMinutes(endTime);
-    if (!shootName || !location || startMinutes === null || endMinutes === null) throw fail("Shoot name, location, start time and end time are required. Use HH:mm.");
-    if (endMinutes <= startMinutes) throw fail("Shoot end time must be after start time.");
+    const startTime = "00:00", endTime = "23:59";
+    if (!shootName || !location) throw fail("Shoot name and location are required.");
     const requester = await prisma.employee.findFirst({ where: { userId, organizationId, deletedAt: null }, include: { user: { select: { role: true } } } });
     if (!requester) throw fail("Active employee profile not found.", 404);
     const requestedIds = Array.isArray(body.employeeIds) ? [...new Set(body.employeeIds.map(String).filter(Boolean))] : [requester.id];
     if (!requestedIds.length) throw fail("Select at least one employee for this shoot.");
-    if (!SHOOT_REVIEWER_ROLES.includes(requester.user?.role) && (requestedIds.length !== 1 || requestedIds[0] !== requester.id)) throw fail("You can only submit a shoot request for yourself.", 403);
-    if (SHOOT_REVIEWER_ROLES.includes(requester.user?.role) && !requestedIds.includes(requester.id)) requestedIds.push(requester.id);
+    if (!requestedIds.includes(requester.id)) requestedIds.unshift(requester.id);
     const employees = await prisma.employee.findMany({ where: { id: { in: requestedIds }, organizationId, deletedAt: null, status: "ACTIVE" }, select: { id: true, firstName: true, lastName: true, userId: true, user: { select: { role: true } } } });
     if (employees.length !== requestedIds.length) throw fail("One or more selected employees are not active in this organization.", 400);
     const existing = await prisma.shootRequest.findUnique({ where: { employeeId_date: { employeeId: requester.id, date } } });
@@ -43,8 +39,16 @@ class ShootRequestService {
     const reviewerRoles = requester.user?.role === "EMPLOYEE" ? ["COMPANY_ADMIN", "MANAGER", "HR"] : ["COMPANY_ADMIN", "HR"];
     const reviewers = await prisma.user.findMany({ where: { organizationId, isActive: true, role: { in: reviewerRoles }, id: { not: userId } }, select: { id: true } });
     const names = employees.map((e) => `${e.firstName} ${e.lastName || ""}`.trim()).join(", ");
-    await notify(organizationId, reviewers.map((u) => u.id), "Shoot request", `${names} requested ${shootName} on ${dateLabel(date)} from ${startTime} to ${endTime} at ${location}.`);
+    await notify(organizationId, reviewers.map((u) => u.id), "Shoot request", `${names} requested ${shootName} on ${dateLabel(date)} at ${location}.`);
     return request;
+  }
+
+  async participants(organizationId) {
+    return prisma.employee.findMany({
+      where: { organizationId, deletedAt: null, status: "ACTIVE" },
+      select: { id: true, firstName: true, lastName: true, employeeCode: true },
+      orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
+    });
   }
 
   async mine(userId, organizationId) {
@@ -74,7 +78,7 @@ class ShootRequestService {
     assertShootReviewer(reviewerRole);
     const updated = await prisma.shootRequest.update({ where: { id }, data: { status: body.status, reviewedBy: reviewerUserId, reviewNote: clean(body.reviewNote), reviewedAt: new Date() } });
     const participantUserIds = request.participants.map((p) => p.employee?.userId);
-    await notify(organizationId, participantUserIds, body.status === "APPROVED" ? "Shoot request approved" : "Shoot request rejected", body.status === "APPROVED" ? `Your shoot request is approved for ${request.startTime}–${request.endTime}. Select Shoot when punching in.` : `Your shoot request was rejected.${updated.reviewNote ? ` ${updated.reviewNote}` : ""}`);
+    await notify(organizationId, participantUserIds, body.status === "APPROVED" ? "Shoot request approved" : "Shoot request rejected", body.status === "APPROVED" ? `Your shoot request is approved for ${dateLabel(request.date)}. Select Shoot when punching in on that date.` : `Your shoot request was rejected.${updated.reviewNote ? ` ${updated.reviewNote}` : ""}`);
     return updated;
   }
 

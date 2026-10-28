@@ -50,7 +50,7 @@ const withoutSensitiveEmployeeFields = (employee) => {
 // Role changes are still policed by assertRoleAssignment, and HR can only edit plain employee accounts.
 const MANAGER_UPDATE_FIELDS = new Set([
   "firstName", "lastName", "phone", "status", "branchId", "departmentId",
-  "shiftId", "designation", "employmentType", "reportingManagerId", "avatarUrl",
+  "shiftId", "designation", "employmentType", "employeeCode", "reportingManagerId", "avatarUrl",
   "profileImage", "profilePicture", "avatar", "role", "gender", "dateOfBirth",
   "dateOfJoining", "workEmail", "personalEmail", "address", "emergencyContactName", "emergencyContactPhone",
   "panNumber", "uanNumber", "esiNumber", "bankName", "bankAccountNumber", "bankIfsc",
@@ -406,7 +406,7 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
   await assertRolesAccess(organizationId, actorRole);
   const actorUserId = actor.actorUserId || actor.id || null;
 
-  if (actorRole === "MANAGER") {
+  if (actorRole === "MANAGER" || actorRole === "HR") {
     const forbidden = Object.keys(data).filter((key) => !MANAGER_UPDATE_FIELDS.has(key));
     if (forbidden.length) {
       const error = new Error(`Managers cannot update: ${forbidden.join(", ")}`);
@@ -424,7 +424,7 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
     throw new Error("Employee not found");
   }
 
-  if (actorRole === "MANAGER" && employee.user?.role && employee.user.role !== "EMPLOYEE") {
+  if ((actorRole === "MANAGER" || actorRole === "HR") && employee.user?.role && employee.user.role !== "EMPLOYEE") {
     const error = new Error("Managers can only update employee accounts");
     error.statusCode = 403;
     throw error;
@@ -1023,9 +1023,29 @@ const getMyEmployee = async (organizationId, userId) => {
   return employee;
 };
 
-const updateMyProfile = async (organizationId, userId, data) => {
+const updateMyProfile = async (organizationId, userId, data, actorRole = "EMPLOYEE") => {
   const employee = await getMyEmployee(organizationId, userId);
   const identity = validateIdentityFields({ bankAccountNumber: data.bankAccountNumber, bankIfsc: data.bankIfsc });
+  const normalizeSelfEmail = (value, label) => {
+    if (value === undefined) return undefined;
+    const normalized = String(value || "").trim().toLowerCase();
+    if (normalized && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
+      throw badRequest(`${label} is not valid.`);
+    }
+    return normalized || null;
+  };
+  const workEmailToSet = normalizeSelfEmail(data.workEmail, "Office email");
+  const personalEmailToSet = normalizeSelfEmail(data.personalEmail, "Personal email");
+  if (personalEmailToSet) {
+    await assertLoginEmailsFree(organizationId, [personalEmailToSet], { userId, employeeId: employee.id });
+  }
+  if (workEmailToSet) {
+    const workEmailClash = await prisma.employee.findFirst({
+      where: { organizationId, deletedAt: null, workEmail: { equals: workEmailToSet, mode: "insensitive" }, NOT: { id: employee.id } },
+      select: { id: true },
+    });
+    if (workEmailClash) throw badRequest("That office email is already used by another employee in this organization.");
+  }
   const birthDate = data.dateOfBirth !== undefined ? parsePastDate("Date of birth", data.dateOfBirth) : undefined;
   const joiningDate = data.dateOfJoining !== undefined
     ? parsePastDate("Date of joining", data.dateOfJoining, { allowFuture: true })
@@ -1038,6 +1058,10 @@ const updateMyProfile = async (organizationId, userId, data) => {
   const effectiveJoining = joiningDate || employee.dateOfJoining;
   if (effectiveBirth && effectiveJoining && effectiveJoining < effectiveBirth) {
     throw badRequest("Date of joining cannot be before date of birth.");
+  }
+  const canEditBranch = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"].includes(actorRole);
+  if (data.branchId !== undefined && !canEditBranch) {
+    throw badRequest("Only admins, HR, and managers can change the work location.");
   }
   if (data.branchId) {
     const branch = await prisma.branch.findFirst({
@@ -1064,6 +1088,8 @@ const updateMyProfile = async (organizationId, userId, data) => {
       data: {
         ...(avatarToSet !== undefined ? { avatarUrl: avatarToSet ? String(avatarToSet).trim() : null } : {}),
         ...(data.phone !== undefined ? { phone: data.phone ? String(data.phone).trim() : null } : {}),
+        ...(workEmailToSet !== undefined ? { workEmail: workEmailToSet } : {}),
+        ...(personalEmailToSet !== undefined ? { personalEmail: personalEmailToSet } : {}),
         ...(data.address !== undefined ? { address: data.address ? String(data.address).trim() : null } : {}),
         ...(data.emergencyContactName !== undefined
           ? { emergencyContactName: data.emergencyContactName ? String(data.emergencyContactName).trim() : null }
@@ -1187,7 +1213,15 @@ const bulkImportEmployees = async (organizationId, employeesList, actorRole = "C
   const takenEmails = new Set(existingUsers.map((u) => u.email.toLowerCase()));
   const takenCodes = new Set(existingCodes.map((e) => e.employeeCode));
 
-  const stamp = Date.now().toString().slice(-5);
+  const companyPrefix = organizationPrefix(org?.name);
+  let nextGeneratedCode = 1;
+  const nextAlphaCode = () => {
+    while (takenCodes.has(`${companyPrefix}${String(nextGeneratedCode).padStart(3, "0")}`)) nextGeneratedCode += 1;
+    const code = `${companyPrefix}${String(nextGeneratedCode).padStart(3, "0")}`;
+    takenCodes.add(code);
+    nextGeneratedCode += 1;
+    return code;
+  };
   const accepted = [];
   for (const r of parsed) {
     if (takenEmails.has(r.email)) {
@@ -1207,9 +1241,8 @@ const bulkImportEmployees = async (organizationId, employeesList, actorRole = "C
       results.push({ row: r.row, email: r.email, status: "FAILED", reason: err.message });
       continue;
     }
-    let employeeCode = r.rawCode || `${organizationPrefix(org?.name)}-${r.userRole === "MANAGER" ? "HR" : "EMP"}-${stamp}${r.row}`;
-    if (takenCodes.has(employeeCode)) employeeCode = `${organizationPrefix(org?.name)}-${r.userRole === "MANAGER" ? "HR" : "EMP"}-${stamp}${r.row}`;
-    takenCodes.add(employeeCode);
+    const employeeCode = r.rawCode || nextAlphaCode();
+    if (r.rawCode) takenCodes.add(employeeCode);
     r.employeeCode = employeeCode;
     // A name that matches an existing record links to it. A name that does not
     // is created during the import. Only a blank cell uses the workspace default.

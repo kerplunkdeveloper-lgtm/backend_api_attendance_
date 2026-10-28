@@ -307,6 +307,8 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
 
   assertLocationCaptured({ latitude, longitude, action: "in", skip: skipGeofence || source === "BIOMETRIC" || (isOnBehalf(employee, userId) && ADMIN_ROLES.includes(actorRole)) });
 
+  let punchNote = note;
+
   if (workMode === "SHOOT") {
     const approvedShoot = await shootRequestService.getApprovedForDate(employee.id, organizationId, today);
     if (!approvedShoot) {
@@ -315,30 +317,8 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
       error.code = "SHOOT_APPROVAL_REQUIRED";
       throw error;
     }
-    const currentMinutes = getZonedParts(checkInTime, timezone).hour * 60 + getZonedParts(checkInTime, timezone).minute;
-    const [startHour, startMinute] = approvedShoot.startTime.split(":").map(Number);
-    const [endHour, endMinute] = approvedShoot.endTime.split(":").map(Number);
-    const startMinutes = startHour * 60 + startMinute;
-    const endMinutes = endHour * 60 + endMinute;
-    if (currentMinutes < startMinutes || currentMinutes > endMinutes) {
-      const error = new Error(`Shoot punch-in is allowed only between ${approvedShoot.startTime} and ${approvedShoot.endTime}.`);
-      error.statusCode = 403;
-      error.code = "SHOOT_OUTSIDE_APPROVED_TIME";
-      throw error;
-    }
-    const departmentName = String(employee.department?.name || "").trim().toLowerCase();
-    if (departmentName !== "cinematographer") {
-      const error = new Error("Shoot time is available only for the Cinematographer department.");
-      error.statusCode = 403;
-      error.code = "SHOOT_DEPARTMENT_REQUIRED";
-      throw error;
-    }
-    if (!String(note || "").trim()) {
-      const error = new Error("Enter the shoot name or location before starting the shoot.");
-      error.statusCode = 400;
-      error.code = "SHOOT_NOTE_REQUIRED";
-      throw error;
-    }
+    // Shoot approval is date-based; no start/end time restriction applies.
+    punchNote = String(note || "").trim() || `${approvedShoot.shootName} @ ${approvedShoot.location}`;
   }
   await assertTrustedDevice(employee, organizationId, policy, deviceId);
 
@@ -516,7 +496,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
     throw error;
   }
 
-  const formattedNote = workMode === "SHOOT" ? "SHOOT: " + String(note).trim() : (note || (workMode !== "OFFICE" ? workMode.replace(/_/g, " ") : null));
+  const formattedNote = workMode === "SHOOT" ? "SHOOT: " + String(punchNote || "").trim() : (note || (workMode !== "OFFICE" ? workMode.replace(/_/g, " ") : null));
   const checkInLocation = await resolvePunchLocation({
     locationLabel,
     latitude,
@@ -808,7 +788,7 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
     if (openShift) {
       const elapsedHours =
         (checkOutTime.getTime() - new Date(openShift.checkIn).getTime()) / 3_600_000;
-      if (isOvernightShift(openShift.shift) && elapsedHours > 0 && elapsedHours <= 20) {
+      if ((openShift.workMode === "SHOOT" || isOvernightShift(openShift.shift)) && elapsedHours > 0 && elapsedHours <= 20) {
         attendance = openShift;
       }
     }
@@ -949,11 +929,13 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
     metrics.status = "WORK_FROM_HOME";
   }
 
+  // Preserve the mode selected at punch-in when punching out. Shoot is stored in wfhNote.
+  const effectiveWorkMode = attendance.wfhNote?.startsWith("SHOOT:") ? "SHOOT" : (workMode || "OFFICE");
   const checkOutLocation = await resolvePunchLocation({
     locationLabel,
     latitude,
     longitude,
-    workMode,
+    workMode: effectiveWorkMode,
     branchName: branchNameIfInside(attendance.branch || employee.branch, latitude, longitude),
   });
 
@@ -1064,7 +1046,7 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
         longitude: longitude ? String(longitude) : null,
         accuracy: accuracy ? String(accuracy) : null,
         isBypassed: true,
-        bypassReason: workMode || "GEOFENCE_FLEXIBLE",
+        bypassReason: effectiveWorkMode || "GEOFENCE_FLEXIBLE",
         ...(durableClientEventId(organizationId, employee.userId || userId, clientEventId)
           ? { clientEventId: durableClientEventId(organizationId, employee.userId || userId, clientEventId) }
           : {}),
@@ -1753,7 +1735,7 @@ const getBranchSummary = async (organizationId) => {
       where: { organizationId, status: { in: WORKING_STATUSES }, deletedAt: null },
       select: { id: true, branchId: true, shift: { select: { workingDays: true } } },
     }),
-    prisma.attendance.findMany({ where: { organizationId, date }, select: { employeeId: true, status: true } }),
+    prisma.attendance.findMany({ where: { organizationId, date }, select: { employeeId: true, status: true, checkIn: true } }),
     prisma.leaveRequest.findMany({
       where: { organizationId, status: "APPROVED", startDate: { lte: date }, endDate: { gte: date } },
       select: { employeeId: true },
@@ -1777,7 +1759,8 @@ const getBranchSummary = async (organizationId) => {
     const row = rows.get(key);
     row.total += 1;
 
-    const status = statusOf.get(emp.id);
+    const attendance = attendances.find((a) => a.employeeId === emp.id);
+    const status = attendance?.checkIn && attendance.status === "ABSENT" ? "PRESENT" : statusOf.get(emp.id);
     if (status) {
       if (["PRESENT", "LATE", "HALF_DAY", "WORK_FROM_HOME"].includes(status)) {
         row.present += 1;

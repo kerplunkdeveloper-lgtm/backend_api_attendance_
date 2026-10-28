@@ -36,6 +36,19 @@ mockPrisma(prisma);
 const onboardingService = require("../src/services/onboarding.service");
 
 describe("candidate portal upload", () => {
+  it("accepts the document names used by the current portal", async () => {
+    for (const documentType of ["DEGREE_CERTIFICATE", "RELIEVING_LETTER", "OTHER"]) {
+      capturedDoc = null;
+      await onboardingService.uploadCandidateDocument("tok-1", {
+        documentType,
+        fileName: "document.pdf",
+        fileUrl: "https://res.cloudinary.com/demo/raw/upload/document.pdf",
+      });
+      assert.ok(capturedDoc);
+      assert.ok(["DEGREE_CERTIFICATE", "PREVIOUS_EXPERIENCE", "OTHER"].includes(capturedDoc.documentType));
+    }
+  });
+
   it("rejects an empty body without a file", async () => {
     await assert.rejects(
       () => onboardingService.uploadCandidateDocument("tok-1", {}),

@@ -11,6 +11,7 @@ enum UserRole {
   SUPER_ADMIN
   COMPANY_ADMIN
   MANAGER
+  HR
   EMPLOYEE
 }
 
@@ -798,6 +799,8 @@ model PermissionRequest {
   organizationId String
   employeeId     String
   date           DateTime      @db.Date
+  startTime      String?       @db.VarChar(5)
+  endTime        String?       @db.VarChar(5)
   hours          Decimal       @db.Decimal(4, 2)
   reason         String
   status         RequestStatus @default(PENDING)

@@ -176,6 +176,7 @@ const updateMe = async (req, res) => {
       req.user.organizationId,
       req.user.id,
       req.body,
+      req.user.role,
     );
     return res.json({ success: true, message: "Profile updated", data });
   } catch (error) { return sendControllerError(res, error); }

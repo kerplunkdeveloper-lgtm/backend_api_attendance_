@@ -1,7 +1,6 @@
 const prisma = require("../config/database");
 const { assertCanReview, visibleToReviewer } = require("../utils/approvalChain");
 
-const MAX_RANGE_DAYS = 30;
 const MAX_REASON = 500;
 const fail = (message, statusCode = 400) => Object.assign(new Error(message), { statusCode });
 const dateOnly = (value) => {
@@ -11,7 +10,6 @@ const dateOnly = (value) => {
   if (Number.isNaN(date.getTime())) throw fail("Use valid dates in YYYY-MM-DD format.");
   return date;
 };
-const daySpan = (start, end) => Math.floor((end.getTime() - start.getTime()) / 86400000) + 1;
 const notify = async (organizationId, userIds, title, message) => {
   const ids = [...new Set(userIds.filter(Boolean))];
   if (!ids.length) return;
@@ -25,7 +23,6 @@ class WorkFromHomeService {
     const start = dateOnly(startDate);
     const end = dateOnly(endDate || startDate);
     if (end < start) throw fail("End date cannot be before start date.");
-    if (daySpan(start, end) > MAX_RANGE_DAYS) throw fail("A WFH request can cover at most " + MAX_RANGE_DAYS + " days.");
     const cleanReason = String(reason || "").trim().slice(0, MAX_REASON);
     if (cleanReason.length < 3) throw fail("Please explain why you need to work from home.");
 
