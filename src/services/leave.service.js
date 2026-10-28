@@ -10,7 +10,9 @@ const notificationService = require("./notification.service");
 const policyService = require("./policy.service");
 const webhookService = require("./webhook.service");
 
-const ADMIN_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"];
+// HR has the same employee-leave management access as a manager. Approval-chain
+// rules still keep requests raised by HR/admin accounts admin-only.
+const ADMIN_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"];
 
 /** Statuses that still occupy leave balance and block an overlapping request. */
 const BLOCKING_STATUSES = ["PENDING", "APPROVED"];

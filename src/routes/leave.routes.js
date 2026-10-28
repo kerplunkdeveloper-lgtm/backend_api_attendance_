@@ -63,23 +63,23 @@ router.post("/requests/:id/cancel", leaveController.cancelLeaveRequest);
 // Leave Approvals (Manager / Admin)
 router.get(
   "/requests",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   leaveController.getAllLeaveRequests,
 );
 router.get(
   "/",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   leaveController.getAllLeaveRequests,
 );
 router.put(
   "/requests/:id/review",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   validate(schemas.reviewRequest),
   leaveController.reviewLeaveRequest,
 );
 router.put(
   "/:id/review",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   validate(schemas.reviewRequest),
   leaveController.reviewLeaveRequest,
 );
