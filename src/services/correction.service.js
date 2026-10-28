@@ -76,6 +76,26 @@ class CorrectionService {
     const dayPrefix = typeof date === "string" ? date.match(/^(\d{4}-\d{2}-\d{2})/)?.[1] : null;
     const targetDate = dayPrefix ? new Date(`${dayPrefix}T00:00:00.000Z`) : await getOrgDateOnly(organizationId, submittedDate);
 
+    // Corrections opened from the employee dashboard must target the employee's
+    // own completed attendance record. This prevents an unfinished Shoot Out or
+    // a mismatched day from entering the HR/admin approval queue.
+    if (attendanceId && typeof prisma.attendance?.findFirst === "function") {
+      const attendance = await prisma.attendance.findFirst({
+        where: { id: attendanceId, employeeId: employee.id, organizationId, date: targetDate },
+        select: { id: true, checkIn: true, checkOut: true },
+      });
+      if (!attendance) {
+        const error = new Error("The selected attendance record was not found for this employee and date");
+        error.statusCode = 404;
+        throw error;
+      }
+      if (!attendance.checkIn || !attendance.checkOut) {
+        const error = new Error("Complete Shoot Out before requesting a shoot-time change");
+        error.statusCode = 400;
+        throw error;
+      }
+    }
+
     const today = await getOrgDateOnly(organizationId, new Date());
     if (targetDate.getTime() > today.getTime()) {
       const error = new Error("Attendance can only be corrected for today or an earlier date");

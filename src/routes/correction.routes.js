@@ -18,12 +18,12 @@ router.get("/my", correctionController.getMyRequests);
 // Manager / Admin endpoints
 router.get(
   "/",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   correctionController.getAllRequests,
 );
 router.get(
   "/pending",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   (req, res) => {
     req.pendingOnly = true;
     return correctionController.getAllRequests(req, res);
@@ -32,13 +32,13 @@ router.get(
 
 router.put(
   "/:id/review",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   validate(schemas.reviewRequest),
   correctionController.review,
 );
 router.post(
   "/:id/review",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   validate(schemas.reviewRequest),
   correctionController.review,
 );

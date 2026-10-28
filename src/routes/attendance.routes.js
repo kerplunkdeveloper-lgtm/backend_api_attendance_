@@ -73,19 +73,19 @@ router.get(
 // Today's attendance for each branch (present / total, leave, off, absent)
 router.get(
   "/branch-summary",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   attendanceController.getBranchSummary,
 );
 
 // All org attendance logs (filterable)
 router.get(
   "/",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   attendanceController.getAllAttendance,
 );
 router.get(
   "/all",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   attendanceController.getAllAttendance,
 );
 

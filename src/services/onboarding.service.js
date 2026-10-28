@@ -11,6 +11,16 @@ const { assertSeatAvailable } = require("./entitlement.service");
 const { normalizeIndianPhone } = require("../utils/phone");
 const { getNextEmployeeCode } = require("../utils/employeeCode");
 
+// The onboarding database enum predates the employee-document enum. Accept the
+// names used by the current portal and persist the values supported by
+// DocumentType so uploads from both portal versions keep working.
+const ONBOARDING_DOCUMENT_TYPE_ALIASES = {
+  AADHAAR: "GOVT_ID",
+  PAN: "TAX_ID",
+  EXPERIENCE_LETTER: "PREVIOUS_EXPERIENCE",
+  RELIEVING_LETTER: "PREVIOUS_EXPERIENCE",
+};
+
 const PORTAL_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const CLOSED_PORTAL_STATUSES = new Set(["ACTIVATED", "REJECTED", "OFFER_REJECTED"]);
 
@@ -324,7 +334,8 @@ class OnboardingService {
     const file = docData.file;
     let { documentType, fileName, fileUrl, fileSize, mimeType } = docData;
     documentType = documentType || file?.documentType;
-    const cleanType = documentType ? String(documentType).toUpperCase() : "";
+    const requestedType = documentType ? String(documentType).trim().toUpperCase() : "";
+    const cleanType = ONBOARDING_DOCUMENT_TYPE_ALIASES[requestedType] || requestedType;
 
     if (!documentType || (!file?.buffer && !fileUrl)) {
       const error = new Error("documentType and a file (or fileUrl) are required");

@@ -31,7 +31,7 @@ router.post(
 
 router.get(
   "/",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   employeeController.list,
 );
 
@@ -43,7 +43,7 @@ router.get(
 
 router.get(
   "/:id",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   employeeController.getById,
 );
 
@@ -71,7 +71,7 @@ router.post(
 // Update employee
 router.put(
   "/:id",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   employeeController.update,
 );
 

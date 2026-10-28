@@ -6,7 +6,7 @@ const notificationService = require("./notification.service");
 const { assertCanReview } = require("../utils/approvalChain");
 const { getPayrollPeriod, normalizePermissionHours, toIsoKey, round2 } = require("../utils/payrollCycle");
 
-const REVIEW_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"];
+const REVIEW_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"];
 
 const httpError = (message, statusCode) => Object.assign(new Error(message), { statusCode });
 
@@ -18,6 +18,16 @@ const parseDateOnly = (value) => {
   if (toIsoKey(date) !== `${match[1]}-${match[2]}-${match[3]}`) throw httpError("Date is not a valid calendar day", 400);
   return date;
 };
+const parseTime = (value, field) => {
+  const match = /^(\d{2}):(\d{2})$/.exec(String(value || ""));
+  if (!match) throw httpError(`${field} must be in HH:mm format`, 400);
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour > 23 || minute > 59 || minute % 15 !== 0) throw httpError(`${field} must be a valid time in 15-minute steps`, 400);
+  return hour * 60 + minute;
+};
+
+const formatHours = (minutes) => Math.round((minutes / 60) * 100) / 100;
 
 /**
  * The payroll cycle that contains `today`. Its label is the month the cycle ends in, so the
@@ -69,7 +79,21 @@ class PermissionService {
   async apply(organizationId, userId, data = {}) {
     const employee = await this._employeeForUser(organizationId, userId);
     const date = parseDateOnly(data.date);
-    const hours = normalizePermissionHours(data.hours);
+const hasTimeRange = data.startTime !== undefined || data.endTime !== undefined;
+    let startTime = null;
+    let endTime = null;
+    let hours;
+    if (hasTimeRange) {
+      if (!data.startTime || !data.endTime) throw httpError("Start time and end time are required", 400);
+      const startMinutes = parseTime(data.startTime, "Start time");
+      const endMinutes = parseTime(data.endTime, "End time");
+      if (endMinutes <= startMinutes) throw httpError("End time must be after start time", 400);
+      startTime = String(data.startTime);
+      endTime = String(data.endTime);
+      hours = normalizePermissionHours(formatHours(endMinutes - startMinutes));
+    } else {
+      hours = normalizePermissionHours(data.hours);
+    }
     const reason = String(data.reason || "").trim();
     if (!reason) throw httpError("Give a reason for the permission", 400);
     if (reason.length > 500) throw httpError("Reason must be 500 characters or fewer", 400);
@@ -89,6 +113,8 @@ class PermissionService {
         organizationId,
         employeeId: employee.id,
         date,
+        startTime,
+        endTime,
         hours,
         reason,
       },
@@ -98,7 +124,7 @@ class PermissionService {
       organizationId,
       employeeId: employee.id,
       title: "New permission request",
-      summary: `asked for ${hours} hour(s) of permission on ${new Date(date).toISOString().slice(0, 10)}.`,
+      summary: `asked for ${hours} hour(s) of permission on ${new Date(date).toISOString().slice(0, 10)}${startTime && endTime ? ` (${startTime}-${endTime})` : ""}.`,
     });
 
     return request;
@@ -202,7 +228,7 @@ class PermissionService {
           organizationId,
           userId: request.employee.userId,
           title: approved ? "Permission approved" : "Permission rejected",
-          message: `Your ${Number(request.hours)} hour permission for ${dateLabel} was ${approved ? "approved" : "rejected"}.`,
+          message: `Your ${Number(request.hours)} hour permission for ${dateLabel}${request.startTime && request.endTime ? ` (${request.startTime}-${request.endTime})` : ""} was ${approved ? "approved" : "rejected"}.`,
           type: "SYSTEM",
         })
         .catch((err) => console.warn("[Permission] Notification failed:", err.message));
