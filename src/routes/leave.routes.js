@@ -14,22 +14,22 @@ router.use(authenticate);
 router.get("/types", leaveController.getLeaveTypes);
 router.post(
   "/types",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"),
   leaveController.createLeaveType,
 );
 router.put(
   "/types/:id",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"),
   leaveController.updateLeaveType,
 );
 router.delete(
   "/types/:id",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"),
   leaveController.deleteLeaveType,
 );
 router.post(
   "/carry-forward",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"),
   leaveController.carryForward,
 );
 router.get("/balances", leaveController.getLeaveBalances);
