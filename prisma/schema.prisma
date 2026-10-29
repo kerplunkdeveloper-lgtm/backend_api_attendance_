@@ -73,7 +73,7 @@ model Organization {
   // IANA zone (e.g. "Asia/Kolkata"). Attendance calendar dates, shift start/end
   // comparisons and report boundaries are all resolved in this zone rather than
   // the server's, so the same data reads correctly wherever the API is deployed.
-  timezone  String    @default("UTC")
+  timezone  String    @default("Asia/Kolkata")
   currency  String    @default("INR")
   address   String?
   taxId     String?
