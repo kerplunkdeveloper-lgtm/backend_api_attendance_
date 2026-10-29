@@ -2,6 +2,7 @@ const express = require("express");
 const notificationService = require("../services/notification.service");
 const emailService = require("../services/email.service");
 const whatsappService = require("../services/whatsapp.service");
+const webPushService = require("../services/web-push.service");
 const {
   authenticate,
   authorizeRoles,
@@ -25,6 +26,59 @@ router.get("/", async (req, res) => {
     );
     // `data` mirrors `notifications` so clients using the standard envelope work.
     return res.json({ ...result, data: result.notifications });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Browser push subscription lifecycle. The subscription is scoped to the
+// logged-in user, so closing the web tab does not stop future notifications.
+router.get("/push/public-key", (req, res) => {
+  return res.json({ success: true, enabled: webPushService.configured, publicKey: webPushService.publicKey || null });
+});
+
+router.post("/push/subscribe", async (req, res) => {
+  try {
+    const subscription = req.body?.subscription || req.body;
+    const endpoint = String(subscription?.endpoint || "").trim();
+    const p256dh = String(subscription?.keys?.p256dh || "").trim();
+    const auth = String(subscription?.keys?.auth || "").trim();
+    if (!endpoint || !p256dh || !auth) {
+      return res.status(400).json({ success: false, message: "A valid browser push subscription is required." });
+    }
+    await require("../config/database").pushSubscription.upsert({
+      where: { endpoint },
+      create: { organizationId: req.user.organizationId, userId: req.user.id, endpoint, p256dh, auth, userAgent: req.get("user-agent") || null },
+      update: { organizationId: req.user.organizationId, userId: req.user.id, p256dh, auth, userAgent: req.get("user-agent") || null },
+    });
+    return res.json({ success: true, message: "Web notifications enabled." });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.delete("/push/subscribe", async (req, res) => {
+  try {
+    const endpoint = String(req.body?.endpoint || "").trim();
+    if (endpoint) {
+      await require("../config/database").pushSubscription.deleteMany({ where: { endpoint, userId: req.user.id } });
+    }
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Any authenticated role may dismiss its own notification.
+router.delete("/:id", async (req, res) => {
+  try {
+    const result = await notificationService.deleteNotification(
+      req.params.id,
+      req.user.id,
+      req.user.organizationId,
+    );
+    if (!result.count) return res.status(404).json({ success: false, message: "Notification not found." });
+    return res.json({ success: true, message: "Notification deleted." });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }

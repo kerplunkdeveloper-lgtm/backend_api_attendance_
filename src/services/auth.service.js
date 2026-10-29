@@ -33,13 +33,24 @@ const {
 const MIN_PASSWORD_LENGTH = 8;
 const VERIFICATION_CODE_TTL_MS = 15 * 60 * 1000;
 
-// An employee signs in with the office email (User.email) or the personal email on their profile.
+// An employee signs in with the office email, personal email, employee code, or profile phone.
 const emailIdentityWhere = (email) => ({
   OR: [
     { email: { equals: email, mode: "insensitive" } },
     { employee: { is: { personalEmail: { equals: email, mode: "insensitive" }, deletedAt: null } } },
   ],
 });
+
+const normalizePhoneIdentifier = (phone) => String(phone || "").replace(/[\s()\-]/g, "");
+
+const phoneIdentityWhere = (phone) => {
+  const normalized = normalizePhoneIdentifier(phone);
+  const digits = normalized.replace(/^\+/, "");
+  const values = new Set([normalized, digits]);
+  if (/^\d{10}$/.test(digits)) values.add(`+91${digits}`);
+  if (/^91\d{10}$/.test(digits)) values.add(`+${digits}`);
+  return { employee: { is: { phone: { in: [...values] }, deletedAt: null } } };
+};
 
 const generateVerificationCode =() => String(crypto.randomInt(0, 1000000)).padStart(6, "0");
 
@@ -427,9 +438,8 @@ const resendVerificationCode = async (email) => {
   return { success: true, message: genericMessage };
 };
 
-const login = async (email, password, client = null, employeeCode = null) => {
-  // Mobile clients send employeeCode when the identifier has no '@'. Either
-  // form is accepted — the previous implementation only read `email`.
+const login = async (email, password, client = null, employeeCode = null, phone = null) => {
+  // Mobile clients may send employeeCode when the identifier has no '@'.
   const identifier = email ? String(email).trim() : "";
   const cleanEmail = identifier.includes("@") ? identifier.toLowerCase() : "";
   const cleanCode = employeeCode
@@ -437,6 +447,7 @@ const login = async (email, password, client = null, employeeCode = null) => {
     : identifier && !identifier.includes("@")
       ? identifier
       : "";
+  const cleanPhone = phone ? normalizePhoneIdentifier(phone) : "";
 
   const loginInclude = {
     organization: organizationWithSubscription,
@@ -453,7 +464,9 @@ const login = async (email, password, client = null, employeeCode = null) => {
     omit: WITH_SECRETS,
     where: cleanEmail
       ? emailIdentityWhere(cleanEmail)
-      : cleanCode
+      : cleanPhone
+        ? phoneIdentityWhere(cleanPhone)
+        : cleanCode
         ? { employee: { employeeCode: { equals: cleanCode, mode: "insensitive" }, deletedAt: null } }
         : { id: "__never__" },
     include: loginInclude,

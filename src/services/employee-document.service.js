@@ -145,6 +145,38 @@ class EmployeeDocumentService {
   }
 
   /**
+   * Fetch a document through the authenticated API instead of exposing a
+   * private Cloudinary URL to the browser. This is required for PDF iframe
+   * previews because the browser cannot attach the WorkPulse bearer token to
+   * a direct Cloudinary navigation.
+   */
+  async getDocumentContent(organizationId, employeeId, documentId) {
+    const document = await prisma.employeeDocument.findFirst({
+      where: { id: documentId, employeeId, organizationId },
+      select: { fileUrl: true, fileName: true, mimeType: true },
+    });
+
+    if (!document) {
+      const error = new Error("Document not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const response = await fetch(signedDeliveryUrl(document.fileUrl));
+    if (!response.ok) {
+      const error = new Error("Document storage could not be reached");
+      error.statusCode = 502;
+      throw error;
+    }
+
+    return {
+      buffer: Buffer.from(await response.arrayBuffer()),
+      contentType: response.headers.get("content-type") || document.mimeType || "application/octet-stream",
+      fileName: document.fileName,
+    };
+  }
+
+  /**
    * Upload or add a new employee document
    */
   async uploadEmployeeDocument(organizationId, employeeId, payload, fileBuffer, uploadedByUser) {

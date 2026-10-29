@@ -115,11 +115,12 @@ const schemas = {
         ])
         .optional(),
       employeeCode: z.string().trim().min(1).max(40).optional(),
+      phone: z.string().trim().min(7).max(20).regex(/^\+?[\d\s()\-]+$/).optional(),
       password: z.string().min(1).max(128),
       client: z.enum(["web", "mobile"]).optional(),
     })
-    .refine((v) => Boolean(v.email || v.employeeCode), {
-      message: "Email or employeeCode is required",
+    .refine((v) => Boolean(v.email || v.employeeCode || v.phone), {
+      message: "Email, employeeCode, or phone is required",
     }),
 
   twoFactorCode: z.object({ code: z.string().trim().min(6).max(20) }).strict(),

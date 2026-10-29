@@ -3,6 +3,7 @@ const attendanceController = require("../controllers/attendance.controller");
 const {
   authenticate,
   authorizeRoles,
+  denyCompanyAdminSelfPunch,
 } = require("../middleware/auth.middleware");
 const { validate, schemas } = require("../middleware/validate.middleware");
 
@@ -15,6 +16,7 @@ router.use(authenticate);
 // Standard GPS check-in (geofence enforced)
 router.post(
   "/check-in",
+  denyCompanyAdminSelfPunch,
   validate(schemas.checkIn),
   attendanceController.checkIn,
 );
@@ -22,11 +24,13 @@ router.post(
 // WFH check-in (no geofence required — sets WORK_FROM_HOME status)
 router.post(
   "/check-in-wfh",
+  denyCompanyAdminSelfPunch,
   validate(schemas.checkIn),
   attendanceController.wfhCheckIn,
 );
 router.post(
   "/wfh-check-in",
+  denyCompanyAdminSelfPunch,
   validate(schemas.checkIn),
   attendanceController.wfhCheckIn,
 );
@@ -34,18 +38,19 @@ router.post(
 // Check-out
 router.post(
   "/check-out",
+  denyCompanyAdminSelfPunch,
   validate(schemas.checkIn),
   attendanceController.checkOut,
 );
 
 // Break management
-router.post("/break-start", attendanceController.startBreak);
-router.post("/break-end", attendanceController.endBreak);
-router.post("/lunch-start", attendanceController.startLunch);
-router.post("/lunch-end", attendanceController.endLunch);
+router.post("/break-start", denyCompanyAdminSelfPunch, attendanceController.startBreak);
+router.post("/break-end", denyCompanyAdminSelfPunch, attendanceController.endBreak);
+router.post("/lunch-start", denyCompanyAdminSelfPunch, attendanceController.startLunch);
+router.post("/lunch-end", denyCompanyAdminSelfPunch, attendanceController.endLunch);
 
 // Offline sync — batch sync locally-queued punches when internet is restored
-router.post("/sync-offline", attendanceController.syncOfflinePunches);
+router.post("/sync-offline", denyCompanyAdminSelfPunch, attendanceController.syncOfflinePunches);
 
 // Break detail (structured break pairs)
 router.get("/breaks", attendanceController.getBreakDetails);

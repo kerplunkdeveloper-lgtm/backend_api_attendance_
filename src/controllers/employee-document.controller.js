@@ -55,6 +55,36 @@ class EmployeeDocumentController {
   }
 
   /**
+   * GET /api/employees/:employeeId/documents/:documentId/content
+   * Streams a document through the authenticated API for preview/download.
+   */
+  async getDocumentContent(req, res, next) {
+    try {
+      let targetEmployeeId = req.params.employeeId;
+      if (targetEmployeeId === "me") {
+        if (!req.user.employee) return res.status(404).json({ success: false, message: "No employee profile linked" });
+        targetEmployeeId = req.user.employee.id;
+      }
+
+      if (!this._canAccessEmployee(req, targetEmployeeId)) {
+        return res.status(403).json({ success: false, message: "Unauthorized to access this document" });
+      }
+
+      const file = await employeeDocumentService.getDocumentContent(
+        req.user.organizationId,
+        targetEmployeeId,
+        req.params.documentId,
+      );
+      res.setHeader("Content-Type", file.contentType);
+      res.setHeader("Content-Disposition", `inline; filename="${String(file.fileName).replace(/[\"\r\n]/g, "_")}"`);
+      res.setHeader("Content-Length", file.buffer.length);
+      return res.status(200).send(file.buffer);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * POST /api/employees/:employeeId/documents
    * Upload / Add Document
    */
@@ -250,6 +280,7 @@ class EmployeeDocumentController {
 const controller = new EmployeeDocumentController();
 // Bind methods to controller instance
 controller.getDocuments = controller.getDocuments.bind(controller);
+controller.getDocumentContent = controller.getDocumentContent.bind(controller);
 controller.uploadDocument = controller.uploadDocument.bind(controller);
 controller.replaceOrUpdateDocument =
   controller.replaceOrUpdateDocument.bind(controller);

@@ -117,6 +117,7 @@ router.post(
 // ─── Employee Documents Endpoints ──────────────────────────────────────────────
 
 router.get("/:employeeId/documents", employeeDocumentController.getDocuments);
+router.get("/:employeeId/documents/:documentId/content", employeeDocumentController.getDocumentContent);
 
 // Upload document
 router.post(

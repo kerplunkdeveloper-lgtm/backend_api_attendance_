@@ -7,6 +7,7 @@ const { sendSubscriptionReminders } = require("./subscriptionReminder.service");
 const emailService = require("./email.service");
 const { requiresAdminReview, ADMIN_ROLES } = require("../utils/approvalChain");
 const whatsappService = require("./whatsapp.service");
+const webPushService = require("./web-push.service");
 const { getLocalDateOnly, getLocalMinutesOfDay } = require("../utils/datetime");
 const {
   FALLBACK_TZ,
@@ -67,7 +68,7 @@ class NotificationService {
    * Create an in-app notification for a user
    */
   async createNotification({ organizationId, userId, title, message, type = "SYSTEM" }) {
-    return await prisma.notification.create({
+    const notification = await prisma.notification.create({
       data: {
         organizationId,
         userId,
@@ -76,6 +77,10 @@ class NotificationService {
         type,
       },
     });
+    void webPushService.sendToUser({ userId, title, message, type, notificationId: notification.id }).catch((error) => {
+      console.warn("[WebPush] Notification delivery failed:", error.message);
+    });
+    return notification;
   }
 
   /**
@@ -91,6 +96,7 @@ class NotificationService {
     const result = await prisma.notification.createMany({
       data: users.map((user) => ({ organizationId, userId: user.id, title, message, type })),
     });
+    void webPushService.sendToUsers(users.map((user) => ({ userId: user.id, title, message, type })));
     return { sent: result.count };
   }
 
@@ -131,6 +137,36 @@ class NotificationService {
       return reviewers.length;
     } catch (error) {
       console.warn("[ReviewerNotification] Could not notify reviewers:", error.message);
+      return 0;
+    }
+  }
+
+  async notifyPauseObservers({ organizationId, employeeId, title, summary, type = "ATTENDANCE" }) {
+    try {
+      const employee = await prisma.employee.findFirst({
+        where: { id: employeeId, organizationId },
+        select: { userId: true, firstName: true, lastName: true, employeeCode: true },
+      });
+      if (!employee) return 0;
+      const observers = await prisma.user.findMany({
+        where: {
+          organizationId,
+          isActive: true,
+          role: { in: ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"] },
+          ...(employee.userId ? { id: { not: employee.userId } } : {}),
+        },
+        select: { id: true },
+        take: 500,
+      });
+      if (!observers.length) return 0;
+      const name = `${employee.firstName || ""} ${employee.lastName || ""}`.trim() || "An employee";
+      const who = employee.employeeCode ? `${name} (${employee.employeeCode})` : name;
+      const message = `${who} ${summary}`;
+      await prisma.notification.createMany({ data: observers.map((observer) => ({ organizationId, userId: observer.id, title, message, type })) });
+      void webPushService.sendToUsers(observers.map((observer) => ({ userId: observer.id, title, message, type })));
+      return observers.length;
+    } catch (error) {
+      console.warn("[PauseNotification] Could not notify managers, HR and admins:", error.message);
       return 0;
     }
   }
@@ -218,6 +254,25 @@ class NotificationService {
       where: { userId, organizationId, isRead: false },
       data: { isRead: true },
     });
+  }
+
+  /** Delete one notification only for its owner. Available to every role. */
+  async deleteNotification(notificationId, userId, organizationId) {
+    return await prisma.notification.deleteMany({
+      where: { id: notificationId, userId, organizationId },
+    });
+  }
+
+  /** Keep the current month and remove all older notification history. */
+  async cleanupOldNotifications() {
+    if (typeof prisma.notification.deleteMany !== "function") return 0;
+    const now = new Date();
+    const startOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const result = await prisma.notification.deleteMany({
+      where: { createdAt: { lt: startOfMonth } },
+    });
+    if (result.count > 0) console.log(`[NotificationCleanup] Removed ${result.count} notifications before ${startOfMonth.toISOString()}`);
+    return result.count;
   }
 
   /**
@@ -594,6 +649,7 @@ class NotificationService {
 
   async evaluateScheduledReminders() {
     try {
+      await this.cleanupOldNotifications();
       await this.sendUpcomingHolidayReminders();
       await this.sendMorningCheckInReminders(null, true);
       await this.sendEveningCheckOutReminders(null, true);
