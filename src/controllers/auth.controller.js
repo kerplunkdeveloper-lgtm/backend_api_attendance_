@@ -182,13 +182,13 @@ const loginWithGoogle = async (req, res) => {
 
 const login = async (req, res) => {
   try {
-    const { email, password, client, employeeCode } = req.body;
+    const { email, password, client, employeeCode, phone } = req.body;
     const clientPlatform = client || req.headers["x-client-platform"] || null;
 
-    if ((!email && !employeeCode) || !password) {
+    if ((!email && !employeeCode && !phone) || !password) {
       return res.status(400).json({
         success: false,
-        message: "Email (or employee code) and password are required",
+        message: "Email, phone number, or employee code and password are required",
       });
     }
 
@@ -197,6 +197,7 @@ const login = async (req, res) => {
       password,
       clientPlatform,
       employeeCode,
+      phone,
     );
     if (result.twoFactorRequired) {
       return res.status(200).json({

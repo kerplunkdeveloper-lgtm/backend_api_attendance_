@@ -91,6 +91,13 @@ const assertLoginEmailsFree = async (organizationId, emails, { userId = null, em
       where: {
         organizationId,
         email: { in: addresses, mode: "insensitive" },
+        // A soft-deleted employee keeps its historical User row, but that row
+        // must not reserve the login address for a future hire. Standalone
+        // admin accounts (employee: null) remain reserved.
+        OR: [
+          { employee: null },
+          { employee: { is: { deletedAt: null } } },
+        ],
         ...(userId ? { NOT: { id: userId } } : {}),
       },
       select: { id: true },
@@ -240,7 +247,7 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
         role: userRole,
         organizationId,
         avatarUrl,
-        mustChangePassword: true,
+        mustChangePassword: !(password && String(password).trim()),
         isActive: true,
         // Admin-invited, not self-registered — the admin already vouches for this address.
         emailVerifiedAt: new Date(),
@@ -1063,10 +1070,9 @@ const updateMyProfile = async (organizationId, userId, data, actorRole = "EMPLOY
   const joiningDate = data.dateOfJoining !== undefined
     ? parsePastDate("Date of joining", data.dateOfJoining, { allowFuture: true })
     : undefined;
-  // Self-service is fill-once: payroll, leave accrual and employee codes key off these dates,
-  // so once recorded only HR can correct them.
+  // Date of birth is fill-once for self-service. Joining date is intentionally
+  // editable so an employee can correct an onboarding date entered incorrectly.
   if (birthDate && employee.dateOfBirth) throw badRequest("Date of birth is already recorded. Contact HR to change it.");
-  if (joiningDate && employee.dateOfJoining) throw badRequest("Date of joining is already recorded. Contact HR to change it.");
   const effectiveBirth = birthDate || employee.dateOfBirth;
   const effectiveJoining = joiningDate || employee.dateOfJoining;
   if (effectiveBirth && effectiveJoining && effectiveJoining < effectiveBirth) {

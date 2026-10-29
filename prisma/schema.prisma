@@ -127,6 +127,7 @@ model Organization {
   payslips             Payslip[]
   permissionRequests   PermissionRequest[]
   notifications        Notification[]
+  pushSubscriptions    PushSubscription[]
   announcements        Announcement[]
   auditLogs            AuditLog[]
   employeeDevices      EmployeeDevice[]
@@ -500,6 +501,7 @@ model User {
   organization    Organization   @relation(fields: [organizationId], references: [id])
   employee        Employee?
   notifications   Notification[]
+  pushSubscriptions PushSubscription[]
   refreshTokens   RefreshToken[]
   chatMemberships ChatMember[]
   chatMessages    ChatMessage[]
@@ -735,6 +737,7 @@ model LeaveType {
   code           String
   daysAllowed    Int      @default(12)
   isPaid         Boolean  @default(true)
+  isActive       Boolean  @default(true)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -1024,6 +1027,23 @@ model Notification {
   @@index([userId, isRead])
   @@index([organizationId])
   @@index([userId, createdAt])
+}
+
+model PushSubscription {
+  id             String   @id @default(uuid())
+  organizationId String
+  userId         String
+  endpoint       String   @unique @db.Text
+  p256dh         String   @db.Text
+  auth           String   @db.Text
+  userAgent      String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, userId])
 }
 
 /// Company-wide notice board posts from HR or admins (policy changes, events, office closures).

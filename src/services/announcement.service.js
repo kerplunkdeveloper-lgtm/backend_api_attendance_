@@ -1,5 +1,6 @@
 const prisma = require("../config/database");
 const { WORKING_STATUSES } = require("../utils/employeeStatus");
+const webPushService = require("./web-push.service");
 
 const MANAGE_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"];
 const ADMIN_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN"];
@@ -72,6 +73,7 @@ async function notifyEveryone(organizationId, authorUserId, title) {
         type: "ANNOUNCEMENT",
       })),
     });
+    void webPushService.sendToUsers(users.map((u) => ({ userId: u.id, title: "New announcement", message: title, type: "ANNOUNCEMENT" })));
     return result.count;
   } catch (error) {
     // The post itself is what matters; a failed fan-out must not undo it.

@@ -8,10 +8,18 @@ async function releaseDeletedEmployeeEmail(db, organizationId, email) {
   const cleanEmail = String(email || "").trim().toLowerCase();
   if (!cleanEmail) return false;
 
-  const existing = await db.user.findUnique({
-    where: { organizationId_email: { organizationId, email: cleanEmail } },
-    select: { id: true, employee: { select: { deletedAt: true } } },
-  });
+  // Most callers store emails lower-case, but older imports may have preserved
+  // casing. Use an insensitive fallback so a deleted legacy account cannot
+  // keep an address locked just because the casing changed.
+  const existing = typeof db.user.findFirst === "function"
+    ? await db.user.findFirst({
+      where: { organizationId, email: { equals: cleanEmail, mode: "insensitive" } },
+      select: { id: true, employee: { select: { deletedAt: true } } },
+    })
+    : await db.user.findUnique({
+      where: { organizationId_email: { organizationId, email: cleanEmail } },
+      select: { id: true, employee: { select: { deletedAt: true } } },
+    });
   if (!existing?.employee?.deletedAt) return false;
 
   await db.user.update({

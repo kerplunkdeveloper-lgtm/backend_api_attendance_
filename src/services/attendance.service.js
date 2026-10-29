@@ -1098,16 +1098,16 @@ const startPause = async ({ userId, employeeId, organizationId, latitude, longit
   const config = pauseTypes[pauseType] || pauseTypes.BREAK;
   const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
   const eventTime = assertPunchTimestamp(timestamp, { actorRole, source: "WEB" });
-  const attendance = await findOpenAttendance(employee.id, organizationId, eventTime, { events: { orderBy: { timestamp: "desc" } } });
+  const attendance = await findOpenAttendance(employee.id, organizationId, eventTime, { events: { orderBy: { timestamp: "desc" } }, shift: true });
   if (!attendance?.checkIn) { const error = new Error(`You must punch in before taking ${config.label.toLowerCase()}`); error.statusCode = 400; throw error; }
   if (attendance.checkOut) { const error = new Error(`Cannot take ${config.label.toLowerCase()} after punching out`); error.statusCode = 400; throw error; }
   const lastEvent = attendance.events[0];
   if (lastEvent && (lastEvent.type === "BREAK_START" || lastEvent.type === "LUNCH_START")) { const error = new Error(`You are already on ${lastEvent.type === "LUNCH_START" ? "lunch" : "a break"}`); error.statusCode = 400; throw error; }
   const event = await prisma.attendanceEvent.create({ data: { attendanceId: attendance.id, type: config.start, timestamp: eventTime, latitude: latitude ? String(latitude) : null, longitude: longitude ? String(longitude) : null, isBypassed: false } });
   
-  // Notify Admin and HR of break/lunch start
+  // Notify Manager, HR and admins of break/lunch start.
   try {
-        void notificationService.notifyReviewersOfRequest({
+    void notificationService.notifyPauseObservers({
       organizationId,
       employeeId: employee.id,
       title: `${config.label} Started`,
@@ -1125,7 +1125,7 @@ const endPause = async ({ userId, employeeId, organizationId, latitude, longitud
   const config = pauseTypes[pauseType] || pauseTypes.BREAK;
   const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
   const eventTime = assertPunchTimestamp(timestamp, { actorRole, source: "WEB" });
-  const attendance = await findOpenAttendance(employee.id, organizationId, eventTime, { events: { orderBy: { timestamp: "desc" } } });
+  const attendance = await findOpenAttendance(employee.id, organizationId, eventTime, { events: { orderBy: { timestamp: "desc" } }, shift: true });
   if (!attendance?.checkIn) { const error = new Error("No active attendance record found for today"); error.statusCode = 400; throw error; }
   const lastStart = attendance.events.find((e) => e.type === config.start);
   const lastEnd = attendance.events.find((e) => e.type === config.end);
@@ -1138,15 +1138,27 @@ const endPause = async ({ userId, employeeId, organizationId, latitude, longitud
     return { ...record, event };
   });
 
-  // Notify Admin and HR of break/lunch end with duration
+  // Notify Manager, HR and admins of break/lunch end with duration.
   try {
-        void notificationService.notifyReviewersOfRequest({
+    void notificationService.notifyPauseObservers({
       organizationId,
       employeeId: employee.id,
       title: `${config.label} Ended`,
       summary: `ended ${config.label.toLowerCase()} (Duration: ${formatDurationSeconds(durationSeconds)})`,
       type: "ATTENDANCE",
     });
+    const allowedMinutes = config.label === "Break"
+      ? (attendance.shift?.breakIncluded === false ? 0 : Number(attendance.shift?.breakMinutes || 0))
+      : (attendance.shift?.lunchIncluded === false ? 0 : Number(attendance.shift?.lunchMinutes || 0));
+    if (allowedMinutes > 0 && durationMinutes > allowedMinutes) {
+      void notificationService.notifyPauseObservers({
+        organizationId,
+        employeeId: employee.id,
+        title: `${config.label} Limit Exceeded`,
+        summary: `exceeded the allowed ${allowedMinutes} minute ${config.label.toLowerCase()} limit by ${durationMinutes - allowedMinutes} minute(s)`,
+        type: "ATTENDANCE",
+      });
+    }
   } catch (err) {
     console.warn("[PauseNotification] Failed to alert reviewers:", err.message);
   }
@@ -1573,6 +1585,13 @@ const getMyAttendance = async (userId, organizationId, { limit = 30, page = 1 },
         branch: { select: { id: true, name: true } },
         shift: { select: { id: true, name: true, startTime: true, endTime: true } },
         events: true,
+        // Keep the approval state with the attendance row so clients never
+        // have to infer whether the stored overtime minutes are payable.
+        overtimeRequests: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          select: { id: true, status: true, requestedMinutes: true, approvedMinutes: true, reviewNote: true },
+        },
       },
       orderBy: { date: "desc" },
       take,
@@ -1829,6 +1848,11 @@ const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, 
         branch: { select: { id: true, name: true, radiusMeters: true, ...(canSeeLocation ? { latitude: true, longitude: true } : {}) } },
         shift: { select: { id: true, name: true, startTime: true, endTime: true, graceMinutes: true } },
         events: { orderBy: { timestamp: "asc" } },
+        overtimeRequests: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          select: { id: true, status: true, requestedMinutes: true, approvedMinutes: true, reviewNote: true },
+        },
       },
       orderBy: { date: "desc" },
       take,

@@ -282,6 +282,19 @@ const authorizeRoles = (...allowedRoles) => {
   };
 };
 
+// Company admins manage attendance for employees through the admin-mark flow;
+// they are not attendance candidates for self-service punch actions.
+const denyCompanyAdminSelfPunch = (req, res, next) => {
+  if (req.user?.role === "COMPANY_ADMIN") {
+    return res.status(403).json({
+      success: false,
+      code: "SELF_ATTENDANCE_NOT_APPLICABLE",
+      message: "Company admins do not punch in or out for themselves.",
+    });
+  }
+  return next();
+};
+
 const requireFeature = (flag, label) => (req, res, next) => {
   try {
     assertFeature(req.user?.organization, flag, label);
@@ -298,6 +311,7 @@ const requireFeature = (flag, label) => (req, res, next) => {
 module.exports = {
   authenticate,
   authorizeRoles,
+  denyCompanyAdminSelfPunch,
   requiredScopeFor,
   parseScopes,
   requireFeature,

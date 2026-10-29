@@ -1,0 +1,1 @@
+ALTER TABLE "LeaveType" ADD COLUMN "isActive" BOOLEAN NOT NULL DEFAULT true;

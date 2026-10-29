@@ -100,12 +100,13 @@ class LeaveService {
   async createLeaveType(organizationId, data) {
     const { name, code, daysAllowed = 12, isPaid = true } = data;
 
-    if (!name || !code) {
+    if (typeof name !== "string" || typeof code !== "string" || !name.trim() || !code.trim()) {
       const error = new Error("Name and code are required for leave type");
       error.statusCode = 400;
       throw error;
     }
 
+    const cleanName = name.trim();
     const cleanCode = code.trim().toUpperCase();
 
     const existing = await prisma.leaveType.findUnique({
@@ -118,6 +119,17 @@ class LeaveService {
     });
 
     if (existing) {
+      if (existing.isActive === false) {
+        return await prisma.leaveType.update({
+          where: { id: existing.id },
+          data: {
+            name: cleanName,
+            daysAllowed: parseInt(daysAllowed) || 12,
+            isPaid: Boolean(isPaid),
+            isActive: true,
+          },
+        });
+      }
       const error = new Error(`Leave type with code '${cleanCode}' already exists`);
       error.statusCode = 400;
       throw error;
@@ -126,7 +138,7 @@ class LeaveService {
     return await prisma.leaveType.create({
       data: {
         organizationId,
-        name: name.trim(),
+        name: cleanName,
         code: cleanCode,
         daysAllowed: parseInt(daysAllowed) || 12,
         isPaid: Boolean(isPaid),
@@ -165,7 +177,7 @@ class LeaveService {
       });
     }
 
-    return types;
+    return types.filter((type) => type.isActive !== false);
   }
 
   /**
@@ -832,9 +844,20 @@ class LeaveService {
   async deleteLeaveType(organizationId, id) {
     const used = await prisma.leaveRequest.count({ where: { leaveTypeId: id, organizationId } });
     if (used > 0) {
-      const error = new Error("Cannot delete a leave type that already has requests");
-      error.statusCode = 400;
-      throw error;
+      const archived = await prisma.leaveType.updateMany({
+        where: { id, organizationId },
+        data: { isActive: false },
+      });
+      if (!archived.count) {
+        const error = new Error("Leave type not found");
+        error.statusCode = 404;
+        throw error;
+      }
+      return {
+        success: true,
+        archived: true,
+        message: "Leave type archived. Existing requests and history were preserved.",
+      };
     }
     await prisma.leaveBalance.deleteMany({ where: { leaveTypeId: id } });
     await prisma.leaveType.deleteMany({ where: { id, organizationId } });
@@ -844,8 +867,13 @@ class LeaveService {
   async carryForward(organizationId, { fromYear, toYear, maxDays = 15 }) {
     const src = parseInt(fromYear) || new Date().getFullYear() - 1;
     const dest = parseInt(toYear) || new Date().getFullYear();
-    const cap = Math.max(0, Number(maxDays) || 15);
-    const types = await prisma.leaveType.findMany({ where: { organizationId, isPaid: true } });
+    const cap = Math.min(366, Math.max(0, Number(maxDays) || 15));
+    if (src >= dest) {
+      const error = new Error("The source year must be before the destination year");
+      error.statusCode = 400;
+      throw error;
+    }
+    const types = await prisma.leaveType.findMany({ where: { organizationId, isPaid: true, isActive: true } });
     const employees = await prisma.employee.findMany({
       where: { organizationId, status: { in: WORKING_STATUSES } },
       select: { id: true },
@@ -860,13 +888,13 @@ class LeaveService {
         const carry = Math.min(unused, cap);
         await prisma.leaveBalance.upsert({
           where: { employeeId_leaveTypeId_year: { employeeId: emp.id, leaveTypeId: type.id, year: dest } },
-          update: { allocatedDays: type.daysAllowed + carry },
+          update: { allocatedDays: Number(type.daysAllowed) + carry },
           create: {
             organizationId,
             employeeId: emp.id,
             leaveTypeId: type.id,
             year: dest,
-            allocatedDays: type.daysAllowed + carry,
+            allocatedDays: Number(type.daysAllowed) + carry,
             usedDays: 0,
           },
         });

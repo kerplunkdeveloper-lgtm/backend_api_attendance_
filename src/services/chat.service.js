@@ -205,7 +205,14 @@ async function listTeammates(organizationId, userId, query = {}) {
         id: true,
         email: true,
         role: true,
-        employee: { select: { firstName: true, lastName: true, employeeCode: true } },
+        employee: {
+          select: {
+            firstName: true,
+            lastName: true,
+            employeeCode: true,
+            department: { select: { id: true, name: true } },
+          },
+        },
       },
     }),
     prisma.user.count({ where }),
