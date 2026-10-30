@@ -13,48 +13,26 @@ const assertManager = (role) => {
   }
 };
 
-// The policy library was introduced after the original production schema. Keep
-// read-only pages usable while an older instance is being restarted/migrated,
-// and give write operations an actionable error instead of a generic 500.
-const policyStoreReady = () => Boolean(prisma.companyPolicy && typeof prisma.companyPolicy.findMany === "function");
-const policyStoreError = () => Object.assign(
-  new Error("Company policy storage is not ready. Deploy the latest database migration and restart the backend."),
-  { statusCode: 503, code: "COMPANY_POLICY_STORAGE_NOT_READY" },
-);
-
 class CompanyPolicyService {
   async list(organizationId, role) {
-    if (!policyStoreReady()) {
-      console.warn("[CompanyPolicy] Prisma client is missing the CompanyPolicy model; returning an empty library.");
-      return [];
-    }
     const managed = MANAGE_ROLES.has(role);
-    try {
-      return await prisma.companyPolicy.findMany({
-        where: {
-          organizationId,
-          ...(managed ? {} : { isPublished: true, archivedAt: null }),
-        },
-        orderBy: [{ archivedAt: "asc" }, { createdAt: "desc" }],
-        select: {
-          id: true, title: true, description: true, category: true, fileUrl: true,
-          fileName: true, mimeType: true, fileSize: true, isPublished: true,
-          publishedAt: true, archivedAt: true, createdAt: true, updatedAt: true,
-          uploadedBy: { select: { id: true, firstName: true, lastName: true } },
-        },
-      });
-    } catch (error) {
-      if (error?.code === "P2021" || error?.code === "P2022") {
-        console.warn("[CompanyPolicy] Database migration is not applied; returning an empty library.");
-        return [];
-      }
-      throw error;
-    }
+    return prisma.companyPolicy.findMany({
+      where: {
+        organizationId,
+        ...(managed ? {} : { isPublished: true, archivedAt: null }),
+      },
+      orderBy: [{ archivedAt: "asc" }, { createdAt: "desc" }],
+      select: {
+        id: true, title: true, description: true, category: true, fileUrl: true,
+        fileName: true, mimeType: true, fileSize: true, isPublished: true,
+        publishedAt: true, archivedAt: true, createdAt: true, updatedAt: true,
+        uploadedBy: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
   }
 
   async create(organizationId, user, body, file) {
     assertManager(user.role);
-    if (!policyStoreReady()) throw policyStoreError();
     if (!file) { const error = new Error("Select a policy file to import."); error.statusCode = 400; throw error; }
     assertSniffedType(file);
     const title = clean(body.title || file.originalname.replace(/\.[^.]+$/, ""), 160);
@@ -74,7 +52,6 @@ class CompanyPolicyService {
 
   async update(organizationId, user, id, body) {
     assertManager(user.role);
-    if (!policyStoreReady()) throw policyStoreError();
     const existing = await prisma.companyPolicy.findFirst({ where: { id, organizationId } });
     if (!existing) { const error = new Error("Company policy not found."); error.statusCode = 404; throw error; }
     const data = {};
@@ -92,7 +69,6 @@ class CompanyPolicyService {
 
   async remove(organizationId, user, id) {
     assertManager(user.role);
-    if (!policyStoreReady()) throw policyStoreError();
     const existing = await prisma.companyPolicy.findFirst({ where: { id, organizationId } });
     if (!existing) { const error = new Error("Company policy not found."); error.statusCode = 404; throw error; }
     await prisma.companyPolicy.delete({ where: { id } });
