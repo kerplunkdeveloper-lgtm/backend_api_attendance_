@@ -71,7 +71,7 @@ router.put(
 // Admin: Approve candidate & Generate Offer Letter
 router.post(
   "/:id/admin-approve-offer",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
   onboardingController.adminApproveAndGenerateOffer,
 );
 

@@ -1,5 +1,5 @@
 const prisma = require("../config/database");
-const { WORKING_STATUSES } = require("../utils/employeeStatus");
+const webPushService = require("./services/web-push.service");
 
 const MANAGE_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"];
 const ADMIN_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN"];
@@ -53,12 +53,9 @@ async function list(organizationId, user) {
 async function notifyEveryone(organizationId, authorUserId, title) {
   try {
     const users = await prisma.user.findMany({
-      where: {
-        organizationId,
-        isActive: true,
-        id: { not: authorUserId },
-        employee: { is: { status: { in: WORKING_STATUSES } } },
-      },
+      // Announcements are company-wide: include employees, HR and admins.
+      // The author already knows the message, so do not duplicate it for them.
+      where: { organizationId, isActive: true, id: { not: authorUserId } },
       select: { id: true },
       take: MAX_NOTIFY,
     });
@@ -72,6 +69,12 @@ async function notifyEveryone(organizationId, authorUserId, title) {
         type: "ANNOUNCEMENT",
       })),
     });
+    void webPushService.sendToUsers(users.map((user) => ({
+      userId: user.id,
+      title: "New announcement",
+      message: title,
+      type: "ANNOUNCEMENT",
+    })));
     return result.count;
   } catch (error) {
     // The post itself is what matters; a failed fan-out must not undo it.

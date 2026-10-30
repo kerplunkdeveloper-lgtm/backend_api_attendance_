@@ -61,7 +61,7 @@ router.get(
 // Generate Monthly Payslips for Organization
 router.post(
   "/generate",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
   payrollController.generate,
 );
 

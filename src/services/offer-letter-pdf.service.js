@@ -1,4 +1,5 @@
 const PDFDocument = require("pdfkit");
+const { DEFAULT_OFFER_LETTER_TEMPLATE, normalizeOfferLetterTemplate } = require("../utils/offerLetterTemplate");
 
 const money = (value) => {
   const amount = Number(value || 0);
@@ -28,6 +29,10 @@ const fetchLogo = async (logoUrl) => {
 };
 
 const generateOfferLetterPdf = async ({ offer, companyName, companyLogoUrl }) => {
+  const template = normalizeOfferLetterTemplate(offer.template || DEFAULT_OFFER_LETTER_TEMPLATE);
+  const interpolate = (text) => String(text || "")
+    .replaceAll("{{candidateName}}", offer.candidateName || "Candidate")
+    .replaceAll("{{companyName}}", companyName || "WorkPluse");
   const document = new PDFDocument({ size: "A4", margin: 54, info: {
     Title: `Offer Letter - ${offer.candidateName}`,
     Author: companyName || "WorkPluse",
@@ -44,18 +49,19 @@ const generateOfferLetterPdf = async ({ offer, companyName, companyLogoUrl }) =>
   const logo = await fetchLogo(companyLogoUrl);
   if (logo) {
     try { document.image(logo, 54, 42, { fit: [150, 54], align: "left", valign: "center" }); } catch { /* text brand remains */ }
+    try { document.save().opacity(0.035).image(logo, 205, 285, { fit: [180, 180], align: "center", valign: "center" }).restore(); } catch { /* watermark is optional */ }
   }
 
-  document.font("Helvetica-Bold").fontSize(20).fillColor("#163b8f").text(companyName || "WorkPluse", 54, 108);
-  document.font("Helvetica").fontSize(9).fillColor("#64748b").text("Workforce Systems", 54, 132);
+  document.font("Helvetica-Bold").fontSize(20).fillColor(template.primaryColor).text(companyName || "WorkPluse", 54, 108);
+  document.font("Helvetica").fontSize(9).fillColor("#64748b").text(offer.companyAddress || "Company address not configured", 54, 132, { width: 487 });
   document.moveTo(54, 152).lineTo(541, 152).strokeColor("#dbe4f0").stroke();
 
-  document.font("Helvetica-Bold").fontSize(18).fillColor("#111827").text("EMPLOYMENT OFFER LETTER", 54, 184, { align: "center" });
+  document.font("Helvetica-Bold").fontSize(18).fillColor(template.primaryColor).text(interpolate(template.title), 54, 184, { align: "center" });
   document.font("Helvetica").fontSize(9).fillColor("#64748b").text(`Reference: ${offer.referenceNo || "WP-OFFER"}  |  Issued: ${dateText(offer.issuedDate)}`, 54, 214, { align: "center" });
 
-  document.font("Helvetica").fontSize(11).fillColor("#1f2937").text(`Dear ${offer.candidateName || "Candidate"},`, 54, 264);
+  document.font("Helvetica").fontSize(11).fillColor("#1f2937").text(interpolate(template.greeting), 54, 264);
   document.moveDown(1);
-  document.text(`We are pleased to offer you employment with ${companyName || "WorkPluse"}. We believe your skills and experience will be a valuable addition to our team.`);
+  document.text(interpolate(template.introduction));
 
   const rows = [
     ["Candidate", offer.candidateName],
@@ -68,7 +74,7 @@ const generateOfferLetterPdf = async ({ offer, companyName, companyLogoUrl }) =>
   ];
 
   let y = 350;
-  document.font("Helvetica-Bold").fontSize(11).fillColor("#163b8f").text("Offer details", 54, y);
+  document.font("Helvetica-Bold").fontSize(11).fillColor(template.primaryColor).text("Offer details", 54, y);
   y += 24;
   rows.forEach(([label, value], index) => {
     if (index % 2 === 0) document.rect(54, y - 4, 487, 24).fill("#f5f8fc");
@@ -78,24 +84,19 @@ const generateOfferLetterPdf = async ({ offer, companyName, companyLogoUrl }) =>
   });
 
   y += 24;
-  document.font("Helvetica-Bold").fontSize(11).fillColor("#163b8f").text("Terms and conditions", 54, y);
+  document.font("Helvetica-Bold").fontSize(11).fillColor(template.primaryColor).text("Terms and conditions", 54, y);
   y += 22;
   document.font("Helvetica").fontSize(9).fillColor("#374151");
-  [
-    `Probation period: ${offer.terms?.probationMonths || 3} months.`,
-    `Notice period: ${offer.terms?.noticePeriodDays || 30} days after confirmation.`,
-    `Working hours: ${offer.terms?.workingHours || "As per company policy"}.`,
-    "This offer is subject to verification of the information and documents provided during onboarding.",
-  ].forEach((line) => { document.text(`• ${line}`, 66, y, { width: 465 }); y += 18; });
+  template.terms.forEach((line) => { document.text(`• ${interpolate(line)}`, 66, y, { width: 465 }); y += 18; });
 
   y += 18;
   document.font("Helvetica").fontSize(10).fillColor("#1f2937").text("Please review and accept this offer through the secure onboarding portal linked in the accompanying email.", 54, y, { width: 487, lineGap: 3 });
   y += 68;
   document.moveTo(54, y).lineTo(210, y).strokeColor("#94a3b8").stroke();
-  document.fontSize(9).fillColor("#64748b").text("Authorized signatory", 54, y + 8);
-  document.font("Helvetica-Bold").fontSize(9).fillColor("#163b8f").text(companyName || "WorkPluse", 380, y + 8, { width: 160, align: "right" });
+  document.fontSize(9).fillColor("#64748b").text(template.signatoryTitle, 54, y + 8);
+  document.font("Helvetica-Bold").fontSize(9).fillColor(template.primaryColor).text(template.signatoryName || companyName || "WorkPluse", 380, y + 8, { width: 160, align: "right" });
 
-  document.font("Helvetica").fontSize(8).fillColor("#94a3b8").text("This is a digitally generated offer letter. Please retain a copy for your records.", 54, 770, { align: "center", width: 487 });
+  document.font("Helvetica").fontSize(8).fillColor("#94a3b8").text(interpolate(template.footer), 54, 770, { align: "center", width: 487 });
   document.end();
   return completed;
 };

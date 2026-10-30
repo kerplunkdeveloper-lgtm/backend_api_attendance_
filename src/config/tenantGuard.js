@@ -18,7 +18,7 @@ const TENANT_MODELS = new Set([
   "Form16Record", "StatutoryExport", "BillingOrder", "ChatThread",
   "ChatMessage", "BiometricDevice", "LoanAdvance", "LoanRepayment",
   "AppraisalCycle", "AppraisalReview", "OrgApiKey", "WebhookEndpoint",
-  "WebhookDelivery", "Announcement",
+  "WebhookDelivery", "Announcement", "CompanyPolicy",
 ]);
 
 const FILTER_OPERATIONS = new Set([
