@@ -3,6 +3,7 @@ const { uploadBuffer } = require("../config/cloudinary");
 const { assertRealImage } = require("../middleware/upload.middleware");
 const ssoService = require("./sso.service");
 const { isValidTimeZone } = require("../utils/datetime");
+const { DEFAULT_OFFER_LETTER_TEMPLATE, normalizeOfferLetterTemplate } = require("../utils/offerLetterTemplate");
 const HR_ACCESS_AREAS = ["DASHBOARD", "ATTENDANCE", "EMPLOYEES", "ROLES", "APPROVALS", "ONBOARDING", "PAYROLL", "REPORTS", "ANNOUNCEMENTS", "BRANCHES", "POLICIES", "SHOOTS"];
 const DEFAULT_HR_ACCESS = Object.fromEntries(HR_ACCESS_AREAS.map((area) => [area, true]));
 
@@ -106,4 +107,17 @@ async function removeLogo(organizationId) {
   return presentOrganization(updated);
 }
 
-module.exports = { getSettings, updateSettings, uploadLogo, removeLogo };
+async function getOfferLetterTemplate(organizationId) {
+  const org = await prisma.organization.findUnique({ where: { id: organizationId }, select: { hrAccess: true } });
+  return normalizeOfferLetterTemplate(org?.hrAccess?.OFFER_LETTER_TEMPLATE || DEFAULT_OFFER_LETTER_TEMPLATE);
+}
+
+async function updateOfferLetterTemplate(organizationId, payload) {
+  const org = await prisma.organization.findUnique({ where: { id: organizationId }, select: { hrAccess: true } });
+  const hrAccess = org?.hrAccess && typeof org.hrAccess === "object" ? org.hrAccess : {};
+  const template = normalizeOfferLetterTemplate(payload || {});
+  await prisma.organization.update({ where: { id: organizationId }, data: { hrAccess: { ...hrAccess, OFFER_LETTER_TEMPLATE: template } } });
+  return template;
+}
+
+module.exports = { getSettings, updateSettings, uploadLogo, removeLogo, getOfferLetterTemplate, updateOfferLetterTemplate };

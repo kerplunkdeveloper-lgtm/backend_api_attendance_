@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const prisma = require("../config/database");
+const { DEFAULT_OFFER_LETTER_TEMPLATE, normalizeOfferLetterTemplate } = require("../utils/offerLetterTemplate");
 const { validateIdentityFields, parsePastDate } = require("../utils/employeeValidation");
 const { uploadImage, uploadBuffer, signedDeliveryUrl, isSensitiveDocumentType } = require("../config/cloudinary");
 const emailService = require("./email.service");
@@ -657,6 +658,8 @@ class OnboardingService {
       branch: candidate.branch?.name || "Corporate Headquarters",
       expectedJoinDate: candidate.expectedJoinDate.toISOString().split("T")[0],
       organizationName: candidate.organization.name,
+      companyAddress: candidate.organization.address || "Company address not configured",
+      companyLogoUrl: candidate.organization.logoUrl || null,
       compensation: {
         ctcAnnual: salaryVal * 12,
         grossMonthly: salaryVal,
@@ -669,6 +672,7 @@ class OnboardingService {
         noticePeriodDays: 30,
         workingHours: "09:00 AM - 06:00 PM (Monday to Friday)",
       },
+      template: normalizeOfferLetterTemplate(candidate.organization.hrAccess?.OFFER_LETTER_TEMPLATE || DEFAULT_OFFER_LETTER_TEMPLATE),
     };
 
     // Execute atomic transaction for user, employee, candidate activation, and offer letter
@@ -866,6 +870,8 @@ class OnboardingService {
       branch: candidate.branch?.name || "Corporate Headquarters",
       expectedJoinDate: candidate.expectedJoinDate.toISOString().split("T")[0],
       organizationName: candidate.organization.name,
+      companyAddress: candidate.organization.address || "Company address not configured",
+      companyLogoUrl: candidate.organization.logoUrl || null,
       compensation: {
         ctcAnnual: salaryVal * 12,
         grossMonthly: salaryVal,
@@ -878,6 +884,7 @@ class OnboardingService {
         noticePeriodDays: 30,
         workingHours: "09:00 AM - 06:00 PM (Monday to Friday)",
       },
+      template: normalizeOfferLetterTemplate(candidate.organization.hrAccess?.OFFER_LETTER_TEMPLATE || DEFAULT_OFFER_LETTER_TEMPLATE),
     };
 
     await prisma.onboardingCandidate.update({
@@ -932,6 +939,8 @@ class OnboardingService {
       branch: candidate.branch?.name || "Corporate Headquarters",
       expectedJoinDate: candidate.expectedJoinDate.toISOString().split("T")[0],
       organizationName: candidate.organization.name,
+      companyAddress: candidate.organization.address || "Company address not configured",
+      companyLogoUrl: candidate.organization.logoUrl || null,
       compensation: {
         ctcAnnual: salaryVal * 12,
         grossMonthly: salaryVal,
@@ -944,6 +953,7 @@ class OnboardingService {
         noticePeriodDays: 30,
         workingHours: "09:00 AM - 06:00 PM (Monday to Friday)",
       },
+      template: normalizeOfferLetterTemplate(candidate.organization.hrAccess?.OFFER_LETTER_TEMPLATE || DEFAULT_OFFER_LETTER_TEMPLATE),
     };
 
     return await prisma.onboardingCandidate.update({

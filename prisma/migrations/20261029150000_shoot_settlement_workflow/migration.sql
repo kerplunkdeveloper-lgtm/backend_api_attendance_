@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS "ShootSettlement" (
   "shootRequestId" TEXT NOT NULL,
   "attendanceId" TEXT,
   "shootDate" DATE NOT NULL,
+  "shootStart" TIMESTAMP(3),
+  "shootEnd" TIMESTAMP(3),
   "travelStart" TIMESTAMP(3),
   "travelEnd" TIMESTAMP(3),
   "returnedNextDay" BOOLEAN NOT NULL DEFAULT false,

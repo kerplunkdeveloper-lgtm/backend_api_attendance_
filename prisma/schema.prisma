@@ -163,6 +163,7 @@ model Organization {
   webhookDeliveries    WebhookDelivery[]
   ssoLoginCodes        SsoLoginCode[]
   lateComingLopRules   LateComingLopRule[]
+  companyPolicies      CompanyPolicy[]
   dayOffWorkRequests   DayOffWorkRequest[]
   shootRequests        ShootRequest[]
   workFromHomeRequests WorkFromHomeRequest[]
@@ -172,23 +173,23 @@ model Organization {
 // Punching is closed on those days. An employee who has to work anyway (a shoot, travel, client work)
 // asks for approval for that one date; HR or an admin approves it, and only then can they punch in.
 model DayOffWorkRequest {
-  id             String        @id @default(uuid())
-  organizationId String
-  employeeId     String
-  date           DateTime      @db.Date
-  dayKind        String // WEEK_OFF | HOLIDAY | COMPANY_LEAVE
-  reasonType     String // SHOOT | TRAVEL | CLIENT_VISIT | OTHER
-  note           String?
-  status         RequestStatus @default(PENDING)
-  reviewedBy     String?
-  reviewNote     String?
-  reviewedAt     DateTime?
-  cancellationRequested Boolean @default(false)
+  id                      String        @id @default(uuid())
+  organizationId          String
+  employeeId              String
+  date                    DateTime      @db.Date
+  dayKind                 String // WEEK_OFF | HOLIDAY | COMPANY_LEAVE
+  reasonType              String // SHOOT | TRAVEL | CLIENT_VISIT | OTHER
+  note                    String?
+  status                  RequestStatus @default(PENDING)
+  reviewedBy              String?
+  reviewNote              String?
+  reviewedAt              DateTime?
+  cancellationRequested   Boolean       @default(false)
   cancellationRequestedBy String?
   cancellationRequestedAt DateTime?
-  cancellationReviewNote String?
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  cancellationReviewNote  String?
+  createdAt               DateTime      @default(now())
+  updatedAt               DateTime      @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id])
   employee     Employee     @relation(fields: [employeeId], references: [id])
@@ -198,22 +199,22 @@ model DayOffWorkRequest {
 }
 
 model WorkFromHomeRequest {
-  id             String        @id @default(uuid())
-  organizationId String
-  employeeId     String
-  startDate      DateTime      @db.Date
-  endDate        DateTime      @db.Date
-  reason         String
-  status         RequestStatus @default(PENDING)
-  reviewedBy     String?
-  reviewNote     String?
-  reviewedAt     DateTime?
-  cancellationRequested Boolean @default(false)
+  id                      String        @id @default(uuid())
+  organizationId          String
+  employeeId              String
+  startDate               DateTime      @db.Date
+  endDate                 DateTime      @db.Date
+  reason                  String
+  status                  RequestStatus @default(PENDING)
+  reviewedBy              String?
+  reviewNote              String?
+  reviewedAt              DateTime?
+  cancellationRequested   Boolean       @default(false)
   cancellationRequestedBy String?
   cancellationRequestedAt DateTime?
-  cancellationReviewNote String?
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  cancellationReviewNote  String?
+  createdAt               DateTime      @default(now())
+  updatedAt               DateTime      @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id])
   employee     Employee     @relation(fields: [employeeId], references: [id])
@@ -225,25 +226,25 @@ model WorkFromHomeRequest {
 // Planned off-site shoot work. Approval is required before an employee can
 // punch in with SHOOT mode outside the office geofence on the requested date.
 model ShootRequest {
-  id             String        @id @default(uuid())
-  organizationId String
-  employeeId     String
-  date           DateTime      @db.Date
-  shootName      String
-  location       String
-  startTime      String // HH:mm, local organization time
-  endTime        String // HH:mm, local organization time
-  note           String?
-  status         RequestStatus @default(PENDING)
-  reviewedBy     String?
-  reviewNote     String?
-  reviewedAt     DateTime?
-  cancellationRequested Boolean @default(false)
+  id                      String        @id @default(uuid())
+  organizationId          String
+  employeeId              String
+  date                    DateTime      @db.Date
+  shootName               String
+  location                String
+  startTime               String // HH:mm, local organization time
+  endTime                 String // HH:mm, local organization time
+  note                    String?
+  status                  RequestStatus @default(PENDING)
+  reviewedBy              String?
+  reviewNote              String?
+  reviewedAt              DateTime?
+  cancellationRequested   Boolean       @default(false)
   cancellationRequestedBy String?
   cancellationRequestedAt DateTime?
-  cancellationReviewNote String?
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  cancellationReviewNote  String?
+  createdAt               DateTime      @default(now())
+  updatedAt               DateTime      @updatedAt
 
   organization Organization              @relation(fields: [organizationId], references: [id])
   employee     Employee                  @relation(fields: [employeeId], references: [id])
@@ -292,30 +293,30 @@ model Subscription {
 
 // ─── Attendance Policy (configurable per org) ─────────────────────────────────
 model AttendancePolicy {
-  id                          String   @id @default(uuid())
-  organizationId              String   @unique
-  workingDaysPerMonth         Int      @default(26) // Used in payroll calculation (Mon-Sat = 26 days)
-  probationMonths             Int      @default(3) // Paid leave and permission eligibility waiting period
-  monthlyPermissionHours      Decimal  @default(3.0) @db.Decimal(4, 1) // Monthly short-permission allowance
-  permissionRequiresProbation Boolean  @default(true)
-  payrollCycleStartDay        Int      @default(1) // Payroll period start day (1-31)
-  payrollCycleEndDay          Int      @default(31) // Payroll period end day (1-31, 31 = last day of month)
-  payrollDayBasis             String   @default("ACTUAL_DAYS") // ACTUAL_DAYS, FIXED_30, WORKING_DAYS
-  halfDayThresholdMinutes     Int      @default(240) // 4h = HALF_DAY trigger
-  maxLatesBeforeDeduction     Int      @default(3) // First N lates are free
-  lateDeductionPercent        Decimal  @default(0.25) @db.Decimal(4, 2) // % of daily rate per extra late
-  allowWfh                    Boolean  @default(true)
-  requireOtApproval           Boolean  @default(false) // OT must be approved before payroll
-  geofenceStrict              Boolean  @default(false) // When true, reject punches outside branch radius
-  requireTrustedDevice        Boolean  @default(false)
-  shootRecoveryEnabled        Boolean  @default(true)
-  shootRecoveryThresholdMinutes Int     @default(720) // 12 hours by default
-  shootTravelOtEnabled        Boolean  @default(true)
-  shootOtMultiplier            Decimal  @default(1.5) @db.Decimal(4, 2)
-  shootOtSalaryBasis           String   @default("BASE_SALARY") // BASE_SALARY or MONTHLY_CTC
-  weeklyOffDays               String   @default("0") // Company weekly off as CSV, 0 = Sunday ... 6 = Saturday. Default: Sunday off, Mon-Sat working
-  createdAt                   DateTime @default(now())
-  updatedAt                   DateTime @updatedAt
+  id                            String   @id @default(uuid())
+  organizationId                String   @unique
+  workingDaysPerMonth           Int      @default(26) // Used in payroll calculation (Mon-Sat = 26 days)
+  probationMonths               Int      @default(3) // Paid leave and permission eligibility waiting period
+  monthlyPermissionHours        Decimal  @default(3.0) @db.Decimal(4, 1) // Monthly short-permission allowance
+  permissionRequiresProbation   Boolean  @default(true)
+  payrollCycleStartDay          Int      @default(1) // Payroll period start day (1-31)
+  payrollCycleEndDay            Int      @default(31) // Payroll period end day (1-31, 31 = last day of month)
+  payrollDayBasis               String   @default("ACTUAL_DAYS") // ACTUAL_DAYS, FIXED_30, WORKING_DAYS
+  halfDayThresholdMinutes       Int      @default(240) // 4h = HALF_DAY trigger
+  maxLatesBeforeDeduction       Int      @default(3) // First N lates are free
+  lateDeductionPercent          Decimal  @default(0.25) @db.Decimal(4, 2) // % of daily rate per extra late
+  allowWfh                      Boolean  @default(true)
+  requireOtApproval             Boolean  @default(false) // OT must be approved before payroll
+  geofenceStrict                Boolean  @default(false) // When true, reject punches outside branch radius
+  requireTrustedDevice          Boolean  @default(false)
+  shootRecoveryEnabled          Boolean  @default(true)
+  shootRecoveryThresholdMinutes Int      @default(720) // 12 hours by default
+  shootTravelOtEnabled          Boolean  @default(true)
+  shootOtMultiplier             Decimal  @default(1.5) @db.Decimal(4, 2)
+  shootOtSalaryBasis            String   @default("BASE_SALARY") // BASE_SALARY or MONTHLY_CTC
+  weeklyOffDays                 String   @default("0") // Company weekly off as CSV, 0 = Sunday ... 6 = Saturday. Default: Sunday off, Mon-Sat working
+  createdAt                     DateTime @default(now())
+  updatedAt                     DateTime @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id])
 }
@@ -336,6 +337,36 @@ model LateComingLopRule {
 
   @@unique([organizationId, lateDays])
   @@index([organizationId, isActive])
+}
+
+// Company policy documents are separate from AttendancePolicy: this is the
+// employee-facing policy library (handbook, leave policy, code of conduct,
+// etc.), while AttendancePolicy contains machine-readable payroll settings.
+model CompanyPolicy {
+  id             String    @id @default(uuid())
+  organizationId String
+  title          String
+  description    String?
+  category       String    @default("GENERAL")
+  fileUrl        String
+  filePublicId   String?
+  fileName       String
+  mimeType       String
+  fileSize       Int?
+  isPublished    Boolean   @default(true)
+  publishedAt    DateTime?
+  archivedAt     DateTime?
+  uploadedById   String
+  updatedById    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  uploadedBy   User         @relation("CompanyPolicyUploadedBy", fields: [uploadedById], references: [id])
+  updatedBy    User?        @relation("CompanyPolicyUpdatedBy", fields: [updatedById], references: [id])
+
+  @@index([organizationId, isPublished, archivedAt])
+  @@index([organizationId, category])
 }
 
 model ShiftOverride {
@@ -418,40 +449,42 @@ model OvertimeRequest {
 // stay separate in JSON so each item can be reviewed without creating duplicate
 // expense/OT records before HR approves the settlement.
 model ShootSettlement {
-  id                         String        @id @default(uuid())
-  organizationId            String
-  employeeId                String
-  shootRequestId            String
-  attendanceId              String?
-  shootDate                 DateTime      @db.Date
-  travelStart                DateTime?
-  travelEnd                  DateTime?
-  returnedNextDay            Boolean       @default(false)
-  shootMinutes               Int           @default(0)
-  travelMinutes              Int           @default(0)
-  shootOvertimeMinutes      Int           @default(0)
-  travelOvertimeMinutes     Int           @default(0)
-  totalDutyMinutes          Int           @default(0)
-  recoveryLeaveEligible     Boolean       @default(false)
-  recoveryLeaveRequested    Boolean       @default(false)
-  recoveryLeaveStatus       RequestStatus?
-  recoveryLeaveDate         DateTime?     @db.Date
-  allowances                Json?
-  expenses                  Json?
-  employeeNote              String?
-  hrNote                    String?
-  approvedShootMinutes      Int?
-  approvedShootOtMinutes    Int?
-  approvedTravelOtMinutes  Int?
-  approvedAllowanceAmount   Decimal?      @db.Decimal(10, 2)
-  approvedExpenseAmount     Decimal?      @db.Decimal(10, 2)
-  overtimePay               Decimal?      @db.Decimal(10, 2)
-  status                    RequestStatus @default(PENDING)
-  payrollStatus             String        @default("NOT_READY") // NOT_READY, READY, PROCESSED
-  reviewedBy                String?
-  reviewedAt                DateTime?
-  createdAt                 DateTime      @default(now())
-  updatedAt                 DateTime      @updatedAt
+  id                      String         @id @default(uuid())
+  organizationId          String
+  employeeId              String
+  shootRequestId          String
+  attendanceId            String?
+  shootDate               DateTime       @db.Date
+  shootStart              DateTime?
+  shootEnd                DateTime?
+  travelStart             DateTime?
+  travelEnd               DateTime?
+  returnedNextDay         Boolean        @default(false)
+  shootMinutes            Int            @default(0)
+  travelMinutes           Int            @default(0)
+  shootOvertimeMinutes    Int            @default(0)
+  travelOvertimeMinutes   Int            @default(0)
+  totalDutyMinutes        Int            @default(0)
+  recoveryLeaveEligible   Boolean        @default(false)
+  recoveryLeaveRequested  Boolean        @default(false)
+  recoveryLeaveStatus     RequestStatus?
+  recoveryLeaveDate       DateTime?      @db.Date
+  allowances              Json?
+  expenses                Json?
+  employeeNote            String?
+  hrNote                  String?
+  approvedShootMinutes    Int?
+  approvedShootOtMinutes  Int?
+  approvedTravelOtMinutes Int?
+  approvedAllowanceAmount Decimal?       @db.Decimal(10, 2)
+  approvedExpenseAmount   Decimal?       @db.Decimal(10, 2)
+  overtimePay             Decimal?       @db.Decimal(10, 2)
+  status                  RequestStatus  @default(PENDING)
+  payrollStatus           String         @default("NOT_READY") // NOT_READY, READY, PROCESSED
+  reviewedBy              String?
+  reviewedAt              DateTime?
+  createdAt               DateTime       @default(now())
+  updatedAt               DateTime       @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
@@ -554,14 +587,16 @@ model User {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  organization    Organization   @relation(fields: [organizationId], references: [id])
-  employee        Employee?
-  notifications   Notification[]
-  pushSubscriptions PushSubscription[]
-  refreshTokens   RefreshToken[]
-  chatMemberships ChatMember[]
-  chatMessages    ChatMessage[]
-  ssoLoginCodes   SsoLoginCode[]
+  organization            Organization       @relation(fields: [organizationId], references: [id])
+  employee                Employee?
+  notifications           Notification[]
+  pushSubscriptions       PushSubscription[]
+  refreshTokens           RefreshToken[]
+  chatMemberships         ChatMember[]
+  chatMessages            ChatMessage[]
+  ssoLoginCodes           SsoLoginCode[]
+  uploadedCompanyPolicies CompanyPolicy[]    @relation("CompanyPolicyUploadedBy")
+  updatedCompanyPolicies  CompanyPolicy[]    @relation("CompanyPolicyUpdatedBy")
 
   // Scoped to the tenant: the same person may hold an account in more than one
   // workspace (consultants, agencies, or simply evaluating a second org).

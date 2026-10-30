@@ -33,17 +33,21 @@ class ShootSettlementService {
     const travelEnd = body.travelEnd ? new Date(body.travelEnd) : null;
     if (!travelStart || !travelEnd || Number.isNaN(travelStart.getTime()) || Number.isNaN(travelEnd.getTime()) || travelEnd <= travelStart) throw fail("Enter a valid travel start and end time.");
     const travelMinutes = minutesBetween(travelStart, travelEnd);
+    const shootStart = body.shootStart ? new Date(body.shootStart) : null;
+    const shootEnd = body.shootEnd ? new Date(body.shootEnd) : null;
+    if ((shootStart && Number.isNaN(shootStart.getTime())) || (shootEnd && Number.isNaN(shootEnd.getTime())) || (shootStart && shootEnd && shootEnd <= shootStart)) throw fail("Enter a valid shoot start and end time.");
     const returnedNextDay = boolean(body.returnedNextDay);
     const shootMinutesInput = Math.max(0, Math.round(number(body.shootMinutes)));
+    const shootMinutesFromRange = shootStart && shootEnd ? minutesBetween(shootStart, shootEnd) : 0;
     const returnedAttendance = await prisma.attendance.findFirst({ where: { employeeId: employee.id, organizationId, date: shootDate }, select: { id: true, checkIn: true, checkOut: true, overtimeMinutes: true, workingMinutes: true } });
     if (!returnedAttendance?.checkIn || !returnedAttendance?.checkOut) throw fail("Complete your Shoot Out before submitting this settlement.", 422);
-    const shootMinutes = shootMinutesInput || Math.max(0, Number(returnedAttendance.workingMinutes || 0));
+    const shootMinutes = shootMinutesFromRange || shootMinutesInput || Math.max(0, Number(returnedAttendance.workingMinutes || 0));
     if (!shootMinutes) throw fail("Add the total shoot working time.");
     const policy = await policyService.getPolicy(organizationId);
     const totalDutyMinutes = shootMinutes + travelMinutes;
     const recoveryLeaveEligible = Boolean(policy.shootRecoveryEnabled && returnedNextDay && totalDutyMinutes >= Number(policy.shootRecoveryThresholdMinutes || 720));
     const data = {
-      organizationId, employeeId: employee.id, shootRequestId: shootRequest.id, attendanceId: returnedAttendance.id || null, shootDate,
+      organizationId, employeeId: employee.id, shootRequestId: shootRequest.id, attendanceId: returnedAttendance.id || null, shootDate, shootStart, shootEnd,
       travelStart, travelEnd,
       returnedNextDay, shootMinutes, travelMinutes, shootOvertimeMinutes: Math.max(0, returnedAttendance.overtimeMinutes || 0),
       travelOvertimeMinutes: policy.shootTravelOtEnabled && !returnedNextDay ? travelMinutes : 0,

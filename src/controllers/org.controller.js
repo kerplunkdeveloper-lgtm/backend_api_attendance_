@@ -40,4 +40,16 @@ module.exports = {
       return sendControllerError(res, err);
     }
   },
+  async getOfferLetterTemplate(req, res) {
+    try {
+      const data = await orgService.getOfferLetterTemplate(req.user.organizationId);
+      return res.json({ success: true, data });
+    } catch (err) { return sendControllerError(res, err); }
+  },
+  async updateOfferLetterTemplate(req, res) {
+    try {
+      const data = await orgService.updateOfferLetterTemplate(req.user.organizationId, req.body);
+      return res.json({ success: true, message: "Offer letter template saved", data });
+    } catch (err) { return sendControllerError(res, err); }
+  },
 };
