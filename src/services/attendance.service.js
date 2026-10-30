@@ -149,10 +149,26 @@ const findOpenAttendance = async (employeeId, organizationId, at = new Date(), i
 const { policySelect } = require("../utils/prismaSelects");
 
 const getPolicy = async (organizationId) => {
-  const policy = await prisma.attendancePolicy.findUnique({
-    where: { organizationId },
-    select: policySelect,
-  });
+  let policy;
+  try {
+    policy = await prisma.attendancePolicy.findUnique({ where: { organizationId }, select: policySelect });
+  } catch (error) {
+    // Keep attendance, dashboard and leave eligibility usable while an older
+    // production database is waiting for the additive shoot-policy migration.
+    if (error?.code !== "P2022") throw error;
+    policy = await prisma.attendancePolicy.findUnique({
+      where: { organizationId },
+      select: {
+        workingDaysPerMonth: true,
+        halfDayThresholdMinutes: true,
+        maxLatesBeforeDeduction: true,
+        lateDeductionPercent: true,
+        allowWfh: true,
+        requireOtApproval: true,
+        geofenceStrict: true,
+      },
+    });
+  }
   return {
     workingDaysPerMonth: policy?.workingDaysPerMonth ?? 26,
     halfDayThresholdMinutes: policy?.halfDayThresholdMinutes ?? 240,
@@ -496,7 +512,13 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
     throw error;
   }
 
-  const formattedNote = workMode === "SHOOT" ? "SHOOT: " + String(punchNote || "").trim() : (note || (workMode !== "OFFICE" ? workMode.replace(/_/g, " ") : null));
+  // Keep the selected work mode alongside the optional note. The attendance
+  // table has one legacy wfhNote field, so a stable prefix prevents Travel and
+  // Client Visit from being mistaken for Remote/WFH in downstream views.
+  const cleanNote = String(note || punchNote || "").trim();
+  const formattedNote = workMode === "OFFICE"
+    ? (cleanNote || null)
+    : `${workMode}: ${cleanNote}`.trim();
   const checkInLocation = await resolvePunchLocation({
     locationLabel,
     latitude,

@@ -18,8 +18,50 @@ const DEFAULT_POLICY = {
   requireOtApproval: false,
   geofenceStrict: false,
   requireTrustedDevice: false,
+  shootRecoveryEnabled: true,
+  shootRecoveryThresholdMinutes: 720,
+  shootTravelOtEnabled: true,
+  shootOtMultiplier: 1.5,
+  shootOtSalaryBasis: "BASE_SALARY",
   weeklyOffDays: "0",
 };
+
+// Older production branches may not have the optional shoot-policy columns yet.
+// Keep the core policy pages readable while the additive migration is deployed.
+const LEGACY_POLICY_SELECT = {
+  id: true,
+  organizationId: true,
+  workingDaysPerMonth: true,
+  probationMonths: true,
+  monthlyPermissionHours: true,
+  permissionRequiresProbation: true,
+  payrollCycleStartDay: true,
+  payrollCycleEndDay: true,
+  payrollDayBasis: true,
+  halfDayThresholdMinutes: true,
+  maxLatesBeforeDeduction: true,
+  lateDeductionPercent: true,
+  allowWfh: true,
+  requireOtApproval: true,
+  geofenceStrict: true,
+  weeklyOffDays: true,
+  createdAt: true,
+  updatedAt: true,
+};
+
+const normalizePolicy = (policy, organizationId, isDefault = false) => ({
+  ...(policy || {}),
+  organizationId,
+  lateDeductionPercent: Number(policy?.lateDeductionPercent ?? DEFAULT_POLICY.lateDeductionPercent),
+  monthlyPermissionHours: Number(policy?.monthlyPermissionHours ?? DEFAULT_POLICY.monthlyPermissionHours),
+  leaveEligibilityActive: Boolean(policy?.permissionRequiresProbation ?? true),
+  shootRecoveryEnabled: Boolean(policy?.shootRecoveryEnabled ?? DEFAULT_POLICY.shootRecoveryEnabled),
+  shootRecoveryThresholdMinutes: Number(policy?.shootRecoveryThresholdMinutes ?? DEFAULT_POLICY.shootRecoveryThresholdMinutes),
+  shootTravelOtEnabled: Boolean(policy?.shootTravelOtEnabled ?? DEFAULT_POLICY.shootTravelOtEnabled),
+  shootOtMultiplier: Number(policy?.shootOtMultiplier ?? DEFAULT_POLICY.shootOtMultiplier),
+  shootOtSalaryBasis: String(policy?.shootOtSalaryBasis ?? DEFAULT_POLICY.shootOtSalaryBasis),
+  isDefault,
+});
 
 const parseBoolean = (value) => {
   if (typeof value === "boolean") return value;
@@ -32,22 +74,20 @@ class PolicyService {
    * Get the org attendance policy (returns defaults if not configured)
    */
   async getPolicy(organizationId) {
-    const policy = await prisma.attendancePolicy.findUnique({
-      where: { organizationId },
-      select: policySelect,
-    });
-
-    if (!policy) {
-      return { ...DEFAULT_POLICY, organizationId, leaveEligibilityActive: true, isDefault: true };
+    let policy;
+    try {
+      policy = await prisma.attendancePolicy.findUnique({ where: { organizationId }, select: policySelect });
+    } catch (error) {
+      if (error?.code !== "P2022") throw error;
+      policy = await prisma.attendancePolicy.findUnique({ where: { organizationId }, select: LEGACY_POLICY_SELECT });
+      return policy ? normalizePolicy(policy, organizationId) : normalizePolicy(DEFAULT_POLICY, organizationId, true);
     }
 
-    return {
-      ...policy,
-      lateDeductionPercent: Number(policy.lateDeductionPercent),
-      monthlyPermissionHours: Number(policy.monthlyPermissionHours),
-      leaveEligibilityActive: Boolean(policy.permissionRequiresProbation),
-      isDefault: false,
-    };
+    if (!policy) {
+      return normalizePolicy(DEFAULT_POLICY, organizationId, true);
+    }
+
+    return normalizePolicy(policy, organizationId);
   }
 
 
@@ -71,6 +111,11 @@ class PolicyService {
       requireOtApproval,
       geofenceStrict,
       requireTrustedDevice,
+      shootRecoveryEnabled,
+      shootRecoveryThresholdMinutes,
+      shootTravelOtEnabled,
+      shootOtMultiplier,
+      shootOtSalaryBasis,
       weeklyOffDays,
     } = data;
 
@@ -90,6 +135,11 @@ class PolicyService {
     if (requireOtApproval !== undefined) payload.requireOtApproval = parseBoolean(requireOtApproval);
     if (geofenceStrict !== undefined) payload.geofenceStrict = parseBoolean(geofenceStrict);
     if (requireTrustedDevice !== undefined) payload.requireTrustedDevice = parseBoolean(requireTrustedDevice);
+    if (shootRecoveryEnabled !== undefined) payload.shootRecoveryEnabled = parseBoolean(shootRecoveryEnabled);
+    if (shootRecoveryThresholdMinutes !== undefined) payload.shootRecoveryThresholdMinutes = boundedNumber("Shoot recovery threshold", shootRecoveryThresholdMinutes, { min: 1, max: 2880, integer: true });
+    if (shootTravelOtEnabled !== undefined) payload.shootTravelOtEnabled = parseBoolean(shootTravelOtEnabled);
+    if (shootOtMultiplier !== undefined) payload.shootOtMultiplier = boundedNumber("Shoot overtime multiplier", shootOtMultiplier, { min: 0, max: 5 });
+    if (shootOtSalaryBasis !== undefined) payload.shootOtSalaryBasis = ["BASE_SALARY", "MONTHLY_CTC"].includes(String(shootOtSalaryBasis)) ? String(shootOtSalaryBasis) : DEFAULT_POLICY.shootOtSalaryBasis;
     if (weeklyOffDays !== undefined) payload.weeklyOffDays = normalizeWeeklyOffDays(weeklyOffDays);
     const createPayload = { ...DEFAULT_POLICY, ...payload };
 
@@ -113,16 +163,27 @@ class PolicyService {
       policy = saved;
       shiftsUpdated = updated.count;
     } else {
-      policy = await save();
+      try {
+        policy = await save();
+      } catch (error) {
+        if (error?.code !== "P2022") throw error;
+        const legacyPayload = { ...payload };
+        delete legacyPayload.shootRecoveryEnabled;
+        delete legacyPayload.shootRecoveryThresholdMinutes;
+        delete legacyPayload.shootTravelOtEnabled;
+        delete legacyPayload.shootOtMultiplier;
+        delete legacyPayload.shootOtSalaryBasis;
+        policy = await prisma.attendancePolicy.upsert({
+          where: { organizationId },
+          update: legacyPayload,
+          create: { organizationId, ...legacyPayload },
+          select: LEGACY_POLICY_SELECT,
+        });
+        return normalizePolicy(policy, organizationId);
+      }
     }
 
-    return {
-      ...policy,
-      lateDeductionPercent: Number(policy.lateDeductionPercent),
-      monthlyPermissionHours: Number(policy.monthlyPermissionHours),
-      leaveEligibilityActive: Boolean(policy.permissionRequiresProbation),
-      ...(payload.weeklyOffDays !== undefined ? { shiftsUpdated } : {}),
-    };
+    return { ...normalizePolicy(policy, organizationId), ...(payload.weeklyOffDays !== undefined ? { shiftsUpdated } : {}) };
   }
   async listLateComingRules(organizationId) {
     const rules = await prisma.lateComingLopRule.findMany({ where: { organizationId }, orderBy: [{ lateDays: "asc" }, { createdAt: "asc" }] });

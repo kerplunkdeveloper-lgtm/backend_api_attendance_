@@ -1,0 +1,10 @@
+const express = require("express");
+const controller = require("../controllers/shoot-settlement.controller");
+const { authenticate, authorizeRoles } = require("../middleware/auth.middleware");
+const router = express.Router();
+router.use(authenticate);
+router.post("/", controller.create);
+router.get("/my", controller.mine);
+router.get("/", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"), controller.list);
+router.patch("/:id/review", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"), controller.review);
+module.exports = router;

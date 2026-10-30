@@ -2,7 +2,8 @@ const { assertCanReview, visibleToReviewer } = require("../utils/approvalChain")
 const prisma = require("../config/database");
 const { parsePagination } = require("../utils/pagination");
 const { evaluateAttendanceAgainstShift, calculateLateMinutes } = require("../utils/shiftCalculator");
-const { getOrgDateOnly, resolveShift } = require("./attendance.service");
+const { getOrgDateOnly, getOrgTimezone, resolveShift } = require("./attendance.service");
+const { DEFAULT_TIMEZONE } = require("../utils/datetime");
 const notificationService = require("./notification.service");
 
 const parseRequestedTimestamp = (value, fieldName) => {
@@ -16,6 +17,19 @@ const parseRequestedTimestamp = (value, fieldName) => {
     throw error;
   }
   return timestamp;
+};
+
+// Requested punch times are entered as the company's wall-clock time in the
+// employee form. Notifications must use the same organization timezone as the
+// approvals page, never the backend machine's timezone (often UTC).
+const formatOrganizationTime = (value, timeZone) => {
+  const date = new Date(value);
+  const options = { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: timeZone || DEFAULT_TIMEZONE };
+  try {
+    return new Intl.DateTimeFormat("en-IN", options).format(date);
+  } catch {
+    return new Intl.DateTimeFormat("en-IN", { ...options, timeZone: DEFAULT_TIMEZONE }).format(date);
+  }
 };
 
 const assertPayrollMonthUnlocked = async (organizationId, date) => {
@@ -148,8 +162,10 @@ class CorrectionService {
     });
 
     // Admins and HR are told straight away with clear punch times & reason.
-    const inTimeStr = checkIn ? new Date(checkIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null;
-    const outTimeStr = checkOut ? new Date(checkOut).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null;
+    // Use the organization's timezone so this matches the approval page.
+    const organizationTimezone = await getOrgTimezone(organizationId);
+    const inTimeStr = checkIn ? formatOrganizationTime(checkIn, organizationTimezone) : null;
+    const outTimeStr = checkOut ? formatOrganizationTime(checkOut, organizationTimezone) : null;
     const timesPart = inTimeStr && outTimeStr
       ? `(Check-in: ${inTimeStr}, Check-out: ${outTimeStr})`
       : inTimeStr

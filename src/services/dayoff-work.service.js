@@ -2,6 +2,7 @@ const prisma = require("../config/database");
 const { assertCanReview, visibleToReviewer, ADMIN_ROLES } = require("../utils/approvalChain");
 const { parsePagination } = require("../utils/pagination");
 const { getDayOff, getOrgDateOnly } = require("./attendance.service");
+const webPushService = require("./web-push.service");
 
 const REASONS = {
   SHOOT: "Shoot",
@@ -22,13 +23,14 @@ const fail = (message, statusCode = 400, code) => {
 const dateLabel = (date) =>
   new Date(date).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "short", timeZone: "UTC" });
 
-const notifyMany = async (organizationId, userIds, title, message) => {
+const notifyMany = async (organizationId, userIds, title, message, type = "ATTENDANCE") => {
   const ids = [...new Set(userIds.filter(Boolean))];
   if (!ids.length) return;
   try {
     await prisma.notification.createMany({
-      data: ids.map((userId) => ({ organizationId, userId, title, message, type: "ATTENDANCE" })),
+      data: ids.map((userId) => ({ organizationId, userId, title, message, type })),
     });
+    void webPushService.sendToUsers(ids.map((userId) => ({ userId, title, message, type })));
   } catch (err) {
     // A failed notification must never undo the request itself.
     console.warn("[DayOffWork] notification failed:", err.message);
@@ -65,8 +67,8 @@ class DayOffWorkService {
       ? await prisma.dayOffWorkRequest.update({ where: { id: existing.id }, data })
       : await prisma.dayOffWorkRequest.create({ data: { organizationId, employeeId: employee.id, date, ...data } });
 
-    // HR and admins review an employee's request; only admins review an HR or admin's own request.
-    const reviewerRoles = employee.user?.role === "EMPLOYEE" ? ["COMPANY_ADMIN", "MANAGER"] : ["COMPANY_ADMIN"];
+    // Employee requests go to HR and admins; HR/admin requests remain admin-only.
+    const reviewerRoles = employee.user?.role === "EMPLOYEE" ? ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"] : ["SUPER_ADMIN", "COMPANY_ADMIN"];
     const reviewers = await prisma.user.findMany({
       where: { organizationId, isActive: true, role: { in: reviewerRoles }, id: { not: userId } },
       select: { id: true },
@@ -75,8 +77,9 @@ class DayOffWorkService {
     await notifyMany(
       organizationId,
       reviewers.map((u) => u.id),
-      "Day-off work request",
-      `${name} wants to work on ${dateLabel(date)} (${KIND_LABEL[dayOff.kind]}): ${REASONS[reason]}${cleanNote ? ` - ${cleanNote}` : ""}.`,
+      reason === "SHOOT" ? "Shoot approval required" : "Day-off work approval required",
+      `${name} wants to work on ${dateLabel(date)} (${KIND_LABEL[dayOff.kind]}): ${REASONS[reason]}${cleanNote ? ` - ${cleanNote}` : ""}. Open Approvals to review it.`,
+      "APPROVAL",
     );
 
     return request;
