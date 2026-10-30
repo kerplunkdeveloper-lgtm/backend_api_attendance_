@@ -1662,6 +1662,14 @@ const getAllAttendance = async (organizationId, query = {}) => {
         branch: { select: { id: true, name: true } },
         shift: { select: { id: true, name: true, startTime: true, endTime: true } },
         events: true,
+        // The attendance table must know whether overtime is pending or
+        // approved; otherwise it can display the raw calculated minutes before
+        // a reviewer has approved them.
+        overtimeRequests: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          select: { id: true, status: true, requestedMinutes: true, approvedMinutes: true, reviewNote: true },
+        },
       },
       orderBy: { date: "desc" },
       take,
