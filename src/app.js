@@ -22,6 +22,7 @@ const attendanceRoutes = require("./routes/attendance.routes");
 const correctionRoutes = require("./routes/correction.routes");
 const dayOffWorkRoutes = require("./routes/dayoff-work.routes");
 const shootRequestRoutes = require("./routes/shoot-request.routes");
+const shootSettlementRoutes = require("./routes/shoot-settlement.routes");
 const leaveRoutes = require("./routes/leave.routes");
 const workFromHomeRoutes = require("./routes/work-from-home.routes");
 const permissionRoutes = require("./routes/permission.routes");
@@ -163,6 +164,7 @@ app.use("/api/attendance/regularizations", correctionRoutes);
 app.use("/api/corrections", correctionRoutes);
 app.use("/api/attendance/day-off-work", dayOffWorkRoutes);
 app.use("/api/attendance/shoot-requests", shootRequestRoutes);
+app.use("/api/attendance/shoot-settlements", shootSettlementRoutes);
 app.use("/api/attendance", attendanceRoutes);
 app.use("/api/leaves", leaveRoutes);
 app.use("/api/work-from-home", workFromHomeRoutes);
@@ -210,6 +212,7 @@ app.use("/attendance", attendanceRoutes);
 // Keep the feature routers mounted at both their canonical API paths and the
 // legacy /attendance paths used by older browser bundles.
 app.use("/attendance/shoot-requests", shootRequestRoutes);
+app.use("/attendance/shoot-settlements", shootSettlementRoutes);
 app.use("/attendance/permissions", permissionRoutes);
 app.use("/attendance/company-leaves", companyLeaveRoutes);
 app.use("/permissions", permissionRoutes);

@@ -134,6 +134,7 @@ class NotificationService {
           type,
         })),
       });
+      void webPushService.sendToUsers(reviewers.map((reviewer) => ({ userId: reviewer.id, title, message: `${who} ${summary}`, type })));
       return reviewers.length;
     } catch (error) {
       console.warn("[ReviewerNotification] Could not notify reviewers:", error.message);

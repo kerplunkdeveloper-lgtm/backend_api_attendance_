@@ -349,6 +349,21 @@ class PayrollService {
       );
     }
 
+    // Shoot settlements are deliberately separate from attendance overtime. They
+    // enter payroll only after HR approves the settlement and marks it READY.
+    let approvedShootSettlements = [];
+    try {
+      approvedShootSettlements = await prisma.shootSettlement.findMany({
+        where: { organizationId, employeeId, status: "APPROVED", payrollStatus: "READY", shootDate: { gte: period.start, lte: period.end } },
+        select: { id: true, approvedShootOtMinutes: true, approvedTravelOtMinutes: true, approvedAllowanceAmount: true, approvedExpenseAmount: true },
+      });
+    } catch (error) {
+      // A rollout may deploy the payroll code before the additive settlement table.
+      // Keep existing payroll usable until the migration is applied.
+      if (error?.code !== "P2021" && error?.code !== "P2022") throw error;
+    }
+    totalOvertimeMinutes += approvedShootSettlements.reduce((sum, row) => sum + Number(row.approvedShootOtMinutes || 0) + Number(row.approvedTravelOtMinutes || 0), 0);
+
     const overtimeHours = Math.round((totalOvertimeMinutes / 60) * 10) / 10;
     const overtimePay = money.multiply(
       money.multiply(hourlyRate, overtimeHours),
@@ -405,7 +420,8 @@ class PayrollService {
       },
     });
 
-    const reimbursements = money.sum(...approvedExpenses.map((exp) => exp.amount));
+    const shootReimbursements = approvedShootSettlements.reduce((sum, row) => sum + Number(row.approvedAllowanceAmount || 0) + Number(row.approvedExpenseAmount || 0), 0);
+    const reimbursements = money.sum(...approvedExpenses.map((exp) => exp.amount), shootReimbursements);
 
     const loanService = require("./loan.service");
     const loanPreview = await loanService.recoverForPayroll({
@@ -491,6 +507,7 @@ class PayrollService {
         category: e.category,
         date: e.date,
       })),
+      approvedShootSettlements: approvedShootSettlements.map((settlement) => ({ id: settlement.id })),
       netSalary,
     };
   }
@@ -598,6 +615,10 @@ class PayrollService {
           where: { organizationId, payslipId: existingPayslip.id },
           data: { payslipId: null, status: "APPROVED" },
         });
+        await prisma.shootSettlement.updateMany({
+          where: { organizationId, employeeId: emp.id, payrollStatus: "PROCESSED", shootDate: { gte: new Date(Date.UTC(y, m - 1, 1)), lte: new Date(Date.UTC(y, m, 0, 23, 59, 59, 999)) } },
+          data: { payrollStatus: "READY" },
+        });
       }
 
       let payroll;
@@ -678,6 +699,11 @@ class PayrollService {
               status: "PAID",
             },
           });
+        }
+
+        const settlementIds = payroll.approvedShootSettlements?.map((settlement) => settlement.id) || [];
+        if (settlementIds.length) {
+          await tx.shootSettlement.updateMany({ where: { id: { in: settlementIds }, organizationId, payrollStatus: "READY" }, data: { payrollStatus: "PROCESSED" } });
         }
 
         const loanService = require("./loan.service");

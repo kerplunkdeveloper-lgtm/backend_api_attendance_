@@ -1,5 +1,6 @@
 const prisma = require("../config/database");
 const { visibleToReviewer } = require("../utils/approvalChain");
+const notificationService = require("./notification.service");
 const SHOOT_REVIEWER_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"];
 const assertShootReviewer = (role) => { if (!SHOOT_REVIEWER_ROLES.includes(role)) throw fail("Only HR, managers or admins can review shoot requests.", 403); };
 const { parsePagination } = require("../utils/pagination");
@@ -11,13 +12,14 @@ const clean = (value, max = MAX) => String(value || "").trim().slice(0, max);
 
 const getShootDate = async (organizationId, value) => { const org = await prisma.organization.findUnique({ where: { id: organizationId }, select: { timezone: true } }); return getLocalDateOnly(value, org?.timezone || DEFAULT_TIMEZONE); };
 const dateLabel = (date) => new Date(date).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "short", timeZone: "UTC" });
-const notify = async (organizationId, userIds, title, message) => { const ids = [...new Set((userIds || []).filter(Boolean))]; if (!ids.length) return; try { await prisma.notification.createMany({ data: ids.map((userId) => ({ organizationId, userId, title, message, type: "ATTENDANCE" })) }); } catch (err) { console.warn("[ShootRequest] notification failed:", err.message); } };
+const notify = async (organizationId, userIds, title, message, type = "ATTENDANCE") => { const ids = [...new Set((userIds || []).filter(Boolean))]; if (!ids.length) return; try { const result = await prisma.notification.createMany({ data: ids.map((userId) => ({ organizationId, userId, title, message, type })) }); if (type !== "APPROVAL") return; } catch (err) { console.warn("[ShootRequest] notification failed:", err.message); } };
 class ShootRequestService {
   async create(userId, organizationId, body = {}) {
     const date = await getShootDate(organizationId, new Date(body.date));
     if (!body.date || Number.isNaN(date.getTime())) throw fail("A valid shoot date is required.");
     const shootName = clean(body.shootName, 120), location = clean(body.location, 180), note = clean(body.note);
-    const startTime = "00:00", endTime = "23:59";
+    const startTime = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(body.startTime || "")) ? String(body.startTime) : "00:00";
+    const endTime = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(body.endTime || "")) ? String(body.endTime) : "23:59";
     if (!shootName || !location) throw fail("Shoot name and location are required.");
     const requester = await prisma.employee.findFirst({ where: { userId, organizationId, deletedAt: null }, include: { user: { select: { role: true } } } });
     if (!requester) throw fail("Active employee profile not found.", 404);
@@ -36,10 +38,13 @@ class ShootRequestService {
       await tx.shootRequestParticipant.createMany({ data: requestedIds.map((employeeId) => ({ shootRequestId: row.id, employeeId })) });
       return tx.shootRequest.findUnique({ where: { id: row.id }, include: { participants: { include: { employee: { select: { id: true, firstName: true, lastName: true } } } } } });
     });
-    const reviewerRoles = requester.user?.role === "EMPLOYEE" ? ["COMPANY_ADMIN", "MANAGER", "HR"] : ["COMPANY_ADMIN", "HR"];
-    const reviewers = await prisma.user.findMany({ where: { organizationId, isActive: true, role: { in: reviewerRoles }, id: { not: userId } }, select: { id: true } });
-    const names = employees.map((e) => `${e.firstName} ${e.lastName || ""}`.trim()).join(", ");
-    await notify(organizationId, reviewers.map((u) => u.id), "Shoot request", `${names} requested ${shootName} on ${dateLabel(date)} at ${location}.`);
+    await notificationService.notifyReviewersOfRequest({
+      organizationId,
+      employeeId: requester.id,
+      title: "Shoot approval required",
+      summary: `requested ${shootName} on ${dateLabel(date)} at ${location}. Open Approvals to review it.`,
+      type: "APPROVAL",
+    });
     return request;
   }
 
