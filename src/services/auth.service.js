@@ -187,7 +187,15 @@ const register = async ({
         },
       });
 
-      const defaultDepts = ["Management", "Human Resources", "Engineering", "Operations", "Sales"];
+      const defaultDepts = [
+        "IT",
+        "Non-IT",
+        "Digital Marketing",
+        "Human Resources",
+        "Finance & Accounts",
+        "Sales & Business Development",
+        "Operations",
+      ];
       for (const dName of defaultDepts) {
         await prisma.department.create({
           data: { organizationId: finalOrgId, name: dName },

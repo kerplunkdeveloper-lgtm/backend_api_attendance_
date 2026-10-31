@@ -169,7 +169,7 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
   }
   await assertLoginEmailsFree(organizationId, [cleanEmail, profile.personalEmail]);
 
-  const userRole = resolveAssignableRole(role, actorRole, { allowManagerRole: actorRole === "MANAGER" && (await hasRolesAccess(organizationId, actorRole)) === true });
+  const userRole = resolveAssignableRole(role, actorRole, { allowManagerRole: ["MANAGER", "HR"].includes(actorRole) && (await hasRolesAccess(organizationId, actorRole)) === true });
 
   const org = await prisma.organization.findUnique({
     where: { id: organizationId },
@@ -875,7 +875,7 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
   const salt = await bcrypt.genSalt(10);
   const passwordHash = await bcrypt.hash(tempPassword, salt);
 
-  const userRole = resolveAssignableRole(role, actorRole, { allowManagerRole: actorRole === "MANAGER" && (await hasRolesAccess(organizationId, actorRole)) === true });
+  const userRole = resolveAssignableRole(role, actorRole, { allowManagerRole: ["MANAGER", "HR"].includes(actorRole) && (await hasRolesAccess(organizationId, actorRole)) === true });
   // HR uses the same company-wide employee-code sequence as every other employee.
   const employeeCode = data.employeeCode?.trim() || await getNextEmployeeCode(organizationId, prisma, userRole, org.name, profile.dateOfJoining);
   const avatarUrl = resolveAvatarUrl({
@@ -1255,7 +1255,7 @@ const bulkImportEmployees = async (organizationId, employeesList, actorRole = "C
     takenEmails.add(r.email); // also catches duplicate rows inside the file
 
     try {
-      r.userRole = resolveAssignableRole(r.rawRole === "MANAGER" ? "MANAGER" : "EMPLOYEE", actorRole);
+      r.userRole = resolveAssignableRole(["MANAGER", "HR"].includes(r.rawRole) ? r.rawRole : "EMPLOYEE", actorRole);
     } catch (err) {
       results.push({ row: r.row, email: r.email, status: "FAILED", reason: err.message });
       continue;

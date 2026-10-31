@@ -3,7 +3,7 @@ const ADMIN_BACKDATE_MS = 7 * 24 * 60 * 60 * 1000;
 const FUTURE_SKEW_MS = 5 * 60 * 1000;
 const DEVICE_SKEW_MS = 15 * 60 * 1000;
 
-const ADMIN_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"];
+const ADMIN_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"];
 
 /**
  * Rejects punch timestamps that are too far in the future or too far back.

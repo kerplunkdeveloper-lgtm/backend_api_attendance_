@@ -82,13 +82,13 @@ describe("punching in on a day off", () => {
     assert.match(res.message, /late/i);
   });
 
-  it("works on an approved leave day, with no late mark and an overtime message", async () => {
+  it("blocks an employee punch-in on an approved leave day", async () => {
     leave = { id: "l-1", status: "APPROVED" };
-    const res = await punch();
-    assert.equal(res.success, true);
-    assert.equal(res.attendance.lateMinutes, 0);
-    assert.match(res.message, /Approved Leave Day/);
-    assert.match(res.message, /Overtime/);
+    await assert.rejects(
+      () => punch(),
+      (e) => e.statusCode === 403 && e.code === "APPROVED_LEAVE_BLOCKED" && /Punch-in is disabled/.test(e.message),
+    );
+    assert.equal(saved, null);
   });
 
   it("is closed on a company holiday until HR or an admin approves work, and says why", async () => {
@@ -130,16 +130,15 @@ describe("punching in on a day off", () => {
     assert.equal(res.success, true);
   });
 
-  it("personal approved leave is not closed: that person may still choose to work", async () => {
+  it("blocks personal approved leave even when the employee selects WFH", async () => {
     leave = { id: "l-1", status: "APPROVED" };
-    const res = await punch();
-    assert.equal(res.success, true);
+    await assert.rejects(() => punch(), (e) => e.code === "APPROVED_LEAVE_BLOCKED");
   });
 
   it("still refuses a second punch-in on the same leave day", async () => {
     leave = { id: "l-1", status: "APPROVED" };
     existing = { id: "att-1", checkIn: new Date("2026-10-26T04:00:00Z"), events: [] };
-    await assert.rejects(() => punch(), /Already punched in/);
+    await assert.rejects(() => punch(), (e) => e.code === "APPROVED_LEAVE_BLOCKED");
   });
 });
 

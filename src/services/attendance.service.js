@@ -1,6 +1,6 @@
 const prisma = require("../config/database");
 const { WORKING_STATUSES } = require("../utils/employeeStatus");
-const { verifyGeofence, officeOnlyRejection } = require("../utils/geofence");
+const { verifyGeofence, officeOnlyRejection, hasCoordinatePair } = require("../utils/geofence");
 
 // Work modes that are, by definition, away from the office. They are exempt
 // from "office only" punch-in (WFH still needs policy.allowWfh).
@@ -22,6 +22,24 @@ const { assertPunchTimestamp } = require("../utils/punchTime");
 const { parsePagination } = require("../utils/pagination");
 const { resolvePunchLocation } = require("../utils/reverseGeocode");
 const shootRequestService = require("./shoot-request.service");
+const notificationService = require("./notification.service");
+
+// A configured late-coming rule is the company's source of truth for grace.
+// Fall back to the shift value for older organizations with no rule yet.
+const getLateGraceMinutes = async (organizationId, fallback = 10) => {
+  if (!prisma.lateComingLopRule?.findFirst) return fallback;
+  try {
+    const rule = await prisma.lateComingLopRule.findFirst({
+      where: { organizationId, isActive: true },
+      orderBy: [{ lateDays: "asc" }, { createdAt: "asc" }],
+      select: { graceMinutes: true },
+    });
+    return rule && Number.isInteger(Number(rule.graceMinutes)) ? Number(rule.graceMinutes) : fallback;
+  } catch (error) {
+    if (error?.code === "P2021" || error?.code === "P2022") return fallback;
+    throw error;
+  }
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -48,7 +66,7 @@ const timezoneCache = new Map();
  */
 const branchNameIfInside = (branch, latitude, longitude) => {
   if (!branch?.name) return undefined;
-  if (latitude == null || longitude == null || !branch.latitude || !branch.longitude) return branch.name;
+  if (latitude == null || longitude == null || !hasCoordinatePair(branch)) return branch.name;
   try {
     const check = verifyGeofence({ latitude, longitude }, { latitude: branch.latitude, longitude: branch.longitude, radiusMeters: branch.radiusMeters });
     return check.isInside || check.bypassed ? branch.name : undefined;
@@ -182,7 +200,7 @@ const getPolicy = async (organizationId) => {
   };
 };
 
-const ADMIN_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"];
+const ADMIN_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"];
 
 /**
  * Finds the employee a request acts on.
@@ -293,6 +311,16 @@ const assertTrustedDevice = async (employee, organizationId, policy, deviceId) =
 /** True when an admin is recording a punch for another person, not for themselves. */
 const isOnBehalf = (employee, userId) => Boolean(userId && employee?.userId && employee.userId !== userId);
 
+const assertPersonalLeaveDoesNotBlockAdmin = ({ approvedLeave, employee, userId, actorRole }) => {
+  if (!approvedLeave || (isOnBehalf(employee, userId) && ADMIN_ROLES.includes(actorRole))) return;
+  const leaveName = approvedLeave.leaveType?.name || "approved leave";
+  const error = new Error(`Punch-in is disabled today because your ${leaveName} was approved. If you need to work, ask HR or an admin to cancel the leave first.`);
+  error.statusCode = 403;
+  error.code = "APPROVED_LEAVE_BLOCKED";
+  error.leave = { title: leaveName };
+  throw error;
+};
+
 /**
  * A punch is only saved with a captured GPS position, so the record always says where the person was.
  * Not required for an admin recording a punch for someone else, or for biometric / device punches, which have
@@ -359,6 +387,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
         startDate: { lte: today },
         endDate: { gte: today },
       },
+      include: { leaveType: { select: { name: true } } },
     }),
     prisma.companyLeave.findFirst({
       where: {
@@ -376,6 +405,8 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
   const isHoliday = Boolean(holiday);
   const isOnLeave = Boolean(approvedLeave);
   const isOvertimeShift = isOffDay || isHoliday || isOnLeave;
+
+  assertPersonalLeaveDoesNotBlockAdmin({ approvedLeave, employee, userId, actorRole });
 
   // Weekly off, holiday and company leave are closed for punching unless HR or an admin approved work today.
   await assertDayOffWorkApproved({
@@ -406,7 +437,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
     isBypassed = true;
     bypassReason = source === "BIOMETRIC" ? "BIOMETRIC_DEVICE" : "DEVICE";
     geofenceResult = { isInside: true, distanceMeters: 0, allowedRadiusMeters: 0, bypassed: true };
-  } else if (matchedBranch?.latitude && matchedBranch?.longitude) {
+  } else if (hasCoordinatePair(matchedBranch)) {
     try {
       geofenceResult = verifyGeofence(
         { latitude, longitude },
@@ -423,7 +454,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
 
   // Multi-branch roaming fallback
   const allBranches = await prisma.branch.findMany({ where: { organizationId } });
-  const branchesWithCoords = allBranches.filter((b) => b.latitude && b.longitude);
+  const branchesWithCoords = allBranches.filter(hasCoordinatePair);
 
   if (!geofenceResult || (!geofenceResult.isInside && !geofenceResult.bypassed)) {
     for (const b of branchesWithCoords) {
@@ -448,7 +479,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
   }
 
   // If neither the employee branch nor any organization branch has GPS coordinates configured:
-  if (!matchedBranch?.latitude && branchesWithCoords.length === 0) {
+  if (!hasCoordinatePair(matchedBranch) && branchesWithCoords.length === 0) {
     isBypassed = true;
     bypassReason = "NO_BRANCH_GPS_CONFIGURED";
     geofenceResult = {
@@ -494,7 +525,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
 
   // If working on rest day/leave/holiday, late does not penalize the employee
   if (!isOvertimeShift && shift) {
-    lateMinutes = calculateLateMinutes(shift.startTime, shift.graceMinutes, checkInTime);
+    lateMinutes = calculateLateMinutes(shift.startTime, await getLateGraceMinutes(organizationId, shift.graceMinutes), checkInTime);
     if (lateMinutes > 0 && status !== "WORK_FROM_HOME") status = "LATE";
   }
 
@@ -655,6 +686,7 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
         startDate: { lte: today },
         endDate: { gte: today },
       },
+      include: { leaveType: { select: { name: true } } },
     }),
     prisma.companyLeave.findFirst({
       where: {
@@ -672,6 +704,8 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
   const isHoliday = Boolean(holiday);
   const isOnLeave = Boolean(approvedLeave);
   const isOvertimeShift = isOffDay || isHoliday || isOnLeave;
+
+  assertPersonalLeaveDoesNotBlockAdmin({ approvedLeave, employee, userId, actorRole });
 
   await assertDayOffWorkApproved({
     employee,
@@ -703,7 +737,7 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
 
   let lateMinutes = 0;
   if (!isOvertimeShift && shift) {
-    lateMinutes = calculateLateMinutes(shift.startTime, shift.graceMinutes, checkInTime);
+    lateMinutes = calculateLateMinutes(shift.startTime, await getLateGraceMinutes(organizationId, shift.graceMinutes), checkInTime);
   }
 
   const checkInLocation = await resolvePunchLocation({
@@ -907,7 +941,7 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
       isNonWorkingDay: true,
     };
   } else if (shift) {
-    metrics = evaluateAttendanceAgainstShift(shift, attendance.checkIn, checkOutTime, totalBreakMinutes, {
+    metrics = evaluateAttendanceAgainstShift({ ...shift, graceMinutes: await getLateGraceMinutes(organizationId, shift.graceMinutes) }, attendance.checkIn, checkOutTime, totalBreakMinutes, {
       timeZone: timezone,
       lunchMinutes: totalLunchMinutes,
       halfDayThresholdMinutes: policy.halfDayThresholdMinutes,
@@ -1084,6 +1118,18 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
     : metrics.lateArrivalWaived
     ? `Punched out. ${metrics.workingFormatted} logged (Full shift completed — late arrival waived).`
     : `Punched out. Working: ${metrics.workingFormatted}, Breaks: ${metrics.breakFormatted || "0m"}`;
+
+  // Checkout-created overtime requests must reach HR/admin reviewers just
+  // like manually submitted overtime requests. The minutes remain zero on
+  // attendance until approval, so they cannot enter payroll early.
+  if (metrics.pendingOvertimeMinutes > 0) {
+    void notificationService.notifyReviewersOfRequest({
+      organizationId,
+      employeeId: employee.id,
+      title: "New overtime request",
+      summary: `requested ${metrics.pendingOvertimeMinutes} minute(s) of overtime from the punch-out record.`,
+    });
+  }
 
   return {
     success: true,
@@ -1364,14 +1410,14 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Why today is a day off for this employee, for the punch screen: a holiday or a company leave
- * (for example Diwali) set by admin or HR. Null on a normal working day.
+ * Why today is a day off for this employee, for the punch screen: approved personal leave,
+ * a holiday or company leave (for example Diwali) set by admin or HR. Null on a normal working day.
  */
 const weekdayName = (at, timezone) => new Intl.DateTimeFormat("en-IN", { weekday: "long", timeZone: timezone }).format(at);
 
 /**
- * Why today is a day off for this employee, if it is: a company holiday, company leave, or their weekly off.
- * Personal approved leave is not included on purpose: that person may still choose to work.
+ * Why today is a day off for this employee, if it is: approved personal leave, a company holiday,
+ * company leave, or their weekly off.
  */
 const getDayOff = async (organizationId, employee, at = new Date()) => {
   const timezone = await getOrgTimezone(organizationId);
@@ -1450,7 +1496,7 @@ const getTodayStatus = async (userId, organizationId) => {
   }
 
   const todayDate = await getOrgDateOnly(organizationId, new Date());
-  const [attendance, policy, dayOffBase, workRequest, approvedShoot] = await Promise.all([
+  const [attendance, policy, dayOffBase, workRequest, approvedShoot, approvedLeaveToday] = await Promise.all([
     findOpenAttendance(employee.id, organizationId, new Date(), {
       shift: true,
       branch: true,
@@ -1466,10 +1512,19 @@ const getTodayStatus = async (userId, organizationId) => {
       where: { organizationId, date: todayDate, status: "APPROVED", participants: { some: { employeeId: employee.id } } },
       select: { id: true, shootName: true, location: true, startTime: true, endTime: true },
     }),
+    prisma.leaveRequest.findFirst({
+      where: { employeeId: employee.id, status: "APPROVED", startDate: { lte: todayDate }, endDate: { gte: todayDate } },
+      select: { leaveType: { select: { name: true, isPaid: true } } },
+    }),
   ]);
   // Someone already punched in (an approved day of work, or an admin marked them) is never locked out of punching out.
-  const dayOff = dayOffBase
-    ? { kind: dayOffBase.kind, title: dayOffBase.title, reason: dayOffBase.reason, isPaid: dayOffBase.isPaid, workRequest: workRequest || null, canPunch: workRequest?.status === "APPROVED" }
+  const personalLeaveDay = approvedLeaveToday
+    ? { kind: "PERSONAL_LEAVE", title: approvedLeaveToday.leaveType?.name || "Approved leave", reason: null, isPaid: approvedLeaveToday.leaveType?.isPaid ?? true }
+    : null;
+  const dayOff = personalLeaveDay
+    ? { ...personalLeaveDay, workRequest: null, canPunch: false }
+    : dayOffBase
+    ? { kind: dayOffBase.kind, title: dayOffBase.title, reason: dayOffBase.reason, isPaid: dayOffBase.isPaid, workRequest: dayOffBase.kind === "PERSONAL_LEAVE" ? null : workRequest || null, canPunch: dayOffBase.kind !== "PERSONAL_LEAVE" && workRequest?.status === "APPROVED" }
     : null;
 
   const hasCheckedIn = Boolean(attendance?.checkIn);
@@ -1495,6 +1550,7 @@ const getTodayStatus = async (userId, organizationId) => {
     clockedIn,
     isOnBreak,
     activePauseType,
+    activePauseStartedAt: isOnBreak ? activePauseEvent.timestamp : null,
     isWorkFromHome,
     totalBreakMinutes: attendance?.breakMinutes || 0,
     totalLunchMinutes: attendance?.lunchMinutes || 0,
@@ -1515,7 +1571,7 @@ const getTodayStatus = async (userId, organizationId) => {
       mode: policy.geofenceStrict ? "OFFICE_ONLY" : "ANYWHERE",
       allowWfh: policy.allowWfh,
       branchName: employee.branch?.name || null,
-      radiusMeters: employee.branch?.latitude && employee.branch?.longitude ? employee.branch.radiusMeters || 200 : null,
+      radiusMeters: hasCoordinatePair(employee.branch) ? employee.branch.radiusMeters || 200 : null,
     },
     attendance,
   };

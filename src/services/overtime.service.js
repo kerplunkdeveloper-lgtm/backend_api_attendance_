@@ -5,6 +5,19 @@ const { assertCanReview, visibleToReviewer } = require("../utils/approvalChain")
 const webhookService = require("./webhook.service");
 
 class OvertimeService {
+  /** Parse a calendar date without allowing the server timezone to shift it. */
+  async _attendanceDate(organizationId, value) {
+    const raw = String(value || "").trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      const [year, month, day] = raw.split("-").map(Number);
+      const date = new Date(Date.UTC(year, month - 1, day));
+      if (date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day) return date;
+    }
+    const instant = new Date(value);
+    if (Number.isNaN(instant.getTime())) return null;
+    return getOrgDateOnly(organizationId, instant);
+  }
+
   /**
    * Minutes of overtime an employee may legitimately claim for a punch record.
    *
@@ -41,16 +54,28 @@ class OvertimeService {
     }
 
     if (!attendanceId && date) {
-      const dateOnly = await getOrgDateOnly(organizationId, new Date(date));
+      const dateOnly = await this._attendanceDate(organizationId, date);
+      if (!dateOnly) {
+        const error = new Error("Enter a valid overtime date");
+        error.statusCode = 400;
+        throw error;
+      }
       const byDate = await prisma.attendance.findFirst({
         where: { employeeId: employee.id, organizationId, date: dateOnly },
       });
       attendanceId = byDate?.id;
     }
 
-    if (!attendanceId || !requestedMinutes) {
+    if (!requestedMinutes) {
       const error = new Error("attendanceId (or date) and requestedMinutes (or hours) are required");
       error.statusCode = 400;
+      throw error;
+    }
+
+    if (!attendanceId) {
+      const error = new Error("No attendance record was found for the selected date. Punch in and out first, then request overtime.");
+      error.statusCode = 404;
+      error.code = "ATTENDANCE_NOT_FOUND_FOR_DATE";
       throw error;
     }
 

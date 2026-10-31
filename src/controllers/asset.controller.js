@@ -38,7 +38,7 @@ class AssetController {
         req.user.organizationId,
         req.params.id,
       );
-      const isAdmin = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"].includes(
+      const isAdmin = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"].includes(
         req.user.role,
       );
       if (!isAdmin) {

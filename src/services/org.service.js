@@ -6,11 +6,26 @@ const { isValidTimeZone } = require("../utils/datetime");
 const { DEFAULT_OFFER_LETTER_TEMPLATE, normalizeOfferLetterTemplate } = require("../utils/offerLetterTemplate");
 const HR_ACCESS_AREAS = ["DASHBOARD", "ATTENDANCE", "EMPLOYEES", "ROLES", "APPROVALS", "ONBOARDING", "PAYROLL", "REPORTS", "ANNOUNCEMENTS", "BRANCHES", "POLICIES", "SHOOTS"];
 const DEFAULT_HR_ACCESS = Object.fromEntries(HR_ACCESS_AREAS.map((area) => [area, true]));
+const DEFAULT_EMPLOYEE_ACCESS = { DASHBOARD: true, ATTENDANCE: true, EMPLOYEES: false, ROLES: false, APPROVALS: false, ONBOARDING: false, PAYROLL: true, REPORTS: false, ANNOUNCEMENTS: true, BRANCHES: false, POLICIES: false, SHOOTS: true };
+const DEFAULT_ROLE_ACCESS = { MANAGER: DEFAULT_HR_ACCESS, HR: DEFAULT_HR_ACCESS, EMPLOYEE: DEFAULT_EMPLOYEE_ACCESS };
+
+const normalizeRoleAccess = (stored) => {
+  const source = stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
+  const result = {};
+  for (const role of ["MANAGER", "HR", "EMPLOYEE"]) {
+    const defaults = DEFAULT_ROLE_ACCESS[role];
+    const incoming = source[role] && typeof source[role] === "object" ? source[role] : {};
+    result[role] = Object.fromEntries(HR_ACCESS_AREAS.map((area) => [area, incoming[area] === undefined ? defaults[area] === true : incoming[area] === true]));
+  }
+  return result;
+};
 
 const presentOrganization = (organization) => {
   if (!organization) return organization;
   const { ssoClientSecretCiphertext, ...safe } = organization;
-  return { ...safe, hrAccess: organization.hrAccess || DEFAULT_HR_ACCESS, sso: ssoService.getConfiguration(organization) };
+  const storedAccess = organization.hrAccess && typeof organization.hrAccess === "object" ? organization.hrAccess : {};
+  const hrAccess = Object.fromEntries(HR_ACCESS_AREAS.map((area) => [area, storedAccess[area] === undefined ? true : storedAccess[area] === true]));
+  return { ...safe, hrAccess, roleAccess: normalizeRoleAccess(storedAccess.ROLE_ACCESS), sso: ssoService.getConfiguration(organization) };
 };
 
 async function getSettings(organizationId) {
@@ -28,11 +43,18 @@ async function getSettings(organizationId) {
 
 async function updateSettings(organizationId, payload, actor = {}) {
   const data = {};
+  const currentAccess = await prisma.organization.findUnique({ where: { id: organizationId }, select: { hrAccess: true } });
+  const existingAccess = currentAccess?.hrAccess && typeof currentAccess.hrAccess === "object" ? currentAccess.hrAccess : {};
   if (payload.hrAccess !== undefined) {
     if (!payload.hrAccess || typeof payload.hrAccess !== "object" || Array.isArray(payload.hrAccess)) throw Object.assign(new Error("HR access settings must be an object."), { statusCode: 400 });
     const next = {};
     for (const area of HR_ACCESS_AREAS) if (payload.hrAccess[area] !== undefined) next[area] = payload.hrAccess[area] === true;
-    data.hrAccess = { ...DEFAULT_HR_ACCESS, ...next };
+    data.hrAccess = { ...existingAccess, ...DEFAULT_HR_ACCESS, ...next };
+  }
+  if (payload.roleAccess !== undefined) {
+    if (!payload.roleAccess || typeof payload.roleAccess !== "object" || Array.isArray(payload.roleAccess)) throw Object.assign(new Error("Role access settings must be an object."), { statusCode: 400 });
+    const roleAccess = normalizeRoleAccess(payload.roleAccess);
+    data.hrAccess = { ...(data.hrAccess || existingAccess), ROLE_ACCESS: roleAccess };
   }
   if (payload.requireAdminTwoFactor !== undefined) {
     const enable = payload.requireAdminTwoFactor === true || payload.requireAdminTwoFactor === "true";

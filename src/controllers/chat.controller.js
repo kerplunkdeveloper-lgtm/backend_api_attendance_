@@ -50,6 +50,22 @@ module.exports = {
       return sendControllerError(res, err);
     }
   },
+  async updateGroup(req, res) {
+    try {
+      const data = await chatService.updateGroup(req.user.organizationId, req.params.threadId, req.body);
+      return res.json({ success: true, data });
+    } catch (err) {
+      return sendControllerError(res, err);
+    }
+  },
+  async deleteGroup(req, res) {
+    try {
+      const data = await chatService.deleteGroup(req.user.organizationId, req.params.threadId);
+      return res.json({ success: true, data, message: "Channel deleted" });
+    } catch (err) {
+      return sendControllerError(res, err);
+    }
+  },
   async messages(req, res) {
     try {
       const data = await chatService.getMessages(

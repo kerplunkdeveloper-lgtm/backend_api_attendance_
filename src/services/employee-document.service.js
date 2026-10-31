@@ -291,7 +291,7 @@ class EmployeeDocumentService {
         const admins = await prisma.user.findMany({
           where: {
             organizationId,
-            role: { in: ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"] },
+            role: { in: ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"] },
           },
           select: { id: true },
         });

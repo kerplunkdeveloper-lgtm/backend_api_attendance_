@@ -118,7 +118,7 @@ class OffboardingService {
 
     // HR or an admin acting for someone else. Their own resignation goes through review like anyone's.
     const isSelf = Boolean(initiatedByUser?.employee?.id) && initiatedByUser.employee.id === employeeId;
-    const isHrInitiated = !isSelf && ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"].includes(initiatedByUser?.role);
+    const isHrInitiated = !isSelf && ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"].includes(initiatedByUser?.role);
     const initialStatus = isHrInitiated && exitType === "TERMINATION" ? "NOTICE_PERIOD" : "RESIGNED";
 
     // 1. Create Exit Record and map notice-period employees
@@ -169,7 +169,7 @@ class OffboardingService {
         const admins = await prisma.user.findMany({
           where: {
             organizationId,
-            role: { in: ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"] },
+            role: { in: ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"] },
           },
           select: { id: true },
         });

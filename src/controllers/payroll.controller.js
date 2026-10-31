@@ -87,22 +87,25 @@ class PayrollController {
   async calculate(req, res) {
     try {
       const { employeeId, month, year } = req.query;
-      if (!month || !year) {
+      const parsedMonth = Number(month);
+      const parsedYear = Number(year);
+      if (!Number.isInteger(parsedMonth) || parsedMonth < 1 || parsedMonth > 12 ||
+          !Number.isInteger(parsedYear) || parsedYear < 2000 || parsedYear > 2200) {
         return res
           .status(400)
-          .json({ success: false, message: "month and year are required" });
+          .json({ success: false, message: "A valid month (1-12) and year are required" });
       }
       const result = employeeId
         ? await payrollService.calculateEmployeePayroll(
             req.user.organizationId,
             employeeId,
-            month,
-            year,
+            parsedMonth,
+            parsedYear,
           )
         : await payrollService.calculateOrganizationPayroll(
             req.user.organizationId,
-            month,
-            year,
+            parsedMonth,
+            parsedYear,
           );
       return res.status(200).json({ success: true, data: result });
     } catch (err) { return fail(res, err); }
@@ -167,7 +170,7 @@ class PayrollController {
         where: {
           organizationId: req.user.organizationId,
           isActive: true,
-          role: { in: ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"] },
+          role: { in: ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"] },
         },
         select: { id: true },
       });

@@ -158,15 +158,21 @@ const hasTimeRange = data.startTime !== undefined || data.endTime !== undefined;
 
     const allowanceHours = Number(policy.monthlyPermissionHours || 0);
     const usedHours = Number(approved._sum.hours || 0);
+    const allowanceMinutes = Math.round(allowanceHours * 60);
+    const usedMinutes = Math.round(usedHours * 60);
     return {
       requests,
       allowance: {
         cycleStart: toIsoKey(cycle.period.start),
         cycleEnd: toIsoKey(cycle.period.end),
         allowanceHours,
+        allowanceMinutes,
         usedHours: round2(usedHours),
+        usedMinutes,
         remainingHours: round2(Math.max(0, allowanceHours - usedHours)),
+        remainingMinutes: Math.max(0, allowanceMinutes - usedMinutes),
         excessHours: round2(Math.max(0, usedHours - allowanceHours)),
+        excessMinutes: Math.max(0, usedMinutes - allowanceMinutes),
       },
     };
   }

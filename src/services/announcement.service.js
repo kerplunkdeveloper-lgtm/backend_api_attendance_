@@ -2,7 +2,7 @@ const prisma = require("../config/database");
 const { WORKING_STATUSES } = require("../utils/employeeStatus");
 const webPushService = require("./web-push.service");
 
-const MANAGE_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"];
+const MANAGE_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"];
 const ADMIN_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN"];
 const MAX_TITLE = 120;
 const MAX_BODY = 2000;

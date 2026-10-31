@@ -10,6 +10,10 @@ const EARTH_RADIUS_METERS = 6371000; // 6,371 km in meters
  */
 const toRadians = (degrees) => (degrees * Math.PI) / 180;
 
+const hasCoordinatePair = (point) =>
+  point?.latitude != null && point?.longitude != null &&
+  Number.isFinite(Number(point.latitude)) && Number.isFinite(Number(point.longitude));
+
 /**
  * Calculates distance in meters between two lat/lng points.
  * @param {number} lat1 Latitude of point 1
@@ -52,7 +56,7 @@ const verifyGeofence = (userCoords, branchCoords) => {
   }
 
   // If branch doesn't have coordinates configured, permit punch-in
-  if (!branchCoords?.latitude || !branchCoords?.longitude) {
+  if (!hasCoordinatePair(branchCoords)) {
     return {
       isInside: true,
       distanceMeters: 0,
@@ -148,6 +152,7 @@ const officeOnlyRejection = ({ latitude, longitude, accuracy, branches, allowWfh
 
 module.exports = {
   calculateDistanceMeters,
+  hasCoordinatePair,
   verifyGeofence,
   formatDistance,
   officeOnlyRejection,

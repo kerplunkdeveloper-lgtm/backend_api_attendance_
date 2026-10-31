@@ -31,44 +31,44 @@ router.post("/payslip-requests", payrollController.requestPayslip);
 // Salary Structure Configuration (Company Admin & Manager)
 router.post(
   "/salary-structure",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   payrollController.upsertSalaryStructure,
 );
 router.get(
   "/cycle",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   payrollController.getPayrollCycle,
 );
 
 router.post(
   "/salary-structure/bulk",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   payrollController.bulkUpsertSalaryStructures,
 );
 router.get(
   "/salary-structure/:employeeId",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   payrollController.getSalaryStructure,
 );
 
 // Live Attendance-Driven Payroll Calculator Preview
 router.get(
   "/calculate",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   payrollController.calculate,
 );
 
 // Generate Monthly Payslips for Organization
 router.post(
   "/generate",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   payrollController.generate,
 );
 
 // List Organization Payslips
 router.get(
   "/payslips",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   payrollController.getPayslips,
 );
 

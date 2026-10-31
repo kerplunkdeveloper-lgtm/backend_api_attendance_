@@ -44,7 +44,7 @@ class WorkFromHomeService {
       data: { organizationId, employeeId: employee.id, startDate: start, endDate: end, reason: cleanReason },
       include: { employee: { select: { firstName: true, lastName: true, employeeCode: true } } },
     });
-    const reviewerRoles = employee.user?.role === "EMPLOYEE" ? ["COMPANY_ADMIN", "MANAGER"] : ["COMPANY_ADMIN"];
+    const reviewerRoles = employee.user?.role === "EMPLOYEE" ? ["COMPANY_ADMIN", "MANAGER", "HR"] : ["COMPANY_ADMIN"];
     const reviewers = await prisma.user.findMany({ where: { organizationId, isActive: true, role: { in: reviewerRoles }, id: { not: userId } }, select: { id: true } });
     await notify(organizationId, reviewers.map((item) => item.id), "Work-from-home request", nameOf(employee) + " requested WFH from " + String(startDate).slice(0, 10) + " to " + String(endDate || startDate).slice(0, 10) + ".");
     return request;

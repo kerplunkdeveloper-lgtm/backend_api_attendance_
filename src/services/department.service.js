@@ -1,5 +1,25 @@
 const prisma = require("../config/database");
 
+// Common starting departments for a new workspace. This is also applied
+// lazily for older workspaces when the Departments page is opened.
+const DEFAULT_DEPARTMENT_NAMES = [
+  "IT",
+  "Non-IT",
+  "Digital Marketing",
+  "Human Resources",
+  "Finance & Accounts",
+  "Sales & Business Development",
+  "Operations",
+];
+
+const ensureDefaultDepartments = async (organizationId) => {
+  if (!organizationId) return;
+  await prisma.department.createMany({
+    data: DEFAULT_DEPARTMENT_NAMES.map((name) => ({ organizationId, name })),
+    skipDuplicates: true,
+  });
+};
+
 /**
  * 1. POST /api/departments - Create Department
  */
@@ -38,6 +58,7 @@ const createDepartment = async (organizationId, name) => {
  * 2. GET /api/departments - List Departments
  */
 const getDepartments = async (organizationId) => {
+  await ensureDefaultDepartments(organizationId);
   const [departments, titleCounts] = await Promise.all([
     prisma.department.findMany({
       where: { organizationId },
@@ -233,6 +254,8 @@ const deleteDesignation = async (organizationId, designationId) => {
 };
 
 module.exports = {
+  DEFAULT_DEPARTMENT_NAMES,
+  ensureDefaultDepartments,
   createDesignation,
   updateDesignation,
   deleteDesignation,

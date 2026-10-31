@@ -4,24 +4,16 @@ const {
   authenticate,
   authorizeRoles,
 } = require("../middleware/auth.middleware");
-const { documentUploader, handleUploadErrors } = require("../middleware/upload.middleware");
 
 const router = express.Router();
 router.use(authenticate);
 
-const policyUpload = documentUploader(25);
-router.get("/company", policyController.listCompanyPolicies);
-router.post("/company", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"), policyUpload.single("file"), policyController.importCompanyPolicy);
-router.put("/company/:id", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"), policyController.updateCompanyPolicy);
-router.delete("/company/:id", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"), policyController.deleteCompanyPolicy);
-router.use(handleUploadErrors);
-
 // Any authenticated user can view the policy
 router.get("/", policyController.getPolicy);
 router.get("/late-coming-lop", policyController.listLateComingRules);
-router.post("/late-coming-lop", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"), policyController.createLateComingRule);
-router.put("/late-coming-lop/:id", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"), policyController.updateLateComingRule);
-router.delete("/late-coming-lop/:id", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"), policyController.deleteLateComingRule);
+router.post("/late-coming-lop", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"), policyController.createLateComingRule);
+router.put("/late-coming-lop/:id", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"), policyController.updateLateComingRule);
+router.delete("/late-coming-lop/:id", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"), policyController.deleteLateComingRule);
 
 // Only Admin can update the policy
 router.put(

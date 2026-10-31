@@ -6,7 +6,7 @@ class EmployeeDocumentController {
    */
   _canAccessEmployee(req, targetEmployeeId) {
     const { role, employee } = req.user;
-    if (["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"].includes(role)) {
+    if (["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"].includes(role)) {
       return true;
     }
     return employee && employee.id === targetEmployeeId;

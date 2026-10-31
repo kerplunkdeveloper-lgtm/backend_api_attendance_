@@ -154,10 +154,11 @@ const evaluateAttendanceAgainstShift = (
   const halfDayThreshold = Number.isFinite(halfDayThresholdMinutes) && halfDayThresholdMinutes > 0 ? halfDayThresholdMinutes : Math.floor(scheduledWorkMinutes / 2);
   const fullDayThresholdMinutes = scheduledWorkMinutes > 0 ? scheduledWorkMinutes : Math.min(480, scheduledMinutes || 480);
   const isCompletedFullDay = workingMinutes >= fullDayThresholdMinutes;
-  const isLateWaived = lateMinutes > 0 && isCompletedFullDay;
-  const effectiveLateMinutes = isLateWaived ? 0 : lateMinutes;
-  const status = isCompletedFullDay ? "PRESENT" : workingMinutes < halfDayThreshold ? "HALF_DAY" : lateMinutes > 0 ? "LATE" : "PRESENT";
-  return { ...base, workingMinutes, workingHours: (workingMinutes / 60).toFixed(1), workingFormatted: formatMinutes(workingMinutes), lateMinutes: effectiveLateMinutes, originalLateMinutes: lateMinutes, lateArrivalWaived: isLateWaived, isCompletedFullDay, lateFormatted: formatMinutes(effectiveLateMinutes), earlyMinutes, earlyFormatted: formatMinutes(earlyMinutes), overtimeMinutes, overtimeHours: (overtimeMinutes / 60).toFixed(1), overtimeFormatted: formatMinutes(overtimeMinutes), status };
+  // Completing the productive target does not erase a late arrival. The monthly
+  // late-coming policy must still see this day so rules such as 3 late arrivals
+  // = 1 LOP can be applied during payroll.
+  const status = workingMinutes < halfDayThreshold ? "HALF_DAY" : lateMinutes > 0 ? "LATE" : "PRESENT";
+  return { ...base, workingMinutes, workingHours: (workingMinutes / 60).toFixed(1), workingFormatted: formatMinutes(workingMinutes), lateMinutes, originalLateMinutes: lateMinutes, lateArrivalWaived: false, isCompletedFullDay, lateFormatted: formatMinutes(lateMinutes), earlyMinutes, earlyFormatted: formatMinutes(earlyMinutes), overtimeMinutes, overtimeHours: (overtimeMinutes / 60).toFixed(1), overtimeFormatted: formatMinutes(overtimeMinutes), status };
 };
 const formatMinutes = (minutes) => {
   const total = Math.round(Number(minutes) || 0);
