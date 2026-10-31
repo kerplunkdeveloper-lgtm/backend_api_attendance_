@@ -11,7 +11,7 @@ router.get("/", loanController.list);
 router.post("/", loanController.apply);
 router.put(
   "/:id/review",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   loanController.review,
 );
 module.exports = router;

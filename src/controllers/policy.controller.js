@@ -1,24 +1,7 @@
 const policyService = require("../services/policy.service");
-const companyPolicyService = require("../services/company-policy.service");
 const { sendControllerError } = require("../utils/controllerError");
 
 class PolicyController {
-  async listCompanyPolicies(req, res) {
-    try { return res.json({ success: true, policies: await companyPolicyService.list(req.user.organizationId, req.user.role) }); }
-    catch (error) { return sendControllerError(res, error); }
-  }
-  async importCompanyPolicy(req, res) {
-    try { return res.status(201).json({ success: true, policy: await companyPolicyService.create(req.user.organizationId, req.user, req.body, req.file), message: "Company policy imported" }); }
-    catch (error) { return sendControllerError(res, error); }
-  }
-  async updateCompanyPolicy(req, res) {
-    try { return res.json({ success: true, policy: await companyPolicyService.update(req.user.organizationId, req.user, req.params.id, req.body), message: "Company policy updated" }); }
-    catch (error) { return sendControllerError(res, error); }
-  }
-  async deleteCompanyPolicy(req, res) {
-    try { await companyPolicyService.remove(req.user.organizationId, req.user, req.params.id); return res.json({ success: true, message: "Company policy deleted" }); }
-    catch (error) { return sendControllerError(res, error); }
-  }
   async getPolicy(req, res) {
     try {
       const result = await policyService.getPolicy(req.user.organizationId);

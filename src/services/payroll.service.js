@@ -472,7 +472,9 @@ class PayrollService {
         overtimeMinutes: totalOvertimeMinutes,
         overtimeHours,
         permissionHours: round2(approvedPermissionHours),
+        permissionMinutes: Math.round(approvedPermissionHours * 60),
         permissionExcessHours: permission.excessHours,
+        permissionExcessMinutes: Math.round(permission.excessHours * 60),
       },
       salaryBreakdown: {
         annualCtc,
@@ -540,22 +542,51 @@ class PayrollService {
   async calculateOrganizationPayroll(organizationId, month, year) {
     const employees = await prisma.employee.findMany({
       where: { organizationId, status: { in: WORKING_STATUSES } },
-      select: { id: true, employeeCode: true, firstName: true },
+      select: {
+        id: true,
+        employeeCode: true,
+        firstName: true,
+        salaryStructure: { select: { id: true } },
+      },
     });
 
     const previews = [];
     const skipped = [];
 
-    for (const emp of employees) {
-      try {
-        previews.push(await this.calculateEmployeePayroll(organizationId, emp.id, month, year));
-      } catch (err) {
-        skipped.push({
-          employeeId: emp.id,
-          employeeCode: emp.employeeCode,
-          reason: err.message,
-        });
-      }
+    // Do not spend a full payroll calculation on employees who cannot produce a
+    // result. This is especially important for seeded/imported workforces where
+    // many active profiles have not had CTC configured yet.
+    const configured = employees.filter((employee) => employee.salaryStructure);
+    skipped.push(...employees
+      .filter((employee) => !employee.salaryStructure)
+      .map((employee) => ({
+        employeeId: employee.id,
+        employeeCode: employee.employeeCode,
+        reason: `No salary structure configured for ${employee.firstName} (${employee.employeeCode}). Set CTC before generating payroll.`,
+      })));
+
+    // Each employee calculation reads attendance, leave, permissions, expenses,
+    // loans, and policy data. Keep concurrency bounded so a large organization
+    // does not exhaust the Prisma/Postgres connection pool or hit a request
+    // timeout while still avoiding the old serial N+1 wait.
+    const batchSize = 6;
+    for (let index = 0; index < configured.length; index += batchSize) {
+      const batch = configured.slice(index, index + batchSize);
+      const results = await Promise.allSettled(
+        batch.map((employee) => this.calculateEmployeePayroll(organizationId, employee.id, month, year)),
+      );
+      results.forEach((result, resultIndex) => {
+        const employee = batch[resultIndex];
+        if (result.status === "fulfilled") {
+          previews.push(result.value);
+        } else {
+          skipped.push({
+            employeeId: employee.id,
+            employeeCode: employee.employeeCode,
+            reason: result.reason?.message || "Payroll calculation failed",
+          });
+        }
+      });
     }
 
     return { month: parseInt(month, 10), year: parseInt(year, 10), previews, skipped };

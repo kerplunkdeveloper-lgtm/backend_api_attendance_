@@ -117,7 +117,7 @@ class NotificationService {
       });
       if (!employee) return 0;
 
-      const roles = requiresAdminReview(employee.user?.role) ? ADMIN_ROLES : [...ADMIN_ROLES, "MANAGER"];
+      const roles = requiresAdminReview(employee.user?.role) ? ADMIN_ROLES : [...ADMIN_ROLES, "MANAGER", "HR"];
       const where = { organizationId, isActive: true, role: { in: roles } };
       if (employee.userId) where.id = { not: employee.userId };
       const reviewers = await prisma.user.findMany({ where, select: { id: true }, take: 200 });
@@ -386,6 +386,16 @@ class NotificationService {
       })),
     });
 
+    // Deliver through the service worker too. This works when the dashboard
+    // tab is closed, as long as the employee previously granted browser push
+    // permission and subscribed on this device.
+    void webPushService.sendToUsers(toNotify.map(({ emp }) => ({
+      userId: emp.userId,
+      title: "Morning Shift Punch-In Reminder",
+      message: `Good morning, ${emp.firstName}! Shift starts at ${emp.shift?.startTime || "09:00"}. Punch in on time to avoid a late mark.`,
+      type: "ATTENDANCE",
+    }))).catch((error) => console.warn("[MorningReminder:WebPush] Delivery failed:", error.message));
+
     const sentUsers = [];
     for (const { emp } of toNotify) {
       const shiftTime = emp.shift?.startTime || "09:00";
@@ -515,6 +525,15 @@ class NotificationService {
         type: "ATTENDANCE",
       })),
     });
+
+    // Deliver through the service worker too, so punch-out reminders appear
+    // even after the employee closes the website.
+    void webPushService.sendToUsers(toNotify.map(({ emp }) => ({
+      userId: emp.userId,
+      title: "Shift Completion & Punch-Out Reminder",
+      message: `Great job today, ${emp.firstName}! Working hours ended at ${emp.shift?.endTime || "18:00"}. Punch out to close your shift.`,
+      type: "ATTENDANCE",
+    }))).catch((error) => console.warn("[EveningReminder:WebPush] Delivery failed:", error.message));
 
     // Same channels as the morning reminder. Fire-and-forget: a slow or failing provider must not hold up the pass.
     for (const { emp } of toNotify) {

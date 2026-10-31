@@ -23,7 +23,7 @@ const run = (role) => {
 
 describe("creating a chat channel", () => {
   it("is allowed for admins and HR", () => {
-    for (const role of ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"]) {
+    for (const role of ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"]) {
       assert.equal(run(role).passed, true, role);
     }
   });

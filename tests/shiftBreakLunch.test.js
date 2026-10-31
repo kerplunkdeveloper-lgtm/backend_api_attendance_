@@ -37,3 +37,30 @@ test("overtime starts after the productive target", () => {
   assert.equal(result.workingMinutes, 540);
   assert.equal(result.overtimeMinutes, 60);
 });
+
+test("a 09:00 to 18:00 shift with 15 minute break and 40 minute lunch has an 8h05 productive target", () => {
+  const result = evaluateAttendanceAgainstShift(
+    { startTime: "09:00", endTime: "18:00", graceMinutes: 15, breakMinutes: 15, lunchMinutes: 40, breakIncluded: true, lunchIncluded: true },
+    "2026-10-13T03:30:00.000Z",
+    "2026-10-13T12:30:00.000Z",
+    15,
+    { lunchMinutes: 40, timeZone: "Asia/Calcutta" }
+  );
+  assert.equal(result.scheduledMinutes, 540);
+  assert.equal(result.scheduledWorkMinutes, 485);
+  assert.equal(result.workingMinutes, 485);
+  assert.equal(result.overtimeMinutes, 0);
+});
+
+test("a late arrival remains late after completing the full productive target", () => {
+  const result = evaluateAttendanceAgainstShift(
+    { startTime: "09:00", endTime: "18:00", graceMinutes: 15, breakMinutes: 15, lunchMinutes: 40, breakIncluded: true, lunchIncluded: true },
+    "2026-10-13T03:50:00.000Z",
+    "2026-10-13T12:50:00.000Z",
+    15,
+    { lunchMinutes: 40, timeZone: "Asia/Calcutta" }
+  );
+  assert.equal(result.isCompletedFullDay, true);
+  assert.equal(result.status, "LATE");
+  assert.equal(result.lateMinutes, 20);
+});

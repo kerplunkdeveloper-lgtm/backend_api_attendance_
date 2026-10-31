@@ -18,21 +18,21 @@ router.get("/:id", branchController.getById);
 // 3. POST /api/branches - Create branch (company admin only)
 router.post(
   "/",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"),
   branchController.create,
 );
 
 // 4. PUT /api/branches/:id - Update branch (company admin only)
 router.put(
   "/:id",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"),
   branchController.update,
 );
 
 // 5. DELETE /api/branches/:id - Delete branch
 router.delete(
   "/:id",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"),
   branchController.remove,
 );
 

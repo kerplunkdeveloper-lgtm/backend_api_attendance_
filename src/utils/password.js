@@ -10,7 +10,7 @@ const generateTempPassword = () =>
  * tenant administrators must not be able to grant platform-owner privileges.
  */
 const resolveAssignableRole = (requestedRole, actorRole = "COMPANY_ADMIN", options = {}) => {
-  const requested = requestedRole === "HR" ? "MANAGER" : requestedRole || "EMPLOYEE";
+  const requested = requestedRole || "EMPLOYEE";
 
   if (requested === "SUPER_ADMIN" || requested === "COMPANY_ADMIN") {
     const error = new Error("This role cannot be assigned through employee APIs");
@@ -18,8 +18,8 @@ const resolveAssignableRole = (requestedRole, actorRole = "COMPANY_ADMIN", optio
     throw error;
   }
 
-  if (!["EMPLOYEE", "MANAGER"].includes(requested)) {
-    const error = new Error("Role must be EMPLOYEE or MANAGER");
+  if (!["EMPLOYEE", "MANAGER", "HR"].includes(requested)) {
+    const error = new Error("Role must be EMPLOYEE, MANAGER or HR");
     error.statusCode = 400;
     throw error;
   }

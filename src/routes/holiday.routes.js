@@ -25,7 +25,7 @@ router.post(
 // 4. POST /api/holidays/bulk - Bulk upload holiday list
 router.post(
   "/bulk",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"),
   holidayController.bulkCreate,
 );
 
@@ -39,7 +39,7 @@ router.put(
 // 6. DELETE /api/holidays/:id - Remove holiday
 router.delete(
   "/:id",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"),
   holidayController.delete,
 );
 

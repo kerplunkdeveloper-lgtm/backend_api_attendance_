@@ -269,7 +269,12 @@ const authorizeRoles = (...allowedRoles) => {
     // Scope was already enforced in authenticate.
     if (req.authType === "api_key") return next();
 
-    if (!allowedRoles.includes(req.user.role)) {
+    // HR is the people-operations administrator. Keep the legacy MANAGER
+    // permission lists working for the dedicated HR role as well, while
+    // company-owner routes remain explicitly COMPANY_ADMIN/SUPER_ADMIN-only.
+    const roleAllowed = allowedRoles.includes(req.user.role)
+      || (req.user.role === "HR" && allowedRoles.includes("MANAGER"));
+    if (!roleAllowed) {
       return res.status(403).json({
         success: false,
         message: `Forbidden: User role '${req.user.role}' is not authorized to access this resource.`,

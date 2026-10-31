@@ -10,6 +10,8 @@ router.get("/threads", chatController.threads);
 router.post("/threads", chatController.open);
 // Creating a channel is for admins and HR only (HR is the MANAGER role).
 router.post("/groups", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"), chatController.createGroup);
+router.patch("/groups/:threadId", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"), chatController.updateGroup);
+router.delete("/groups/:threadId", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"), chatController.deleteGroup);
 router.get("/threads/:threadId/messages", chatController.messages);
 router.post("/threads/:threadId/messages", chatController.send);
 

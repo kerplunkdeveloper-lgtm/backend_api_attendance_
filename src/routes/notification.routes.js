@@ -15,7 +15,7 @@ router.use(authenticate);
 // Diagnostics and broadcast triggers expose provider config and can send mail to
 // arbitrary addresses, so they are administrator-only.
 const adminOnly = authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN");
-const adminOrHr = authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER");
+const adminOrHr = authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR");
 
 // Get my notifications
 router.get("/", async (req, res) => {

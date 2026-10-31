@@ -10,7 +10,7 @@ class ExpenseController {
   async createClaim(req, res, next) {
     try {
       const organizationId = req.user.organizationId;
-      const isAdmin = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"].includes(
+      const isAdmin = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"].includes(
         req.user.role,
       );
 
@@ -107,7 +107,7 @@ class ExpenseController {
   async listOrganizationClaims(req, res, next) {
     try {
       const organizationId = req.user.organizationId;
-      const isAdmin = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"].includes(req.user.role);
+      const isAdmin = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"].includes(req.user.role);
 
       // If called by regular employee, safely return their own claims
       if (!isAdmin) {
@@ -197,7 +197,7 @@ class ExpenseController {
     try {
       const organizationId = req.user.organizationId;
       const claimId = req.params.id;
-      const isAdmin = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"].includes(req.user.role);
+      const isAdmin = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"].includes(req.user.role);
 
       let employeeId = null;
       if (!isAdmin) {

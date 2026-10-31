@@ -1,6 +1,6 @@
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
-const { officeOnlyRejection, formatDistance } = require("../src/utils/geofence");
+const { officeOnlyRejection, formatDistance, verifyGeofence } = require("../src/utils/geofence");
 
 // Andheri office, 200 m radius.
 const office = { name: "Andheri office", latitude: "19.1197", longitude: "72.8468", radiusMeters: 200 };
@@ -12,6 +12,15 @@ describe("office-only check-in", () => {
 
   it("allows everyone when no branch has coordinates configured", () => {
     assert.equal(officeOnlyRejection({ latitude: null, longitude: null, accuracy: null, branches: [] }), null);
+  });
+
+  it("treats zero latitude or longitude as valid branch coordinates", () => {
+    const result = verifyGeofence(
+      { latitude: 0.003, longitude: 0 },
+      { latitude: 0, longitude: 0, radiusMeters: 200 },
+    );
+    assert.equal(result.bypassed, false);
+    assert.equal(result.isInside, false);
   });
 
   it("asks for location instead of silently letting a punch without GPS through", () => {

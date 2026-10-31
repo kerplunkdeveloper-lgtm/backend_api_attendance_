@@ -5,6 +5,24 @@ const { broadcastToThread } = require("../realtime/chatWs");
 const MAX_GROUP_TITLE = 80;
 const MAX_GROUP_MEMBERS = 200;
 
+const channelError = (message, statusCode = 400) => Object.assign(new Error(message), { statusCode });
+
+async function getManagedChannel(organizationId, threadId) {
+  const thread = await prisma.chatThread.findFirst({
+    where: { id: threadId, organizationId },
+    include: {
+      members: {
+        include: {
+          user: { select: { id: true, email: true, role: true, employee: { select: { firstName: true, lastName: true, employeeCode: true, department: { select: { name: true } } } } } },
+        },
+      },
+    },
+  });
+  if (!thread) throw channelError("Channel not found", 404);
+  if (thread.isDirect) throw channelError("Direct messages cannot be edited or deleted", 400);
+  return thread;
+}
+
 async function listThreads(organizationId, userId, query = {}) {
   const { page, limit, skip } = parsePagination(query, { defaultLimit: 100 });
   const where = { userId, thread: { organizationId } };
@@ -183,6 +201,24 @@ async function createGroup(organizationId, userId, { title, userIds }) {
   });
 }
 
+async function updateGroup(organizationId, threadId, { title }) {
+  const current = await getManagedChannel(organizationId, threadId);
+  const name = String(title || "").trim();
+  if (!name) throw channelError("Channel name is required");
+  if (name.length > MAX_GROUP_TITLE) throw channelError(`Channel name must be ${MAX_GROUP_TITLE} characters or fewer`);
+  return prisma.chatThread.update({
+    where: { id: current.id },
+    data: { title: name },
+    include: { members: { include: { user: { select: { id: true, email: true, role: true, employee: { select: { firstName: true, lastName: true, employeeCode: true, department: { select: { name: true } } } } } } } } },
+  });
+}
+
+async function deleteGroup(organizationId, threadId) {
+  const current = await getManagedChannel(organizationId, threadId);
+  await prisma.chatThread.delete({ where: { id: current.id } });
+  return { id: current.id };
+}
+
 async function listTeammates(organizationId, userId, query = {}) {
   const { page, limit, skip } = parsePagination(query, { defaultLimit: 30, maxLimit: 100 });
   const where = { organizationId, isActive: true, id: { not: userId } };
@@ -220,4 +256,4 @@ async function listTeammates(organizationId, userId, query = {}) {
   return { records: users, ...paginationMeta(total, page, limit) };
 }
 
-module.exports = { listThreads, openDirect, createGroup, getMessages, sendMessage, listTeammates };
+module.exports = { listThreads, openDirect, createGroup, updateGroup, deleteGroup, getMessages, sendMessage, listTeammates };

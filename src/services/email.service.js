@@ -521,7 +521,7 @@ class EmailService {
     firstName = esc(firstName);
     const rawOrganizationName = organizationName;
     organizationName = esc(organizationName);
-    role = esc({ MANAGER: "HR", COMPANY_ADMIN: "Company admin", EMPLOYEE: "Employee" }[role] || role);
+    role = esc({ MANAGER: "Manager", HR: "HR", COMPANY_ADMIN: "Company admin", EMPLOYEE: "Employee" }[role] || role);
     const contentHtml = `
       <p class="text">Hello <strong>${firstName}</strong>,</p>
       <p class="text">

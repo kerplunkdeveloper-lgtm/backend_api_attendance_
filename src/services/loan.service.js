@@ -1,5 +1,6 @@
 const prisma = require("../config/database");
 const { assertCanReview, visibleToReviewer } = require("../utils/approvalChain");
+const notificationService = require("./notification.service");
 
 function num(v) {
   const n = Number(v);
@@ -35,7 +36,7 @@ async function apply(organizationId, user, payload) {
     err.statusCode = 400;
     throw err;
   }
-  return prisma.loanAdvance.create({
+  const request = await prisma.loanAdvance.create({
     data: {
       organizationId,
       employeeId: employee.id,
@@ -48,6 +49,14 @@ async function apply(organizationId, user, payload) {
     },
     include: { employee: { select: { firstName: true, lastName: true, employeeCode: true } } },
   });
+  await notificationService.notifyReviewersOfRequest({
+    organizationId,
+    employeeId: employee.id,
+    title: "New loan or advance request",
+    summary: `requested a ${request.type === "LOAN" ? "loan" : "salary advance"} of ₹${Number(request.amount).toLocaleString("en-IN")}. Open Loans & advances to review it.`,
+    type: "APPROVAL",
+  });
+  return request;
 }
 
 async function list(organizationId, user) {
