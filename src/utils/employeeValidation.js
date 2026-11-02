@@ -162,6 +162,38 @@ const validateNewEmployeeProfile = (data) => {
   };
 };
 
+/** Company admins are workspace accounts, not attendance/payroll employees. */
+const validateCompanyAdminProfile = (data) => {
+  if (blank(data.email)) fail("Email is required.");
+  if (blank(data.phone)) fail("Phone is required.");
+  const email = String(data.email).trim().toLowerCase();
+  if (!EMAIL_PATTERN.test(email)) fail("Email is not valid.");
+  const identity = validateIdentityFields({ phone: data.phone });
+  const localPart = email.split("@")[0].replace(/[^A-Za-z0-9]+/g, " ").trim();
+  return {
+    email,
+    firstName: String(data.firstName || localPart || "Company Admin").trim(),
+    lastName: blank(data.lastName) ? null : String(data.lastName).trim(),
+    phone: identity.phone,
+    gender: null,
+    dateOfBirth: null,
+    dateOfJoining: null,
+    employmentType: null,
+    designation: "Company Admin",
+    address: null,
+    emergencyContactName: null,
+    emergencyContactPhone: null,
+    personalEmail: null,
+    panNumber: null,
+    uanNumber: null,
+    esiNumber: null,
+    bankName: null,
+    bankAccountNumber: null,
+    bankIfsc: null,
+    ctc: null,
+  };
+};
+
 /** On edit, a required profile field may be changed but not cleared. Absent keys are left alone. */
 const assertRequiredNotCleared = (data) => {
   const cleared = Object.keys(FIELD_LABELS).filter(
@@ -173,6 +205,7 @@ const assertRequiredNotCleared = (data) => {
 module.exports = {
   validateIdentityFields,
   validateNewEmployeeProfile,
+  validateCompanyAdminProfile,
   assertRequiredNotCleared,
   normalizeGender,
   normalizeEmploymentType,

@@ -137,6 +137,7 @@ class AttendanceController {
       const result = await attendanceService.getTodayStatus(
         req.user.id,
         req.user.organizationId,
+        req.user.role,
       );
       return res.status(200).json(result);
     } catch (error) { return fail(res, error); }

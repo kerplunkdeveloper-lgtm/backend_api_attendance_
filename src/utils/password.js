@@ -12,15 +12,21 @@ const generateTempPassword = () =>
 const resolveAssignableRole = (requestedRole, actorRole = "COMPANY_ADMIN", options = {}) => {
   const requested = requestedRole || "EMPLOYEE";
 
-  if (requested === "SUPER_ADMIN" || requested === "COMPANY_ADMIN") {
-    const error = new Error("This role cannot be assigned through employee APIs");
+  if (requested === "SUPER_ADMIN") {
+    const error = new Error("The SUPER_ADMIN role cannot be assigned through employee APIs");
     error.statusCode = 403;
     throw error;
   }
 
-  if (!["EMPLOYEE", "MANAGER", "HR"].includes(requested)) {
-    const error = new Error("Role must be EMPLOYEE, MANAGER or HR");
+  if (!["EMPLOYEE", "MANAGER", "HR", "COMPANY_ADMIN"].includes(requested)) {
+    const error = new Error("Role must be EMPLOYEE, MANAGER, HR or COMPANY_ADMIN");
     error.statusCode = 400;
+    throw error;
+  }
+
+  if (requested === "COMPANY_ADMIN" && actorRole !== "COMPANY_ADMIN") {
+    const error = new Error("Only a company admin can assign the company admin role");
+    error.statusCode = 403;
     throw error;
   }
 
@@ -33,7 +39,7 @@ const resolveAssignableRole = (requestedRole, actorRole = "COMPANY_ADMIN", optio
   return requested;
 };
 
-const PRIVILEGED_TARGETS = new Set(["SUPER_ADMIN", "COMPANY_ADMIN"]);
+const PRIVILEGED_TARGETS = new Set(["SUPER_ADMIN"]);
 
 /**
  * Validates a role change on an existing employee. Blocks self-promotion,
