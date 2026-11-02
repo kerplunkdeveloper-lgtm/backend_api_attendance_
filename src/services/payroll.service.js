@@ -1499,7 +1499,7 @@ class PayrollService {
       hra = 0,
       transport = 0,
       transportAllowance,
-      special = 0,
+      special,
       specialAllowance,
       otherAllowance = 0,
       pf = 0,
@@ -1524,7 +1524,11 @@ class PayrollService {
     const hike = prevAnnual && prevAnnual > 0 ? Number((((newAnnual - prevAnnual) / prevAnnual) * 100).toFixed(2)) : null;
 
     const finalTransport = transport !== undefined ? transport : (transportAllowance || 0);
-    const finalSpecial = special !== undefined ? special : (specialAllowance || 0);
+    // Keep the legacy `specialAllowance` alias working when callers do not
+    // send the canonical `special` field. An explicit zero must still win.
+    const finalSpecial = special !== undefined && special !== null && special !== ""
+      ? special
+      : (specialAllowance ?? 0);
     const finalMonthlyCtc = monthlyCtc ? Number(monthlyCtc) : Math.round(newAnnual / 12);
 
     // 1. Create SalaryRevision audit log
