@@ -2,6 +2,7 @@ const bcrypt = require("bcryptjs");
 const {
   validateIdentityFields,
   validateNewEmployeeProfile,
+  validateCompanyAdminProfile,
   assertRequiredNotCleared,
   normalizeGender,
   normalizeEmploymentType,
@@ -16,6 +17,7 @@ const emailService = require("./email.service");
 const { generateTempPassword, resolveAssignableRole, assertRoleAssignment } = require("../utils/password");
 const { resolveAvatarUrl } = require("../utils/avatar");
 const { assertSeatAvailable, assertBranchAvailable } = require("./entitlement.service");
+const { isPaidPlan } = require("../config/plans");
 const { getNextEmployeeCode, organizationPrefix } = require("../utils/employeeCode");
 const webhookService = require("./webhook.service");
 const { releaseDeletedEmployeeEmail } = require("../utils/releaseDeletedAccountEmail");
@@ -25,6 +27,23 @@ function badRequest(message) {
   err.statusCode = 400;
   return err;
 }
+
+const assertCompanyAdminProvisioningAllowed = (organization, role, actorRole) => {
+  if (role !== "COMPANY_ADMIN") return;
+  if (actorRole !== "COMPANY_ADMIN") {
+    const err = new Error("Only a company admin can create another company admin account.");
+    err.statusCode = 403;
+    throw err;
+  }
+
+  const plan = String(organization?.subscription?.plan || organization?.subscriptionPlan || "FREE_TRIAL").toUpperCase();
+  const status = String(organization?.subscription?.status || organization?.subscriptionStatus || "TRIALING").toUpperCase();
+  if (!isPaidPlan(plan) || !["ACTIVE", "CANCELED"].includes(status) || organization?.planLocked) {
+    const err = new Error("Upgrade and activate a paid plan before adding another company admin.");
+    err.statusCode = 403;
+    throw err;
+  }
+};
 
 const SENSITIVE_EMPLOYEE_FIELDS = [
   "personalEmail",
@@ -151,7 +170,7 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
   } = data;
 
   // Every field except PAN, UAN and ESI is mandatory for manual entry.
-  const profile = validateNewEmployeeProfile(data);
+  const profile = role === "COMPANY_ADMIN" ? validateCompanyAdminProfile(data) : validateNewEmployeeProfile(data);
   const cleanEmail = profile.email;
   if (password && String(password).trim() && String(password).trim().length < 8) {
     throw Object.assign(new Error("Password must be at least 8 characters."), { statusCode: 400 });
@@ -176,6 +195,7 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
     include: { subscription: true },
   });
   if (!org) throw new Error("Organization not found.");
+  assertCompanyAdminProvisioningAllowed(org, userRole, actorRole);
 
   // Generate or validate one common company-prefixed employee code, e.g. KM002.
   const finalEmployeeCode =
@@ -195,7 +215,7 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
   }
 
   // Validate branch
-  if (branchId) {
+  if (branchId && userRole !== "COMPANY_ADMIN") {
     const branch = await prisma.branch.findFirst({
       where: { id: branchId, organizationId },
     });
@@ -203,7 +223,7 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
   }
 
   // Validate department
-  if (departmentId) {
+  if (departmentId && userRole !== "COMPANY_ADMIN") {
     const department = await prisma.department.findFirst({
       where: { id: departmentId, organizationId },
     });
@@ -211,7 +231,7 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
   }
 
   // Validate shift
-  if (shiftId) {
+  if (shiftId && userRole !== "COMPANY_ADMIN") {
     const shift = await prisma.shift.findFirst({
       where: { id: shiftId, organizationId },
     });
@@ -282,7 +302,7 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
     return employee;
   });
 
-  await seedSalaryStructure(organizationId, createdEmployee.id, profile.ctc, "CreateEmployee");
+  if (userRole !== "COMPANY_ADMIN") await seedSalaryStructure(organizationId, createdEmployee.id, profile.ctc, "CreateEmployee");
 
   // Dispatch welcome email with credentials
   const loginUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/login`;
@@ -318,7 +338,7 @@ const getEmployees = async (organizationId, query = {}, actorRole = "EMPLOYEE") 
   const skip = (page - 1) * take;
   const where = { organizationId, deletedAt: null };
   const VALID_STATUSES = ["ACTIVE", "INACTIVE", "TERMINATED", "PROBATION", "NOTICE_PERIOD"];
-  const VALID_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "EMPLOYEE"];
+  const VALID_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR", "EMPLOYEE"];
   const asText = (v) => (typeof v === "string" ? v.trim() : "");
   // WORKING = everyone still employed (active, probation, serving notice), for pickers and headcounts.
   if (asText(query.status) === "WORKING") where.status = { in: WORKING_STATUSES };
@@ -845,18 +865,20 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
   } = data;
 
   // Same rule as manual entry: everything except PAN, UAN and ESI is mandatory.
-  const profile = validateNewEmployeeProfile(data);
+  const profile = role === "COMPANY_ADMIN" ? validateCompanyAdminProfile(data) : validateNewEmployeeProfile(data);
   const cleanEmail = profile.email;
 
   // The ids come from the client, so confirm each belongs to this organization.
-  const [branch, department, shift] = await Promise.all([
-    prisma.branch.findFirst({ where: { id: branchId, organizationId }, select: { id: true } }),
-    prisma.department.findFirst({ where: { id: departmentId, organizationId }, select: { id: true } }),
-    prisma.shift.findFirst({ where: { id: shiftId, organizationId }, select: { id: true } }),
-  ]);
-  if (!branch) throw badRequest("Specified branch does not exist in this organization");
-  if (!department) throw badRequest("Specified department does not exist in this organization");
-  if (!shift) throw badRequest("Specified shift does not exist in this organization");
+  if (role !== "COMPANY_ADMIN") {
+    const [branch, department, shift] = await Promise.all([
+      prisma.branch.findFirst({ where: { id: branchId, organizationId }, select: { id: true } }),
+      prisma.department.findFirst({ where: { id: departmentId, organizationId }, select: { id: true } }),
+      prisma.shift.findFirst({ where: { id: shiftId, organizationId }, select: { id: true } }),
+    ]);
+    if (!branch) throw badRequest("Specified branch does not exist in this organization");
+    if (!department) throw badRequest("Specified department does not exist in this organization");
+    if (!shift) throw badRequest("Specified shift does not exist in this organization");
+  }
 
   const existing = await prisma.user.findUnique({
     where: { organizationId_email: { organizationId, email: cleanEmail } },
@@ -869,6 +891,7 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
 
   const org = await prisma.organization.findUnique({ where: { id: organizationId } });
   if (!org) throw new Error("Organization not found.");
+  assertCompanyAdminProvisioningAllowed(org, role, actorRole);
 
   // Generate temp password: TMP-XXXXXX + 4 random digits
   const tempPassword = generateTempPassword();
@@ -947,7 +970,7 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
     return { user, employee };
   });
 
-  await seedSalaryStructure(organizationId, employee.id, profile.ctc, "InviteEmployee");
+  if (userRole !== "COMPANY_ADMIN") await seedSalaryStructure(organizationId, employee.id, profile.ctc, "InviteEmployee");
 
   // Send welcome email with credentials
   const loginUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/login`;

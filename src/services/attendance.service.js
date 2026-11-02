@@ -210,6 +210,8 @@ const getPolicy = async (organizationId) => {
 };
 
 const ADMIN_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"];
+const NON_ATTENDANCE_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN"];
+const workforceUserFilter = { role: { notIn: NON_ATTENDANCE_ROLES } };
 
 /**
  * Finds the employee a request acts on.
@@ -1338,7 +1340,7 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
   }
 
   const employee = await prisma.employee.findFirst({
-    where: { id: employeeId, organizationId },
+    where: { id: employeeId, organizationId, user: workforceUserFilter },
     include: { shift: true },
   });
   if (!employee) {
@@ -1530,7 +1532,10 @@ const findDayOff = async (organizationId, employee, date) => {
   return null;
 };
 
-const getTodayStatus = async (userId, organizationId) => {
+const getTodayStatus = async (userId, organizationId, role = "EMPLOYEE") => {
+  if (NON_ATTENDANCE_ROLES.includes(role)) {
+    return { success: true, hasEmployeeProfile: false, hasCheckedIn: false, hasCheckedOut: false, clockedIn: false, isOnBreak: false, isWorkFromHome: false, attendance: null, nonAttendanceAccount: true };
+  }
   const employee = await prisma.employee.findFirst({
     where: { userId, organizationId },
     include: { branch: true, shift: true, department: true },
@@ -1653,7 +1658,7 @@ const getLiveToday = async (organizationId) => {
 
   const [employees, attendances] = await Promise.all([
     prisma.employee.findMany({
-      where: { organizationId, status: { in: WORKING_STATUSES } },
+      where: { organizationId, status: { in: WORKING_STATUSES }, user: workforceUserFilter },
       select: {
         id: true,
         firstName: true,
@@ -1721,6 +1726,7 @@ const getLiveToday = async (organizationId) => {
 };
 
 const getMyAttendance = async (userId, organizationId, { limit = 30, page = 1 }, role) => {
+  if (NON_ATTENDANCE_ROLES.includes(role)) return { records: [], total: 0, page: 1, totalPages: 0 };
   const employee = await prisma.employee.findFirst({ where: { userId, organizationId } });
   if (!employee) return { records: [], total: 0 };
 
@@ -1769,6 +1775,7 @@ const getAllAttendance = async (organizationId, query = {}) => {
 
   const { limit: take, skip, page: curPage } = parsePagination({ page, limit }, { defaultLimit: 50 });
 
+  const workforceWhere = { ...where, employee: { ...(where.employee || {}), user: workforceUserFilter } };
   const [records, total] = await Promise.all([
     prisma.attendance.findMany({
       where,
@@ -1793,10 +1800,11 @@ const getAllAttendance = async (organizationId, query = {}) => {
       take,
       skip,
     }),
-    prisma.attendance.count({ where }),
+    prisma.attendance.count({ where: workforceWhere }),
   ]);
 
-  return { records, total, page: curPage, totalPages: Math.ceil(total / take) };
+  const visibleRecords = records.filter((record) => !NON_ATTENDANCE_ROLES.includes(record.employee?.user?.role));
+  return { records: visibleRecords, total, page: curPage, totalPages: Math.ceil(total / take) };
 };
 
 const getAttendanceSummary = async (organizationId, targetDate, branchId = null) => {
@@ -1818,8 +1826,8 @@ const getAttendanceSummary = async (organizationId, targetDate, branchId = null)
     date = getLocalDateOnly(new Date(), timezone);
   }
 
-  const empWhere = { organizationId, status: { in: WORKING_STATUSES } };
-  const attWhere = { organizationId, date };
+  const empWhere = { organizationId, status: { in: WORKING_STATUSES }, user: workforceUserFilter };
+  const attWhere = { organizationId, date, employee: { user: workforceUserFilter } };
 
   if (branchId && branchId !== "ALL" && branchId !== "") {
     empWhere.branchId = branchId;
@@ -1833,7 +1841,7 @@ const getAttendanceSummary = async (organizationId, targetDate, branchId = null)
 
   const [totalEmployees, todayAttendances, todayHoliday] = await Promise.all([
     prisma.employee.count({ where: empWhere }),
-    prisma.attendance.findMany({ where: attWhere, select: { status: true, checkIn: true, checkOut: true } }),
+    prisma.attendance.findMany({ where: { ...attWhere, employee: { user: workforceUserFilter } }, select: { status: true, checkIn: true, checkOut: true } }),
     prisma.holiday.findFirst({ where: holidayWhere }),
   ]);
 
@@ -1900,10 +1908,10 @@ const getBranchSummary = async (organizationId) => {
   const [branches, employees, attendances, leaves, holidays, companyLeaves] = await Promise.all([
     prisma.branch.findMany({ where: { organizationId }, select: { id: true, name: true } }),
     prisma.employee.findMany({
-      where: { organizationId, status: { in: WORKING_STATUSES }, deletedAt: null },
+      where: { organizationId, status: { in: WORKING_STATUSES }, deletedAt: null, user: workforceUserFilter },
       select: { id: true, branchId: true, shift: { select: { workingDays: true } } },
     }),
-    prisma.attendance.findMany({ where: { organizationId, date }, select: { employeeId: true, status: true, checkIn: true } }),
+    prisma.attendance.findMany({ where: { organizationId, date, employee: { user: workforceUserFilter } }, select: { employeeId: true, status: true, checkIn: true } }),
     prisma.leaveRequest.findMany({
       where: { organizationId, status: "APPROVED", startDate: { lte: date }, endDate: { gte: date } },
       select: { employeeId: true },
@@ -1958,7 +1966,8 @@ const getBranchSummary = async (organizationId) => {
 };
 
 const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, from, to, status, page = 1, limit = 20 }) => {
-  const where = { organizationId };
+  if (NON_ATTENDANCE_ROLES.includes(role)) return { success: true, total: 0, page: 1, limit: parsePagination({ page, limit }, { defaultLimit: 20 }).limit, totalPages: 0, records: [] };
+  const where = { organizationId, employee: { user: workforceUserFilter } };
   const teamRoles = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"];
   const canSeeTeam = teamRoles.includes(role);
   const canSeeLocation = ADMIN_ROLES.includes(role) || role === "HR";
@@ -2020,7 +2029,7 @@ const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, 
   if (canSeeTeam && exactToday && (!status || status === "ALL" || status === "ABSENT")) {
     const [employees, todayAttendances, approvedLeaves, holidays, companyLeaves] = await Promise.all([
       prisma.employee.findMany({
-        where: { organizationId, deletedAt: null, status: { in: WORKING_STATUSES }, ...(employeeId ? { id: employeeId } : {}) },
+        where: { organizationId, deletedAt: null, status: { in: WORKING_STATUSES }, user: workforceUserFilter, ...(employeeId ? { id: employeeId } : {}) },
         select: {
           id: true, firstName: true, lastName: true, employeeCode: true, designation: true, avatarUrl: true, branchId: true,
           department: { select: { id: true, name: true } },
