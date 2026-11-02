@@ -1726,7 +1726,6 @@ const getLiveToday = async (organizationId) => {
 };
 
 const getMyAttendance = async (userId, organizationId, { limit = 30, page = 1 }, role) => {
-  if (NON_ATTENDANCE_ROLES.includes(role)) return { records: [], total: 0, page: 1, totalPages: 0 };
   const employee = await prisma.employee.findFirst({ where: { userId, organizationId } });
   if (!employee) return { records: [], total: 0 };
 
@@ -1966,7 +1965,6 @@ const getBranchSummary = async (organizationId) => {
 };
 
 const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, from, to, status, page = 1, limit = 20 }) => {
-  if (NON_ATTENDANCE_ROLES.includes(role)) return { success: true, total: 0, page: 1, limit: parsePagination({ page, limit }, { defaultLimit: 20 }).limit, totalPages: 0, records: [] };
   const where = { organizationId, employee: { user: workforceUserFilter } };
   const teamRoles = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"];
   const canSeeTeam = teamRoles.includes(role);
