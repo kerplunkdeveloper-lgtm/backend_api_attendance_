@@ -18,6 +18,8 @@ const reviewerOnly = authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "
 router.get("/my", permissionController.my);
 router.post("/", permissionController.apply);
 router.delete("/:id", permissionController.cancel);
+router.post("/:id/start", permissionController.start);
+router.post("/:id/end", permissionController.end);
 
 // Review queue for admins and HR
 router.get("/", reviewerOnly, permissionController.list);

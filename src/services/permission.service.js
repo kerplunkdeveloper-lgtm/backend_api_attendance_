@@ -1,10 +1,11 @@
 const prisma = require("../config/database");
-const { getOrgDateOnly } = require("./attendance.service");
+const { getLocalDateOnly, getLocalMinutesOfDay } = require("../utils/datetime");
 const policyService = require("./policy.service");
 const leaveService = require("./leave.service");
 const notificationService = require("./notification.service");
 const { assertCanReview } = require("../utils/approvalChain");
 const { getPayrollPeriod, normalizePermissionHours, toIsoKey, round2 } = require("../utils/payrollCycle");
+const { officeOnlyRejection, hasCoordinatePair } = require("../utils/geofence");
 
 const REVIEW_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"];
 
@@ -28,6 +29,36 @@ const parseTime = (value, field) => {
 };
 
 const formatHours = (minutes) => Math.round((minutes / 60) * 100) / 100;
+
+const parseCoordinate = (value, label) => {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < -90 || number > 90) throw httpError(`${label} is not valid`, 400);
+  return number;
+};
+
+// Permission times are displayed and enforced in India Standard Time, never in the
+// Railway process timezone or a browser's local timezone.
+const PERMISSION_TIMEZONE = "Asia/Kolkata";
+const getPermissionDateOnly = (date = new Date()) => getLocalDateOnly(date, PERMISSION_TIMEZONE);
+
+const assertInsideOffice = async (organizationId, latitude, longitude, accuracy) => {
+  const lat = parseCoordinate(latitude, "Latitude");
+  const lng = Number(longitude);
+  if (!Number.isFinite(lng) || lng < -180 || lng > 180) throw httpError("Longitude is not valid", 400);
+
+  const branches = (await prisma.branch.findMany({
+    where: { organizationId },
+    select: { id: true, name: true, latitude: true, longitude: true, radiusMeters: true },
+  })).filter(hasCoordinatePair);
+
+  if (!branches.length) throw Object.assign(httpError("Your office location is not configured yet. Ask HR to set the branch GPS location before starting permission time.", 409), { code: "OFFICE_LOCATION_NOT_CONFIGURED" });
+
+  const rejection = officeOnlyRejection({ latitude: lat, longitude: lng, accuracy, branches, allowWfh: false });
+  if (rejection) throw Object.assign(httpError(rejection.message, 403), { code: rejection.code, details: rejection.details });
+
+  const matched = branches.find((branch) => !officeOnlyRejection({ latitude: lat, longitude: lng, accuracy: 0, branches: [branch] }));
+  return { latitude: lat, longitude: lng, branch: matched || branches[0] };
+};
 
 /**
  * The payroll cycle that contains `today`. Its label is the month the cycle ends in, so the
@@ -98,7 +129,7 @@ const hasTimeRange = data.startTime !== undefined || data.endTime !== undefined;
     if (!reason) throw httpError("Give a reason for the permission", 400);
     if (reason.length > 500) throw httpError("Reason must be 500 characters or fewer", 400);
 
-    const today = await getOrgDateOnly(organizationId);
+    const today = getPermissionDateOnly();
     if (date.getTime() < today.getTime()) throw httpError("A permission cannot be requested for a past date", 400);
 
     const eligibility = await leaveService.getEligibilityForEmployee(employee, organizationId);
@@ -136,7 +167,7 @@ const hasTimeRange = data.startTime !== undefined || data.endTime !== undefined;
   async listMine(organizationId, userId) {
     const employee = await this._employeeForUser(organizationId, userId);
     const policy = await policyService.getPolicy(organizationId);
-    const today = await getOrgDateOnly(organizationId);
+    const today = getPermissionDateOnly();
     const cycle = findCycleContaining(today, policy.payrollCycleStartDay, policy.payrollCycleEndDay);
 
     const [requests, approved] = await Promise.all([
@@ -241,6 +272,75 @@ const hasTimeRange = data.startTime !== undefined || data.endTime !== undefined;
     }
 
     return updated;
+  }
+
+  async _approvedPermissionForUser(organizationId, userId, requestId) {
+    const employee = await this._employeeForUser(organizationId, userId);
+    const request = await prisma.permissionRequest.findFirst({
+      where: { id: requestId, organizationId, employeeId: employee.id },
+    });
+    if (!request) throw httpError("Permission request not found", 404);
+    if (request.status !== "APPROVED") throw httpError("Only an approved permission can be started", 403);
+    return { employee, request };
+  }
+
+  async _assertPermissionWindow(organizationId, request, now, { requireWindow = true } = {}) {
+    const today = getPermissionDateOnly(now);
+    if (toIsoKey(today) !== toIsoKey(request.date)) throw httpError("This permission is not scheduled for today", 409);
+
+    if (!requireWindow || !request.startTime || !request.endTime) return;
+    const currentMinutes = getLocalMinutesOfDay(now, PERMISSION_TIMEZONE);
+    const [startHour, startMinute] = request.startTime.split(":").map(Number);
+    const [endHour, endMinute] = request.endTime.split(":").map(Number);
+    const startMinutes = startHour * 60 + startMinute;
+    const endMinutes = endHour * 60 + endMinute;
+    if (currentMinutes < startMinutes || currentMinutes >= endMinutes) {
+      throw httpError(`Permission can be started between ${request.startTime} and ${request.endTime}`, 409);
+    }
+  }
+
+  async startSession(organizationId, userId, requestId, data = {}) {
+    const { employee, request } = await this._approvedPermissionForUser(organizationId, userId, requestId);
+    if (request.startedAt && !request.endedAt) throw httpError("Permission time is already running", 409);
+    if (request.endedAt) throw httpError("This permission has already been completed", 409);
+    await this._assertPermissionWindow(organizationId, request, new Date());
+
+    const active = await prisma.permissionRequest.findFirst({
+      where: { organizationId, employeeId: employee.id, status: "APPROVED", startedAt: { not: null }, endedAt: null, id: { not: request.id } },
+      select: { id: true },
+    });
+    if (active) throw httpError("Another permission session is already running", 409);
+
+    const location = await assertInsideOffice(organizationId, data.latitude, data.longitude, data.accuracy);
+    return prisma.permissionRequest.update({
+      where: { id: request.id },
+      data: {
+        startedAt: new Date(),
+        startLatitude: location.latitude,
+        startLongitude: location.longitude,
+        startLocation: data.locationLabel ? String(data.locationLabel).slice(0, 250) : location.branch.name,
+      },
+    });
+  }
+
+  async endSession(organizationId, userId, requestId, data = {}) {
+    const { request } = await this._approvedPermissionForUser(organizationId, userId, requestId);
+    if (!request.startedAt) throw httpError("Start the approved permission before ending it", 409);
+    if (request.endedAt) throw httpError("Permission time is already completed", 409);
+    const now = new Date();
+    await this._assertPermissionWindow(organizationId, request, now, { requireWindow: false });
+    if (now.getTime() <= new Date(request.startedAt).getTime()) throw httpError("End time must be after the start time", 409);
+
+    const location = await assertInsideOffice(organizationId, data.latitude, data.longitude, data.accuracy);
+    return prisma.permissionRequest.update({
+      where: { id: request.id },
+      data: {
+        endedAt: now,
+        endLatitude: location.latitude,
+        endLongitude: location.longitude,
+        endLocation: data.locationLabel ? String(data.locationLabel).slice(0, 250) : location.branch.name,
+      },
+    });
   }
 
   /**

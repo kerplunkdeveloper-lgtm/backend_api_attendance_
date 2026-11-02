@@ -10,6 +10,8 @@ const router = express.Router();
 router.use(authenticate);
 
 // Employee submits OT request
+router.post("/start", overtimeController.startSession);
+router.patch("/:id/end", overtimeController.endSession);
 router.post("/request", overtimeController.requestOvertime);
 
 // Employee views own OT requests

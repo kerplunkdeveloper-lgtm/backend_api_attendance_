@@ -51,4 +51,18 @@ const review = async (req, res) => {
   }
 };
 
-module.exports = { my, apply, cancel, list, review };
+const start = async (req, res) => {
+  try {
+    const data = await permissionService.startSession(req.user.organizationId, req.user.id, req.params.id, req.body || {});
+    return res.json({ success: true, message: "Permission timer started", data });
+  } catch (error) { return sendError(res, error); }
+};
+
+const end = async (req, res) => {
+  try {
+    const data = await permissionService.endSession(req.user.organizationId, req.user.id, req.params.id, req.body || {});
+    return res.json({ success: true, message: "Permission timer stopped", data });
+  } catch (error) { return sendError(res, error); }
+};
+
+module.exports = { my, apply, cancel, list, review, start, end };

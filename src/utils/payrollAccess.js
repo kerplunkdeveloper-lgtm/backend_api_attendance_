@@ -5,15 +5,17 @@
  */
 
 const ADMIN_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN"];
+// HR is a full payroll operator. Managers may prepare/review attendance but
+// are not allowed to create or finalize payroll.
 const PAYROLL_APPROVER_ROLES = [...ADMIN_ROLES, "HR"];
-/** Payslip status moves only an admin may make: they decide the outcome of the month. */
+/** Final payroll status moves are available to company admins and HR payroll operators. */
 const ADMIN_ONLY_STATUSES = ["APPROVED", "REJECTED", "DISBURSED"];
 
 const forbidden = (message) => Object.assign(new Error(message), { statusCode: 403 });
 
 const assertCanSetStatus = (role, status) => {
   if (!PAYROLL_APPROVER_ROLES.includes(role) && ADMIN_ONLY_STATUSES.includes(status)) {
-    throw forbidden("Only an authorized admin or HR payroll reviewer can approve, reject or disburse payroll.");
+    throw forbidden("Only a company/platform admin or HR payroll operator can approve, reject or disburse payroll.");
   }
 };
 

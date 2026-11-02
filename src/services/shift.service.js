@@ -15,7 +15,9 @@ const normalizeMinutes = (value, fallback = 0) => {
 };
 
 const buildShiftMetrics = (shift) => {
-  const durationMinutes = getScheduledDurationMinutes(shift.startTime, shift.endTime);
+  const durationMinutes = Number.isFinite(Number(shift.totalWorkingMinutes)) && Number(shift.totalWorkingMinutes) > 0
+    ? Number(shift.totalWorkingMinutes)
+    : getScheduledDurationMinutes(shift.startTime, shift.endTime);
   const configuredBreakMinutes = shift.breakIncluded ? normalizeMinutes(shift.breakMinutes) : 0;
   const configuredLunchMinutes = shift.lunchIncluded ? normalizeMinutes(shift.lunchMinutes) : 0;
   const scheduledWorkMinutes = Math.max(0, durationMinutes - configuredBreakMinutes - configuredLunchMinutes);
@@ -39,7 +41,7 @@ const validateShiftPauseConfig = (startTime, endTime, breakMinutes, lunchMinutes
 };
 
 const createShift = async (organizationId, data) => {
-  const { name, startTime, endTime, graceMinutes, breakMinutes = 0, lunchMinutes = 0, breakIncluded = true, lunchIncluded = true, workingDays } = data;
+  const { name, startTime, endTime, graceMinutes, breakMinutes = 0, lunchMinutes = 0, breakIncluded = true, lunchIncluded = true, workingDays, flexiblePunching = false, totalWorkingMinutes } = data;
   if (!name || !name.trim()) throw new Error("Shift name is required");
   if (!startTime || !endTime) throw new Error("Shift start time and end time are required (e.g. 09:00, 18:00)");
   const cleanStart = assertTime("Start time", startTime);
@@ -64,6 +66,8 @@ const createShift = async (organizationId, data) => {
       breakIncluded: breakIncluded !== false,
       lunchIncluded: lunchIncluded !== false,
       workingDays: cleanWorkingDays,
+      flexiblePunching: flexiblePunching === true,
+      totalWorkingMinutes: totalWorkingMinutes !== undefined ? normalizeMinutes(totalWorkingMinutes) || null : null,
     },
     include: { _count: { select: { employees: true } } },
   });
@@ -101,7 +105,7 @@ const updateShift = async (organizationId, shiftId, data) => {
   const shift = await prisma.shift.findFirst({ where: { id: shiftId, organizationId } });
   if (!shift) throw new Error("Shift not found in this organization");
 
-  const { name, startTime, endTime, graceMinutes, breakMinutes, lunchMinutes, breakIncluded, lunchIncluded, workingDays } = data;
+  const { name, startTime, endTime, graceMinutes, breakMinutes, lunchMinutes, breakIncluded, lunchIncluded, workingDays, flexiblePunching, totalWorkingMinutes } = data;
   const nextStartTime = startTime ? assertTime("Start time", startTime) : shift.startTime;
   const nextEndTime = endTime ? assertTime("End time", endTime) : shift.endTime;
   const nextWorkingDays = workingDays ? normalizeWorkingDays(workingDays) : undefined;
@@ -123,6 +127,8 @@ const updateShift = async (organizationId, shiftId, data) => {
       ...(breakIncluded !== undefined ? { breakIncluded: nextBreakIncluded } : {}),
       ...(lunchIncluded !== undefined ? { lunchIncluded: nextLunchIncluded } : {}),
       ...(nextWorkingDays ? { workingDays: nextWorkingDays } : {}),
+      ...(flexiblePunching !== undefined ? { flexiblePunching: flexiblePunching === true } : {}),
+      ...(totalWorkingMinutes !== undefined ? { totalWorkingMinutes: normalizeMinutes(totalWorkingMinutes) || null } : {}),
     },
     include: { _count: { select: { employees: true } } },
   });
@@ -148,12 +154,18 @@ const deleteShift = async (organizationId, shiftId) => {
   });
 };
 
-const assignEmployeesToShift = async (organizationId, shiftId, employeeIds) => {
+const assignEmployeesToShift = async (organizationId, shiftId, employeeIds, flexibleEmployeeIds = []) => {
   const shift = await prisma.shift.findFirst({ where: { id: shiftId, organizationId } });
   if (!shift) throw new Error("Shift not found in this organization");
   if (!Array.isArray(employeeIds) || employeeIds.length === 0) throw new Error("employeeIds must be a non-empty array of employee IDs");
-  const result = await prisma.employee.updateMany({ where: { id: { in: employeeIds }, organizationId }, data: { shiftId } });
-  return { success: true, message: `Assigned ${result.count} employees to ${shift.name}`, shift, count: result.count };
+  const flexibleIds = new Set(Array.isArray(flexibleEmployeeIds) ? flexibleEmployeeIds : []);
+  const result = await prisma.$transaction(
+    employeeIds.map((employeeId) => prisma.employee.updateMany({
+      where: { id: employeeId, organizationId },
+      data: { shiftId, flexiblePunching: flexibleIds.has(employeeId) },
+    }))
+  );
+  return { success: true, message: `Assigned ${employeeIds.length} employees to ${shift.name}`, shift, count: employeeIds.length };
 };
 
 module.exports = { createShift, getShifts, getShiftById, updateShift, deleteShift, assignEmployeesToShift };

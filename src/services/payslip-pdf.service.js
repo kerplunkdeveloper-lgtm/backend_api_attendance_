@@ -61,6 +61,12 @@ async function generatePayslipPdf(details) {
       headerText: "#ffffff",
     };
 
+    // Keep the downloadable PDF consistent with the on-screen payslip template.
+    const showBank = details.template?.showBankDetails ?? true;
+    const showPan = details.template?.showPanUan ?? true;
+    const showAttendance = details.template?.showAttendanceSummary ?? true;
+    const showWords = details.template?.showNetSalaryInWords ?? true;
+
     const doc = new PDFDocument({
       size: "A4",
       margin: 0,
@@ -83,6 +89,11 @@ async function generatePayslipPdf(details) {
     let logoBuf = null;
     if (details.organization?.logoUrl) {
       logoBuf = await fetchLogo(details.organization.logoUrl);
+    }
+
+    let signatureBuf = null;
+    if (details.template?.signatureImageUrl) {
+      signatureBuf = await fetchLogo(details.template.signatureImageUrl);
     }
 
     // ── 1. Top Header Banner ──────────────────────────────────────────
@@ -171,19 +182,28 @@ async function generatePayslipPdf(details) {
 
     infoCell("Branch / Location", details.employee?.branch, col1X, rowY2);
     infoCell("Date of Joining", formatDate(details.employee?.dateOfJoining), col2X, rowY2);
-    infoCell("PAN Number", details.employee?.panNumber, col3X, rowY2);
-    infoCell("UAN / PF No", details.employee?.uanNumber, col4X, rowY2);
 
-    infoCell("Bank Name", details.employee?.bankName, col1X, rowY3);
-    infoCell("Bank Account No", details.employee?.accountNumber, col2X, rowY3);
-    infoCell("IFSC Code", details.employee?.ifscCode, col3X, rowY3);
+    if (showBank) {
+      infoCell("Bank Name", details.employee?.bankName, col1X, rowY3);
+      infoCell("Bank Account No", details.employee?.accountNumber, col2X, rowY3);
+      infoCell("IFSC Code", details.employee?.ifscCode, col3X, rowY3);
+    }
+    if (showPan) {
+      infoCell("PAN Number", details.employee?.panNumber, col3X, rowY2);
+      infoCell("UAN / PF No", details.employee?.uanNumber, col4X, rowY2);
+    }
     infoCell("Working Days", `${details.attendance?.workingDays || 0} Days`, col4X, rowY3);
+
+    if (!showBank && !showPan) {
+      infoCell("Payroll Period", details.period?.periodLabel, col1X, rowY3);
+    }
 
     curY += 94;
 
     // ── 4. Attendance & Leaves Performance Strip ─────────────────────
     const attH = 34;
-    doc.roundedRect(L, curY, W, attH, 6).fillAndStroke("#ffffff", C.border);
+    if (showAttendance) {
+      doc.roundedRect(L, curY, W, attH, 6).fillAndStroke("#ffffff", C.border);
 
     const attCols = 7;
     const attColW = W / attCols;
@@ -208,8 +228,25 @@ async function generatePayslipPdf(details) {
         doc.moveTo(bx + attColW, curY + 5).lineTo(bx + attColW, curY + attH - 5).strokeColor(C.border).stroke();
       }
     });
+    }
 
-    curY += attH + 12;
+    curY += showAttendance ? attH + 12 : 12;
+
+    const shootSettlements = Array.isArray(details.shootSettlements) ? details.shootSettlements : [];
+    if (shootSettlements.length) {
+      const shootH = 30 + shootSettlements.length * 18;
+      doc.roundedRect(L, curY, W, shootH, 6).fillAndStroke("#faf5ff", "#ddd6fe");
+      doc.font("Helvetica-Bold").fontSize(8).fillColor("#6d28d9");
+      text("SHOOT SETTLEMENT — INCLUDED IN PAYROLL", L + 10, curY + 8);
+      shootSettlements.forEach((shoot, index) => {
+        const rowY = curY + 21 + index * 18;
+        const claims = Number(shoot.approvedAllowanceAmount || 0) + Number(shoot.approvedExpenseAmount || 0);
+        doc.font("Helvetica").fontSize(7.5).fillColor(C.body);
+        text(`${shoot.shootName || "Shoot"} · ${Number(shoot.approvedShootMinutes || 0) / 60}h shoot · ${Number(shoot.approvedTravelOtMinutes || 0) / 60}h travel OT`, L + 10, rowY, { width: W - 150, ellipsis: true });
+        text(`Claims ${formatInr(claims)}`, L, rowY, { width: W - 10, align: "right" });
+      });
+      curY += shootH + 12;
+    }
 
     // ── 5. Side-by-Side: Earnings vs Deductions ──────────────────────
     const colGap = 12;
@@ -301,8 +338,10 @@ async function generatePayslipPdf(details) {
 
     // Net pay words & formula breakdown
     const words = details.totals?.netSalaryInWords || "";
-    doc.font("Helvetica-Oblique").fontSize(8).fillColor("#e0e7ff");
-    text(words, L + 180, curY + 14, { width: W - 195, ellipsis: true });
+    if (showWords) {
+      doc.font("Helvetica-Oblique").fontSize(8).fillColor("#e0e7ff");
+      text(words, L + 180, curY + 14, { width: W - 195, ellipsis: true });
+    }
 
     doc.font("Helvetica").fontSize(7.5).fillColor("#c7d2fe");
     const reimbursements = Number(details.totals?.reimbursements || 0);
@@ -328,7 +367,7 @@ async function generatePayslipPdf(details) {
     text(explLine1, L + 10, curY + 19, { width: W - 20, ellipsis: true });
 
     const lopDays = details.attendance?.unpaidLeaveDays || 0;
-    const lopDed = details.attendance?.unpaidLeaveDeduction || 0;
+    const lopDed = details.attendance?.lopDeduction ?? details.attendance?.unpaidLeaveDeduction ?? 0;
     const permDed = details.attendance?.permissionDeduction || 0;
     const lateDed = details.attendance?.lateDeduction || 0;
 
@@ -350,6 +389,9 @@ async function generatePayslipPdf(details) {
     const sigTitle = details.template?.signatoryTitle || "Head of Human Resources & Finance";
     const sigName = details.template?.signatoryName || "Authorized Signatory";
 
+    if (signatureBuf) {
+      try { doc.image(signatureBuf, sigX + 20, curY + 18, { fit: [100, 24] }); } catch { /* keep text signature fallback */ }
+    }
     doc.moveTo(sigX, curY + 34).lineTo(R, curY + 34).strokeColor(C.muted).stroke();
     doc.font("Helvetica-Bold").fontSize(8).fillColor(C.ink);
     text(sigName, sigX, curY + 38, { width: 140, align: "center" });

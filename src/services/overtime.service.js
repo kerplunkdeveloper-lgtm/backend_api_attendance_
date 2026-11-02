@@ -1,6 +1,7 @@
 const prisma = require("../config/database");
 const { parsePagination } = require("../utils/pagination");
-const { getOrgDateOnly } = require("./attendance.service");
+const { getOrgDateOnly, getOrgTimezone } = require("./attendance.service");
+const { getLocalMinutesOfDay, parseTimeToMinutes } = require("../utils/datetime");
 const { assertCanReview, visibleToReviewer } = require("../utils/approvalChain");
 const webhookService = require("./webhook.service");
 
@@ -36,17 +37,177 @@ class OvertimeService {
     return autoRaised?.requestedMinutes ?? 0;
   }
 
+  /** Start a separately tracked overtime session only after its request is approved. */
+  async startOvertimeSession(organizationId, userId, reason) {
+    const employee = await prisma.employee.findFirst({ where: { userId, organizationId } });
+    if (!employee) {
+      const error = new Error("Employee profile not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const now = new Date();
+    const attendanceDate = await getOrgDateOnly(organizationId, now);
+    const attendance = await prisma.attendance.findFirst({
+      where: { employeeId: employee.id, organizationId, date: attendanceDate },
+    });
+
+    if (!attendance?.checkIn || !attendance.checkOut) {
+      const error = new Error("Complete your regular punch-in and punch-out before starting overtime");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const openSession = await prisma.overtimeRequest.findFirst({
+      where: { organizationId, employeeId: employee.id, attendanceId: attendance.id, status: "APPROVED", otCheckIn: { not: null }, otCheckOut: null },
+    });
+    if (openSession) {
+      const error = new Error("An overtime session is already running. End it before starting another one.");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const request = await prisma.overtimeRequest.findFirst({
+      where: { organizationId, employeeId: employee.id, attendanceId: attendance.id, status: "APPROVED", otCheckIn: null, otCheckOut: null },
+      orderBy: { createdAt: "desc" },
+      include: { attendance: { select: { id: true, date: true, checkOut: true } } },
+    });
+    if (!request) {
+      const error = new Error("Overtime approval is required before starting overtime");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    const timezone = await getOrgTimezone(organizationId);
+    const plannedStart = parseTimeToMinutes(request.plannedStartTime);
+    if (plannedStart !== null && getLocalMinutesOfDay(now, timezone) < plannedStart) {
+      const error = new Error(`Overtime can start from ${request.plannedStartTime}`);
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const updated = await prisma.overtimeRequest.update({
+      where: { id: request.id },
+      data: { otCheckIn: now, ...(reason ? { reason: String(reason).trim() } : {}) },
+      include: { attendance: { select: { id: true, date: true, checkOut: true } } },
+    });
+
+    return { success: true, message: "Approved overtime started. End it when you finish.", request: updated };
+  }
+
+  /** Close a separate overtime session; minutes remain unpaid until reviewed. */
+  async endOvertimeSession(organizationId, userId, requestId, reason) {
+    const employee = await prisma.employee.findFirst({ where: { userId, organizationId } });
+    if (!employee) {
+      const error = new Error("Employee profile not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const request = await prisma.overtimeRequest.findFirst({
+      where: { id: requestId, organizationId, employeeId: employee.id, status: "APPROVED", otCheckIn: { not: null }, otCheckOut: null },
+    });
+    if (!request) {
+      const error = new Error("Active overtime session not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const now = new Date();
+    const requestedMinutes = Math.floor((now.getTime() - new Date(request.otCheckIn).getTime()) / 60000);
+    if (requestedMinutes <= 0) {
+      const error = new Error("Overtime must run for at least one minute");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const approvedLimit = Number(request.approvedMinutes ?? request.requestedMinutes ?? 0);
+    const payableMinutes = Math.min(requestedMinutes, approvedLimit || requestedMinutes);
+    const updated = await prisma.overtimeRequest.update({
+      where: { id: request.id },
+      data: {
+        requestedMinutes,
+        approvedMinutes: payableMinutes,
+        otCheckOut: now,
+        ...(reason ? { reason: String(reason).trim() } : {}),
+      },
+      include: { attendance: { select: { id: true, date: true, checkOut: true } } },
+    });
+
+    void require("./notification.service").notifyReviewersOfRequest({
+      organizationId,
+      employeeId: employee.id,
+      title: "New overtime session",
+      summary: `completed ${requestedMinutes} minute(s) of post-shift overtime awaiting approval.`,
+    });
+
+    return { success: true, message: "Overtime ended and sent for approval", request: updated };
+  }
+
   /**
    * Employee requests overtime approval for a specific attendance date
    */
   async requestOvertime(organizationId, userId, payload = {}) {
-    let { attendanceId, requestedMinutes, reason, date, hours } = payload;
+    let { attendanceId, requestedMinutes, reason, date, hours, startTime, endTime } = payload;
 
     const employee = await prisma.employee.findFirst({ where: { userId, organizationId } });
     if (!employee) {
       const error = new Error("Employee profile not found");
       error.statusCode = 404;
       throw error;
+    }
+
+    // New SaaS flow: planned OT must be approved before the employee can start it.
+    if (date && startTime && endTime) {
+      const dateOnly = await this._attendanceDate(organizationId, date);
+      const startMinutes = parseTimeToMinutes(startTime);
+      const endMinutes = parseTimeToMinutes(endTime);
+      if (!dateOnly || startMinutes === null || endMinutes === null || endMinutes <= startMinutes) {
+        const error = new Error("Select a valid overtime date, start time and end time");
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const attendance = await prisma.attendance.findFirst({
+        where: { employeeId: employee.id, organizationId, date: dateOnly },
+      });
+      if (!attendance?.checkIn) {
+        const error = new Error("Punch in for the day before requesting overtime");
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const existing = await prisma.overtimeRequest.findFirst({
+        where: { attendanceId: attendance.id, status: { in: ["PENDING", "APPROVED"] }, otCheckOut: null },
+      });
+      if (existing) {
+        const error = new Error("An overtime request already exists for this day");
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const plannedMinutes = endMinutes - startMinutes;
+      const request = await prisma.overtimeRequest.create({
+        data: {
+          organizationId,
+          employeeId: employee.id,
+          attendanceId: attendance.id,
+          requestedMinutes: plannedMinutes,
+          plannedStartTime: startTime,
+          plannedEndTime: endTime,
+          reason: reason || "Planned overtime",
+          status: "PENDING",
+        },
+        include: { attendance: { select: { id: true, date: true, checkIn: true, checkOut: true } } },
+      });
+
+      void require("./notification.service").notifyReviewersOfRequest({
+        organizationId,
+        employeeId: employee.id,
+        title: "New overtime approval request",
+        summary: `requested ${plannedMinutes} minute(s) from ${startTime} to ${endTime}.`,
+      });
+      return { success: true, message: "Overtime request submitted for approval", request };
     }
 
     if (!requestedMinutes && hours != null) {
@@ -211,12 +372,12 @@ class OvertimeService {
     }
 
     const result = await prisma.$transaction(async (tx) => {
-      if (status === "APPROVED") {
+      if (status === "APPROVED" && !request.otCheckIn && !request.plannedStartTime) {
         await tx.attendance.update({
           where: { id: request.attendanceId },
           data: { overtimeMinutes: finalOtMinutes },
         });
-      } else {
+      } else if (status === "REJECTED" && !request.otCheckIn && !request.plannedStartTime) {
         // Rejection withdraws only the minutes under review. Blanket-zeroing the
         // column also erased overtime that was never part of this request.
         const remaining = Math.max(

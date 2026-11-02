@@ -741,9 +741,11 @@ class OnboardingService {
           data: {
             organizationId,
             employeeId: newEmployee.id,
+            annualCtc: salaryVal * 12,
+            monthlyCtc: salaryVal,
             baseSalary: basic,
             hra: hra,
-            special: special,
+            special: specialAllowance,
           },
         });
       }
@@ -1141,6 +1143,8 @@ class OnboardingService {
           data: {
             organizationId: candidate.organizationId,
             employeeId: emp.id,
+            annualCtc: salaryVal * 12,
+            monthlyCtc: salaryVal,
             baseSalary: basic,
             hra: hra,
             special: specialAllowance,

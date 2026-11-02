@@ -11,10 +11,11 @@ const code = (fn) => {
   }
 };
 
-test("HR can submit payroll for approval but cannot approve, reject or disburse it", () => {
+test("Managers cannot approve payroll, while HR can operate payroll end to end", () => {
   assert.equal(code(() => assertCanSetStatus("MANAGER", "PENDING_APPROVAL")), null);
   assert.equal(code(() => assertCanSetStatus("MANAGER", "DRAFT")), null);
   for (const status of ["APPROVED", "REJECTED", "DISBURSED"]) assert.equal(code(() => assertCanSetStatus("MANAGER", status)), 403, status);
+  for (const status of ["PENDING_APPROVAL", "DRAFT", "APPROVED", "REJECTED", "DISBURSED"]) assert.equal(code(() => assertCanSetStatus("HR", status)), null, `HR ${status}`);
 });
 
 test("an admin can make any status change", () => {
