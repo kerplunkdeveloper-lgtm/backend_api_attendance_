@@ -121,7 +121,10 @@ const evaluateAttendanceAgainstShift = (
   options = {}
 ) => {
   const { timeZone = DEFAULT_TIMEZONE, halfDayThresholdMinutes = null, lunchMinutes = 0 } = options;
-  const scheduledMinutes = getScheduledDurationMinutes(shift.startTime, shift.endTime);
+  const configuredTotalMinutes = Number(shift.totalWorkingMinutes);
+  const scheduledMinutes = Number.isFinite(configuredTotalMinutes) && configuredTotalMinutes > 0
+    ? configuredTotalMinutes
+    : getScheduledDurationMinutes(shift.startTime, shift.endTime);
   const configuredBreakMinutes = shift.breakIncluded === false ? 0 : Math.max(0, Number(shift.breakMinutes) || 0);
   const configuredLunchMinutes = shift.lunchIncluded === false ? 0 : Math.max(0, Number(shift.lunchMinutes) || 0);
   const scheduledWorkMinutes = Math.max(0, scheduledMinutes - configuredBreakMinutes - configuredLunchMinutes);
@@ -136,7 +139,7 @@ const evaluateAttendanceAgainstShift = (
   };
   if (!checkInTime) return { ...base, workingMinutes: 0, workingHours: "0.0", workingFormatted: formatMinutes(0), lateMinutes: 0, earlyMinutes: 0, overtimeMinutes: 0, overtimeHours: "0.0", overtimeFormatted: formatMinutes(0), status: "ABSENT" };
 
-  const lateMinutes = calculateLateMinutes(shift.startTime, shift.graceMinutes, checkInTime, timeZone);
+  const lateMinutes = shift.flexiblePunching ? 0 : calculateLateMinutes(shift.startTime, shift.graceMinutes, checkInTime, timeZone);
   if (!checkOutTime) return { ...base, workingMinutes: 0, workingHours: "0.0", workingFormatted: formatMinutes(0), lateMinutes, originalLateMinutes: lateMinutes, lateFormatted: formatMinutes(lateMinutes), earlyMinutes: 0, earlyFormatted: formatMinutes(0), overtimeMinutes: 0, overtimeHours: "0.0", overtimeFormatted: formatMinutes(0), status: lateMinutes > 0 ? "LATE" : "PRESENT" };
 
   const inMs = new Date(checkInTime).getTime();
@@ -149,7 +152,7 @@ const evaluateAttendanceAgainstShift = (
     elapsedMinutes = outMins >= inMins ? outMins - inMins : 1440 - inMins + outMins;
   }
   const workingMinutes = Math.max(0, elapsedMinutes - totalPauseMinutes);
-  const earlyMinutes = calculateEarlyMinutes(shift.endTime, checkOutTime, shift.startTime, timeZone);
+  const earlyMinutes = shift.flexiblePunching ? 0 : calculateEarlyMinutes(shift.endTime, checkOutTime, shift.startTime, timeZone);
   const overtimeMinutes = Math.max(0, workingMinutes - scheduledWorkMinutes);
   const halfDayThreshold = Number.isFinite(halfDayThresholdMinutes) && halfDayThresholdMinutes > 0 ? halfDayThresholdMinutes : Math.floor(scheduledWorkMinutes / 2);
   const fullDayThresholdMinutes = scheduledWorkMinutes > 0 ? scheduledWorkMinutes : Math.min(480, scheduledMinutes || 480);

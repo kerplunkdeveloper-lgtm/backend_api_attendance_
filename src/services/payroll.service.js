@@ -32,6 +32,83 @@ const STATUS_TRANSITIONS = {
 /** Normalise a Date to a YYYY-MM-DD key for set membership tests. */
 const toDateKey = (date) => new Date(date).toISOString().slice(0, 10);
 
+/** A tenant-visible, auditable day ledger used by payroll preview and payslips. */
+const buildDailyPayrollLedger = ({ period, asOf, workingDays, holidayKeys, attendanceByKey, approvedOvertimeByKey, unpaidLeaveKeys, companyLeaveByKey, todayKey, dailyRate, hourlyRate, overtimeMultiplier, lateComingRules, maxLatesBeforeDeduction, lateDeductionPercent }) => {
+  const rows = [];
+  let lateCount = 0;
+  const lateRules = (lateComingRules || []).filter((rule) => rule.isActive && Number(rule.lateDays) > 0 && Number(rule.lopDays) > 0);
+
+  for (let t = period.start.getTime(); t <= Math.min(period.end.getTime(), new Date(asOf).getTime()); t += 24 * 60 * 60 * 1000) {
+    const date = new Date(t);
+    const dateKey = toIsoKey(date);
+    const attendance = attendanceByKey.get(dateKey);
+    const workingDay = workingDays.has(date.getUTCDay());
+    const holiday = holidayKeys.has(dateKey) || attendance?.status === "HOLIDAY";
+    const weekOff = !holiday && (attendance?.status === "WEEK_OFF" || !workingDay);
+    let category = "ABSENT";
+    let lopDays = 0;
+    let note = "No attendance recorded";
+
+    if (holiday) { category = "HOLIDAY"; lopDays = 0; note = "Paid company holiday"; }
+    else if (weekOff) { category = "WEEK_OFF"; lopDays = 0; note = "Weekly off"; }
+    else if (attendance?.status === "PRESENT" || attendance?.status === "WORK_FROM_HOME") { category = attendance.status; note = "Present"; }
+    else if (attendance?.status === "LATE") { category = "LATE"; note = `${Number(attendance.lateMinutes || 0)} late minutes`; }
+    else if (attendance?.status === "HALF_DAY") { category = "HALF_DAY"; lopDays = 0.5; note = "Half day attendance"; }
+    else if (attendance?.status === "ON_LEAVE") {
+      if (unpaidLeaveKeys.has(dateKey)) { category = "UNPAID_LEAVE"; lopDays = 1; note = "Approved unpaid leave"; }
+      else { category = "PAID_LEAVE"; note = "Approved paid leave"; }
+    } else if (companyLeaveByKey.has(dateKey)) {
+      const paid = Boolean(companyLeaveByKey.get(dateKey).isPaid);
+      category = paid ? "COMPANY_LEAVE_PAID" : "COMPANY_LEAVE_UNPAID";
+      lopDays = paid ? 0 : 1;
+      note = paid ? "Paid company leave" : "Unpaid company leave";
+    } else if (!attendance && dateKey === todayKey) {
+      category = "OPEN"; lopDays = 0; note = "Today is still in progress";
+    } else {
+      lopDays = 1;
+    }
+
+    const isLate = category === "LATE";
+    let lateDeductionDays = 0;
+    let lateDeduction = 0;
+    if (isLate) {
+      lateCount += 1;
+      const previousLateCount = lateCount - 1;
+      if (lateRules.length) {
+        const before = lateRules.reduce((sum, rule) => sum + Math.floor(previousLateCount / Number(rule.lateDays)) * Number(rule.lopDays), 0);
+        const after = lateRules.reduce((sum, rule) => sum + Math.floor(lateCount / Number(rule.lateDays)) * Number(rule.lopDays), 0);
+        lateDeductionDays = Math.max(0, after - before);
+        lateDeduction = dailyRate * lateDeductionDays;
+      } else if (lateCount > Number(maxLatesBeforeDeduction || 0)) {
+        lateDeduction = dailyRate * Number(lateDeductionPercent || 0);
+      }
+    }
+
+    const lopDeduction = dailyRate * lopDays;
+    const approvedSessionMinutes = Number(approvedOvertimeByKey?.get(dateKey) || 0);
+    const overtimeMinutes = Number(attendance?.overtimeMinutes || 0) + approvedSessionMinutes;
+    const overtimePay = round2((overtimeMinutes / 60) * Number(hourlyRate || 0) * Number(overtimeMultiplier || 1.5));
+    rows.push({
+      date: dateKey,
+      status: category,
+      note,
+      punchIn: attendance?.checkIn || null,
+      punchOut: attendance?.checkOut || null,
+      workingMinutes: Number(attendance?.workingMinutes || 0),
+      overtimeMinutes,
+      overtimePay,
+      lateMinutes: Number(attendance?.lateMinutes || 0),
+      perDaySalary: round2(dailyRate),
+      lopDays,
+      lopDeduction: round2(lopDeduction),
+      lateDeductionDays,
+      lateDeduction: round2(lateDeduction),
+      earnedSalary: round2(Math.max(0, dailyRate - lopDeduction - lateDeduction + overtimePay)),
+    });
+  }
+  return rows;
+};
+
 class PayrollService {
   /**
    * Returns the set of YYYY-MM-DD dates in the range that are covered by an
@@ -76,7 +153,7 @@ class PayrollService {
       hra = 0,
       transport = 0,
       transportAllowance,
-      special = 0,
+      special,
       specialAllowance,
       otherAllowance = 0,
       pf = 0,
@@ -102,7 +179,11 @@ class PayrollService {
     }
 
     const finalTransport = transport !== undefined ? transport : (transportAllowance || 0);
-    const finalSpecial = special !== undefined ? special : (specialAllowance || 0);
+    // `specialAllowance` is the legacy/API alias. Do not default `special` in
+    // destructuring, otherwise the alias is always ignored and saved as 0.
+    const finalSpecial = special !== undefined && special !== null && special !== ""
+      ? special
+      : (specialAllowance ?? 0);
     const finalAnnualCtc = annualCtc !== undefined && annualCtc !== null ? Number(annualCtc) : (monthlyCtc ? Number(monthlyCtc) * 12 : null);
     const finalMonthlyCtc = monthlyCtc !== undefined && monthlyCtc !== null ? Number(monthlyCtc) : (annualCtc ? Number(annualCtc) / 12 : null);
 
@@ -288,6 +369,23 @@ class PayrollService {
       },
     });
     const attendanceStatusByKey = new Map(attendances.map((att) => [toIsoKey(att.date), att.status]));
+    const attendanceByKey = new Map(attendances.map((att) => [toIsoKey(att.date), att]));
+    const approvedOtSessions = await prisma.overtimeRequest.findMany({
+      where: {
+        organizationId,
+        employeeId,
+        status: "APPROVED",
+        otCheckIn: { not: null },
+        otCheckOut: { not: null },
+        attendance: { date: { gte: period.start, lte: period.end } },
+      },
+      select: { approvedMinutes: true, requestedMinutes: true, attendance: { select: { date: true } } },
+    });
+    const approvedOvertimeByKey = new Map();
+    for (const session of approvedOtSessions) {
+      const key = toIsoKey(session.attendance.date);
+      approvedOvertimeByKey.set(key, Number(approvedOvertimeByKey.get(key) || 0) + Number(session.approvedMinutes ?? session.requestedMinutes ?? 0));
+    }
 
     // An ON_LEAVE attendance row does not say whether the leave was paid — that
     // lives on LeaveType.isPaid. Without this lookup, loss-of-pay leave would be
@@ -328,23 +426,43 @@ class PayrollService {
       todayKey,
     });
 
+    const dailyPayroll = buildDailyPayrollLedger({
+      period,
+      asOf: todayDate,
+      workingDays: parseWorkingDays(employee.shift?.workingDays),
+      holidayKeys,
+      attendanceByKey,
+      approvedOvertimeByKey,
+      unpaidLeaveKeys,
+      companyLeaveByKey,
+      todayKey,
+      dailyRate,
+      hourlyRate,
+      overtimeMultiplier,
+      lateComingRules,
+      maxLatesBeforeDeduction,
+      lateDeductionPercent,
+    });
+
     let totalOvertimeMinutes = 0;
     if (!policy.requireOtApproval) {
       attendances.forEach((att) => {
-        totalOvertimeMinutes += att.overtimeMinutes || 0;
+        // Shoot OT is paid only through its approved settlement below.
+        if (!att.wfhNote?.startsWith("SHOOT:")) totalOvertimeMinutes += att.overtimeMinutes || 0;
       });
+      totalOvertimeMinutes += [...approvedOvertimeByKey.values()].reduce((sum, minutes) => sum + Number(minutes || 0), 0);
     } else {
       const approvedOt = await prisma.overtimeRequest.findMany({
         where: {
           organizationId,
           employeeId,
           status: "APPROVED",
-          attendance: { date: { gte: period.start, lte: period.end } },
+          attendance: { date: { gte: period.start, lte: period.end }, },
         },
-        select: { approvedMinutes: true, requestedMinutes: true },
+        select: { approvedMinutes: true, requestedMinutes: true, attendance: { select: { wfhNote: true } } },
       });
       totalOvertimeMinutes = approvedOt.reduce(
-        (sum, row) => sum + (row.approvedMinutes ?? row.requestedMinutes ?? 0),
+        (sum, row) => row.attendance?.wfhNote?.startsWith("SHOOT:") ? sum : sum + (row.approvedMinutes ?? row.requestedMinutes ?? 0),
         0
       );
     }
@@ -355,7 +473,7 @@ class PayrollService {
     try {
       approvedShootSettlements = await prisma.shootSettlement.findMany({
         where: { organizationId, employeeId, status: "APPROVED", payrollStatus: "READY", shootDate: { gte: period.start, lte: period.end } },
-        select: { id: true, approvedShootOtMinutes: true, approvedTravelOtMinutes: true, approvedAllowanceAmount: true, approvedExpenseAmount: true },
+        select: { id: true, approvedShootMinutes: true, approvedShootOtMinutes: true, approvedTravelOtMinutes: true, approvedAllowanceAmount: true, approvedExpenseAmount: true, shootDate: true, shootRequest: { select: { shootName: true, location: true } } },
       });
     } catch (error) {
       // A rollout may deploy the payroll code before the additive settlement table.
@@ -379,9 +497,17 @@ class PayrollService {
         status: "APPROVED",
         date: { gte: period.start, lte: period.end },
       },
-      select: { hours: true },
+      select: { hours: true, startedAt: true, endedAt: true },
     });
-    const approvedPermissionHours = approvedPermissions.reduce((sum, row) => sum + Number(row.hours), 0);
+    const approvedPermissionHours = approvedPermissions.reduce((sum, row) => {
+      // New permission sessions are charged by the GPS-verified time captured
+      // by the employee. Keep the requested hours for older records that do
+      // not have a timer session yet.
+      if (row.startedAt && row.endedAt) {
+        return sum + Math.max(0, (new Date(row.endedAt).getTime() - new Date(row.startedAt).getTime()) / 3_600_000);
+      }
+      return sum + Number(row.hours || 0);
+    }, 0);
     const permission = computePermissionDeduction({
       approvedHours: approvedPermissionHours,
       allowanceHours: policy.monthlyPermissionHours,
@@ -391,17 +517,7 @@ class PayrollService {
     const unpaidLeaveDays = Math.max(0, dayCounts.unpaidLeaveDays);
     const unpaidLeaveDeduction = money.multiply(dailyRate, unpaidLeaveDays);
     const lateCount = dayCounts.lateCount;
-    const configuredLateLopDays = lateComingRules
-      .filter((rule) => rule.isActive && rule.lateDays > 0 && rule.lopDays > 0)
-      .reduce((total, rule) => total + Math.floor(lateCount / rule.lateDays) * Number(rule.lopDays), 0);
-    const lateDeduction = lateComingRules.length
-      ? money.multiply(dailyRate, configuredLateLopDays)
-      : lateCount > maxLatesBeforeDeduction
-        ? money.multiply(
-            money.multiply(dailyRate, lateDeductionPercent),
-            lateCount - maxLatesBeforeDeduction
-          )
-        : 0;
+    const lateDeduction = money.round(dailyPayroll.reduce((sum, row) => sum + Number(row.lateDeduction || 0), 0));
     const statutoryDeductions = money.sum(pf, esi, professionalTax);
     const deductionsTotal = money.sum(
       unpaidLeaveDeduction,
@@ -471,11 +587,17 @@ class PayrollService {
         companyLeaveDays: dayCounts.companyLeaveDays,
         overtimeMinutes: totalOvertimeMinutes,
         overtimeHours,
+        overtimePay,
+        hourlyRate: money.round(hourlyRate),
+        overtimeMultiplier,
+        lateMinutes: dailyPayroll.reduce((sum, row) => sum + Number(row.lateMinutes || 0), 0),
+        lopDeduction: unpaidLeaveDeduction,
         permissionHours: round2(approvedPermissionHours),
         permissionMinutes: Math.round(approvedPermissionHours * 60),
         permissionExcessHours: permission.excessHours,
         permissionExcessMinutes: Math.round(permission.excessHours * 60),
       },
+      dailyPayroll,
       salaryBreakdown: {
         annualCtc,
         monthlyCtc,
@@ -509,7 +631,17 @@ class PayrollService {
         category: e.category,
         date: e.date,
       })),
-      approvedShootSettlements: approvedShootSettlements.map((settlement) => ({ id: settlement.id })),
+      approvedShootSettlements: approvedShootSettlements.map((settlement) => ({
+        id: settlement.id,
+        shootDate: settlement.shootDate,
+        shootName: settlement.shootRequest?.shootName || "Shoot",
+        location: settlement.shootRequest?.location || null,
+        approvedShootMinutes: Number(settlement.approvedShootMinutes || 0),
+        approvedShootOtMinutes: Number(settlement.approvedShootOtMinutes || 0),
+        approvedTravelOtMinutes: Number(settlement.approvedTravelOtMinutes || 0),
+        approvedAllowanceAmount: Number(settlement.approvedAllowanceAmount || 0),
+        approvedExpenseAmount: Number(settlement.approvedExpenseAmount || 0),
+      })),
       netSalary,
     };
   }
@@ -696,6 +828,8 @@ class PayrollService {
         loanRecovery: payroll.deductions.loanRecovery || 0,
         deductionsTotal: deductionsWithTds,
         reimbursements: payroll.reimbursements || 0,
+        shootSettlementBreakdown: payroll.approvedShootSettlements || [],
+        dailyPayroll: payroll.dailyPayroll || [],
         netSalary: netAfterTds,
         status: "PENDING_APPROVAL",
       };
@@ -816,7 +950,9 @@ class PayrollService {
 
     return await prisma.payslip.findMany({
       take: 120, // safety cap: a person's own history can grow for years
-      where: { employeeId: employee.id, organizationId },
+      // Employees must not see payroll until it has actually been disbursed.
+      // The same rule is enforced again on details/PDF access below.
+      where: { employeeId: employee.id, organizationId, status: "DISBURSED" },
       include: {
         expenses: {
           select: {
@@ -1007,10 +1143,11 @@ class PayrollService {
         id: payslipId,
         organizationId,
         ...(restrictToEmployeeId ? { employeeId: restrictToEmployeeId } : {}),
+        ...(restrictToEmployeeId ? { status: "DISBURSED" } : {}),
       },
       include: {
         organization: {
-          select: { id: true, name: true, email: true, phone: true, createdAt: true },
+          select: { id: true, name: true, email: true, phone: true, logoUrl: true, createdAt: true },
         },
         employee: {
           include: {
@@ -1149,10 +1286,17 @@ class PayrollService {
         presentDays: Number(payslip.presentDays),
         paidLeaveDays: Number(payslip.paidLeaveDays),
         unpaidLeaveDays: Number(payslip.unpaidLeaveDays),
+        lopDeduction: Number(payslip.unpaidLeaveDeduction || 0),
         overtimeHours: Number(payslip.overtimeHours),
+        overtimeMinutes: Math.round(Number(payslip.overtimeHours || 0) * 60),
+        overtimePay: Number(payslip.overtimePay || 0),
+        lateCount: Array.isArray(payslip.dailyPayroll) ? payslip.dailyPayroll.filter((row) => row.status === "LATE").length : 0,
+        lateMinutes: Array.isArray(payslip.dailyPayroll) ? payslip.dailyPayroll.reduce((sum, row) => sum + Number(row.lateMinutes || 0), 0) : 0,
         lateDeduction: Number(payslip.lateDeduction || 0),
         permissionDeduction: Number(payslip.permissionDeduction || 0),
       },
+      shootSettlements: Array.isArray(payslip.shootSettlementBreakdown) ? payslip.shootSettlementBreakdown : [],
+      dailyPayroll: Array.isArray(payslip.dailyPayroll) ? payslip.dailyPayroll : [],
       rates: {
         dailyRate,
         hourlyRate,

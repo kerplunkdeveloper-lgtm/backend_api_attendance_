@@ -26,6 +26,7 @@ class ShootSettlementService {
     if (!shootDate) throw fail("Choose the shoot date.");
     const shootRequest = await prisma.shootRequest.findFirst({ where: { id: String(body.shootRequestId || ""), organizationId, status: "APPROVED", participants: { some: { employeeId: employee.id } } }, select: { id: true, date: true } });
     if (!shootRequest) throw fail("Only an approved shoot can have a settlement.", 422);
+    if (shootDate.getTime() !== new Date(shootRequest.date).getTime()) throw fail("Settlement date must match the approved shoot date.", 422);
     const existing = await prisma.shootSettlement.findUnique({ where: { employeeId_shootRequestId: { employeeId: employee.id, shootRequestId: shootRequest.id } }, select: { id: true, status: true } });
     if (existing && existing.status !== "REJECTED") throw fail("This shoot settlement was already submitted.", 409);
 

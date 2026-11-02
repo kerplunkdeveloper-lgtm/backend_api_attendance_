@@ -429,6 +429,10 @@ model OvertimeRequest {
   attendanceId     String
   requestedMinutes Int
   approvedMinutes  Int?
+  plannedStartTime String?
+  plannedEndTime   String?
+  otCheckIn       DateTime?
+  otCheckOut      DateTime?
   reason           String?
   status           RequestStatus @default(PENDING)
   reviewedBy       String?
@@ -443,6 +447,7 @@ model OvertimeRequest {
   @@index([organizationId, status])
   @@index([employeeId])
   @@index([attendanceId])
+  @@index([attendanceId, status])
 }
 
 // Employee-submitted settlement after an approved shoot. The three claim areas
@@ -634,6 +639,9 @@ model Employee {
   branchId       String?
   departmentId   String?
   shiftId        String?
+  // Allows this employee to punch in/out outside the shift clock window.
+  // The permission is set by HR/Manager when assigning a shift.
+  flexiblePunching Boolean @default(false)
 
   // ── Core HR profile ───────────────────────────────────────────────────────
   // Previously collected on OnboardingCandidate and then dropped on conversion,
@@ -723,6 +731,8 @@ model Shift {
   breakIncluded  Boolean  @default(true)
   lunchIncluded  Boolean  @default(true)
   workingDays    String   @default("1,2,3,4,5,6") // 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat (Sunday 0 is off)
+  flexiblePunching Boolean @default(false) // Assigned employees may punch outside shift hours
+  totalWorkingMinutes Int? // Total company hours including configured pauses, for flexible shifts
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -899,6 +909,14 @@ model PermissionRequest {
   hours          Decimal       @db.Decimal(4, 2)
   reason         String
   status         RequestStatus @default(PENDING)
+  startedAt      DateTime?
+  endedAt        DateTime?
+  startLatitude  Decimal?      @db.Decimal(10, 7)
+  startLongitude Decimal?      @db.Decimal(10, 7)
+  endLatitude    Decimal?      @db.Decimal(10, 7)
+  endLongitude   Decimal?      @db.Decimal(10, 7)
+  startLocation  String?
+  endLocation    String?
   reviewedBy     String?
   reviewNote     String?
   createdAt      DateTime      @default(now())
@@ -1005,6 +1023,8 @@ model Payslip {
   deductionsTotal      Decimal   @db.Decimal(10, 2)
   netSalary            Decimal   @db.Decimal(10, 2)
   reimbursements       Decimal   @default(0) @db.Decimal(10, 2)
+  shootSettlementBreakdown Json?
+  dailyPayroll          Json?
   loanRecovery         Decimal   @default(0) @db.Decimal(10, 2)
   periodStart          DateTime? @db.Date
   periodEnd            DateTime? @db.Date

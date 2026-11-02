@@ -84,11 +84,12 @@ const remove = async (req, res) => {
 const assign = async (req, res) => {
   try {
     const { id } = req.params;
-    const { employeeIds } = req.body;
+    const { employeeIds, flexibleEmployeeIds = [] } = req.body;
     const result = await shiftService.assignEmployeesToShift(
       req.user.organizationId,
       id,
       employeeIds,
+      flexibleEmployeeIds,
     );
 
     return res.json({

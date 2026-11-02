@@ -17,6 +17,8 @@ const {
   getLocalDayOfWeek,
   getZonedParts,
   isOvernightShift,
+  getLocalMinutesOfDay,
+  parseTimeToMinutes,
 } = require("../utils/datetime");
 const { assertPunchTimestamp } = require("../utils/punchTime");
 const { parsePagination } = require("../utils/pagination");
@@ -127,8 +129,8 @@ const getOrgDateOnly = async (organizationId, date = new Date()) => {
 /**
  * Finds the attendance record an in-progress action (break, checkout) belongs to.
  *
- * Normally that is today's row, but on an overnight shift the open punch sits on
- * the previous calendar day, so a 02:00 break would otherwise find nothing.
+ * Normally that is today's row. For overnight shifts and employees/shifts with
+ * any-time punching, an open session may sit on the previous calendar day.
  */
 const findOpenAttendance = async (employeeId, organizationId, at = new Date(), include = {}) => {
   const timezone = await getOrgTimezone(organizationId);
@@ -149,11 +151,18 @@ const findOpenAttendance = async (employeeId, organizationId, at = new Date(), i
       checkOut: null,
       date: { lt: today, gte: new Date(today.getTime() - 2 * 24 * 60 * 60 * 1000) },
     },
-    include: { ...include, shift: true },
+    include: {
+      ...include,
+      shift: true,
+      employee: { select: { flexiblePunching: true } },
+    },
     orderBy: { date: "desc" },
   });
 
-  if (carriedOver && isOvernightShift(carriedOver.shift)) {
+  const allowsAnyTimeCarryOver = Boolean(
+    carriedOver?.employee?.flexiblePunching || carriedOver?.shift?.flexiblePunching
+  );
+  if (carriedOver && (isOvernightShift(carriedOver.shift) || allowsAnyTimeCarryOver)) {
     const elapsedHours = (at.getTime() - new Date(carriedOver.checkIn).getTime()) / 3_600_000;
     if (elapsedHours > 0 && elapsedHours <= 20) return carriedOver;
   }
@@ -337,6 +346,20 @@ const assertLocationCaptured = ({ latitude, longitude, action, skip }) => {
   }
 };
 
+// Employees may punch in at any time before the assigned shift ends. Once the
+// end time passes, only people who already punched in may punch out.
+const isShiftPastPunchInCutoff = (shift, at, timezone) => {
+  const start = parseTimeToMinutes(shift?.startTime);
+  const end = parseTimeToMinutes(shift?.endTime);
+  if (start === null || end === null) return false;
+  const current = getLocalMinutesOfDay(at, timezone);
+  if (end <= start) return current > end && current < start;
+  return current >= end;
+};
+
+const shiftPunchCutoffMessage = (shift) =>
+  `Your ${shift?.name || "shift"} ended at ${shift?.endTime}. Punching in is closed for today.`;
+
 const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude, accuracy, timestamp, workMode = "OFFICE", note, actorRole = null, deviceId = null, skipGeofence = false, source = "WEB", clientEventId = null, locationLabel = null }) => {
   const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
   const checkInTime = assertPunchTimestamp(timestamp, { actorRole, source });
@@ -426,6 +449,21 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
           ? { kind: "WEEK_OFF", title: weekdayName(checkInTime, timezone) }
           : null,
   });
+
+  if (
+    shift &&
+    !employee.flexiblePunching &&
+    !shift.flexiblePunching &&
+    workMode !== "SHOOT" &&
+    !isOnBehalf(employee, userId) &&
+    source !== "BIOMETRIC" &&
+    isShiftPastPunchInCutoff(shift, checkInTime, timezone)
+  ) {
+    const error = new Error(shiftPunchCutoffMessage(shift));
+    error.statusCode = 409;
+    error.code = "SHIFT_PUNCH_IN_CLOSED";
+    throw error;
+  }
 
   // ── Geofence Check ──────────────────────────────────────────────────────────
   let matchedBranch = employee.branch;
@@ -816,6 +854,11 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
     include: {
       shift: true,
       events: { orderBy: { timestamp: "desc" } },
+      overtimeRequests: {
+        orderBy: { createdAt: "desc" },
+        take: 5,
+        select: { id: true, status: true, requestedMinutes: true, approvedMinutes: true, reviewNote: true, otCheckIn: true, otCheckOut: true, plannedStartTime: true, plannedEndTime: true, reason: true },
+      },
     },
   });
 
@@ -970,10 +1013,21 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
     };
   }
 
-  // Apply the approval gate to every overtime source, including holidays,
-  // weekly offs, approved leave days, and employees without a shift. Payroll
-  // must never pay these minutes until a reviewer approves the request.
-  if (policy.requireOtApproval && metrics.overtimeMinutes > 0) {
+  // Shoot overtime is approved through Shoot Settlement, so retain the raw
+  // value for that flow. Other overtime sources still use the normal approval
+  // gate and are not paid until approved.
+  const isShootAttendance = attendance.wfhNote?.startsWith("SHOOT:") || workMode === "SHOOT";
+
+  // Regular post-shift time is not OT by itself. Employees must request OT in
+  // advance, receive approval, and then use the separate OT session controls.
+  // A late regular punch-out therefore never creates payable OT.
+  if (!metrics.isNonWorkingDay && !isShootAttendance && metrics.overtimeMinutes > 0) {
+    metrics.unapprovedOvertimeMinutes = metrics.overtimeMinutes;
+    metrics.overtimeMinutes = 0;
+    metrics.overtimeHours = "0.0";
+    metrics.overtimeFormatted = formatMinutes(0);
+    metrics.overtimeRequiresApproval = true;
+  } else if (policy.requireOtApproval && !isShootAttendance && metrics.overtimeMinutes > 0) {
     metrics.pendingOvertimeMinutes = metrics.overtimeMinutes;
     metrics.overtimeMinutes = 0;
     metrics.overtimeHours = "0.0";
@@ -1495,12 +1549,19 @@ const getTodayStatus = async (userId, organizationId) => {
     };
   }
 
-  const todayDate = await getOrgDateOnly(organizationId, new Date());
+  const now = new Date();
+  const timezone = await getOrgTimezone(organizationId);
+  const todayDate = await getOrgDateOnly(organizationId, now);
   const [attendance, policy, dayOffBase, workRequest, approvedShoot, approvedLeaveToday] = await Promise.all([
     findOpenAttendance(employee.id, organizationId, new Date(), {
       shift: true,
       branch: true,
       events: { orderBy: { timestamp: "desc" } },
+      overtimeRequests: {
+        orderBy: { createdAt: "desc" },
+        take: 5,
+        select: { id: true, status: true, requestedMinutes: true, approvedMinutes: true, reviewNote: true, otCheckIn: true, otCheckOut: true, plannedStartTime: true, plannedEndTime: true, reason: true },
+      },
     }),
     getPolicy(organizationId),
     getDayOff(organizationId, employee, new Date()),
@@ -1527,6 +1588,12 @@ const getTodayStatus = async (userId, organizationId) => {
     ? { kind: dayOffBase.kind, title: dayOffBase.title, reason: dayOffBase.reason, isPaid: dayOffBase.isPaid, workRequest: dayOffBase.kind === "PERSONAL_LEAVE" ? null : workRequest || null, canPunch: dayOffBase.kind !== "PERSONAL_LEAVE" && workRequest?.status === "APPROVED" }
     : null;
 
+  const activeShift = attendance?.shift || (await resolveShift(employee, organizationId, now));
+  const punchingClosed = Boolean(
+    activeShift && !employee.flexiblePunching && !activeShift.flexiblePunching && !attendance?.checkIn && !dayOff && !approvedShoot &&
+    isShiftPastPunchInCutoff(activeShift, now, timezone)
+  );
+
   const hasCheckedIn = Boolean(attendance?.checkIn);
   const hasCheckedOut = Boolean(attendance?.checkOut);
   const clockedIn = hasCheckedIn && !hasCheckedOut;
@@ -1547,6 +1614,8 @@ const getTodayStatus = async (userId, organizationId) => {
     hasEmployeeProfile: true,
     hasCheckedIn,
     hasCheckedOut,
+    punchingClosed,
+    punchingClosedReason: punchingClosed ? shiftPunchCutoffMessage(activeShift) : null,
     clockedIn,
     isOnBreak,
     activePauseType,
@@ -1559,8 +1628,9 @@ const getTodayStatus = async (userId, organizationId) => {
       id: employee.id,
       name: `${employee.firstName} ${employee.lastName || ""}`.trim(),
       employeeCode: employee.employeeCode,
+      flexiblePunching: Boolean(employee.flexiblePunching),
       branch: employee.branch,
-      shift: employee.shift,
+      shift: activeShift,
       department: employee.department ? { id: employee.department.id, name: employee.department.name } : null,
     },
     // Set when today is a holiday or company leave, so the punch screen can say why before anyone punches.
@@ -1668,7 +1738,7 @@ const getMyAttendance = async (userId, organizationId, { limit = 30, page = 1 },
         overtimeRequests: {
           orderBy: { createdAt: "desc" },
           take: 1,
-          select: { id: true, status: true, requestedMinutes: true, approvedMinutes: true, reviewNote: true },
+          select: { id: true, status: true, requestedMinutes: true, approvedMinutes: true, reviewNote: true, otCheckIn: true, otCheckOut: true, plannedStartTime: true, plannedEndTime: true, reason: true },
         },
       },
       orderBy: { date: "desc" },
@@ -1929,7 +1999,7 @@ const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, 
         overtimeRequests: {
           orderBy: { createdAt: "desc" },
           take: 1,
-          select: { id: true, status: true, requestedMinutes: true, approvedMinutes: true, reviewNote: true },
+          select: { id: true, status: true, requestedMinutes: true, approvedMinutes: true, reviewNote: true, otCheckIn: true, otCheckOut: true, plannedStartTime: true, plannedEndTime: true, reason: true },
         },
       },
       orderBy: { date: "desc" },

@@ -2,6 +2,29 @@ const overtimeService = require("../services/overtime.service");
 const { paginated, fail } = require("../utils/response");
 
 class OvertimeController {
+  async startSession(req, res) {
+    try {
+      const result = await overtimeService.startOvertimeSession(
+        req.user.organizationId,
+        req.user.id,
+        req.body?.reason,
+      );
+      return res.status(201).json(result);
+    } catch (error) { return fail(res, error); }
+  }
+
+  async endSession(req, res) {
+    try {
+      const result = await overtimeService.endOvertimeSession(
+        req.user.organizationId,
+        req.user.id,
+        req.params.id,
+        req.body?.reason,
+      );
+      return res.status(200).json(result);
+    } catch (error) { return fail(res, error); }
+  }
+
   async requestOvertime(req, res) {
     try {
       const result = await overtimeService.requestOvertime(

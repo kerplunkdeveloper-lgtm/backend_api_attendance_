@@ -61,7 +61,7 @@ router.get(
 // Generate Monthly Payslips for Organization
 router.post(
   "/generate",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"),
   payrollController.generate,
 );
 
@@ -82,42 +82,42 @@ router.get("/payslips/:id", payrollController.getPayslipDetails);
 // Individual Payslip Status Update
 router.patch(
   "/payslips/:id/status",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"),
   payrollController.updateStatus,
 );
 
 // Payroll Approval Workflow: Batch Approve
 router.post(
   "/approve-batch",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"),
   payrollController.approveBatch,
 );
 
 // Payroll Approval Workflow: Batch Disburse
 router.post(
   "/disburse-batch",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"),
   payrollController.disburseBatch,
 );
 
 // Payroll Analytics & Compliance Reports
 router.get(
   "/reports",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   payrollController.getReports,
 );
 
 // Employee Salary History & Audit Trail
 router.get(
   "/salary-history/:employeeId",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   payrollController.getSalaryHistory,
 );
 
 // Record New Salary Revision
 router.post(
   "/salary-revision",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   payrollController.recordSalaryRevision,
 );
 
@@ -131,21 +131,21 @@ router.get("/templates", payslipTemplateController.getTemplate);
 // Save / customize company template
 router.post(
   "/templates",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   payslipTemplateController.saveTemplate,
 );
 
 // Reset company template to system preset
 router.post(
   "/templates/reset",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   payslipTemplateController.resetPreset,
 );
 
 // Upload Logo or Authorized Signature Stamp image
 router.post(
   "/templates/upload-asset",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   upload.single("file"),
   payslipTemplateController.uploadAsset,
 );
