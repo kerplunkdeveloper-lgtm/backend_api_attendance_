@@ -1,4 +1,5 @@
 const brevoService = require("./brevo.service");
+const resendService = require("./resend.service");
 const { generateOfferLetterPdf } = require("./offer-letter-pdf.service");
 
  const escapeHtml = (value) =>
@@ -26,6 +27,7 @@ const getEmailLogo = (value) => {
 class EmailService {
   constructor() {
     this.brevoService = brevoService;
+    this.resendService = resendService;
   }
 
   /**
@@ -103,7 +105,23 @@ class EmailService {
       return { success: false, message: "Recipient required" };
     }
 
-    // 1. Try Brevo if ready
+    // 1. Resend is the preferred transactional provider.
+    if (this.resendService && this.resendService.isReady()) {
+      try {
+        const result = await this.resendService.sendEmail({ to, subject, html, text, attachments });
+        if (result.success) {
+          console.log(`[EmailService:RESEND_LIVE] Sent email to ${to} via Resend API (ID: ${result.id})`);
+          return { success: true, live: true, provider: "RESEND", ...result };
+        }
+        console.warn(`[EmailService:RESEND_FAIL] Resend dispatch failed for ${to}: ${result.error}.`);
+        return { success: false, error: result.error, provider: "RESEND" };
+      } catch (err) {
+        console.warn(`[EmailService:RESEND_ERROR] Resend exception: ${err.message}.`);
+        return { success: false, error: err.message, provider: "RESEND" };
+      }
+    }
+
+    // 2. Keep Brevo as a compatibility fallback during provider migration.
     if (this.brevoService && this.brevoService.isReady()) {
       try {
         const result = await this.brevoService.sendEmail({ to, subject, html, text, attachments });
@@ -126,11 +144,11 @@ class EmailService {
       };
     }
 
-    // 2. Development-only simulation fallback
+    // 3. Development-only simulation fallback
     console.log("────────────────────────────────────────────────────────────");
     console.log(`[EmailService:SIMULATION] Email to: ${to}`);
     console.log(`[EmailService:SIMULATION] Subject:  ${subject}`);
-    console.log(`[EmailService:SIMULATION] Status:   Simulated (configure BREVO_API_KEY for live dispatch)`);
+    console.log(`[EmailService:SIMULATION] Status:   Simulated (configure RESEND_API_KEY + RESEND_FROM_EMAIL for live dispatch)`);
     console.log("────────────────────────────────────────────────────────────");
 
     return {
@@ -614,10 +632,13 @@ class EmailService {
     });
   }
 
-  /**
-   * Verify communication connection status (Brevo)
-   */
+  /** Verify communication provider configuration without sending a message. */
   async verifyConnection() {
+    const resendStatus = {
+      configured: this.resendService ? this.resendService.isReady() : false,
+      provider: "Resend Transactional Email API",
+      fromEmail: process.env.RESEND_FROM_EMAIL || null,
+    };
     const brevoStatus = {
       configured: this.brevoService ? this.brevoService.isReady() : false,
       provider: "Brevo Transactional Email API",
@@ -625,7 +646,8 @@ class EmailService {
     };
 
     return {
-      activeProvider: brevoStatus.configured ? "BREVO" : "SIMULATION",
+      activeProvider: resendStatus.configured ? "RESEND" : brevoStatus.configured ? "BREVO" : "SIMULATION",
+      resend: resendStatus,
       brevo: brevoStatus,
     };
   }

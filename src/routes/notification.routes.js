@@ -91,10 +91,13 @@ router.get("/communication-status", adminOnly, async (req, res) => {
     return res.json({
       success: true,
       email: {
-        isConfigured: connectionStatus.brevo.configured,
+        isConfigured: connectionStatus.activeProvider !== "SIMULATION",
         activeProvider: connectionStatus.activeProvider,
+        resend: connectionStatus.resend,
         brevo: connectionStatus.brevo,
-        from: process.env.BREVO_FROM_EMAIL || "onboarding@workpulse.com",
+        from: connectionStatus.resend?.configured
+          ? process.env.RESEND_FROM_EMAIL
+          : process.env.BREVO_FROM_EMAIL || "onboarding@workpulse.com",
       },
       whatsapp: {
         isConfigured: whatsappService.isConfigured,
