@@ -12,12 +12,23 @@ const IMAGE_MIME_TYPES = [
 
 const DOCUMENT_MIME_TYPES = [
   "application/pdf",
+  "application/x-pdf",
   "application/msword",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/vnd.ms-excel",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/rtf",
   "text/csv",
 ];
+
+// Browsers and mobile WebViews use a few equivalent MIME names for the same
+// file. Keep the aliases explicit so uploads are accepted without weakening
+// the content sniffing check below.
+const MIME_ALIASES = {
+  "application/x-pdf": "application/pdf",
+};
 
 const SIGNATURES = [
   { mime: "image/jpeg", bytes: [0xff, 0xd8, 0xff] },
@@ -90,7 +101,7 @@ const assertSniffedType = (file) => {
   const sniffed = sniffType(file.buffer);
   if (!sniffed) return;
 
-  const declared = file.mimetype;
+  const declared = MIME_ALIASES[file.mimetype] || file.mimetype;
   const ooxml = [
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -138,6 +149,7 @@ const documentUploader = (maxMb = 15) =>
 module.exports = {
   IMAGE_MIME_TYPES,
   DOCUMENT_MIME_TYPES,
+  MIME_ALIASES,
   createUploader,
   imageUploader,
   documentUploader,

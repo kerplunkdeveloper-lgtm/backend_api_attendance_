@@ -241,6 +241,22 @@ class PayrollController {
     } catch (err) { return fail(res, err); }
   }
 
+  async disburseIndividual(req, res) {
+    try {
+      const result = await payrollService.disburseIndividualPayslip(
+        req.user.organizationId,
+        req.params.id,
+        req.user.id,
+        req.body?.remarks,
+      );
+      return res.status(200).json({
+        success: true,
+        message: "Payslip distributed to the employee",
+        data: result,
+      });
+    } catch (err) { return fail(res, err); }
+  }
+
   async updateStatus(req, res) {
     try {
       const { id } = req.params;
