@@ -1,4 +1,5 @@
 const prisma = require("../config/database");
+const notificationDelivery = require("./notification-delivery.service");
 const { parsePagination } = require("../utils/pagination");
 const { getOrgDateOnly, getOrgTimezone } = require("./attendance.service");
 const { getLocalMinutesOfDay, parseTimeToMinutes } = require("../utils/datetime");
@@ -408,7 +409,7 @@ class OvertimeService {
     });
     if (request.employee?.userId && prisma.notification?.create) {
       try {
-        await prisma.notification.create({
+        await notificationDelivery.create({
           data: {
             organizationId,
             userId: request.employee.userId,

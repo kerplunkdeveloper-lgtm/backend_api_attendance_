@@ -2,6 +2,7 @@ const payrollService = require("../services/payroll.service");
 const prisma = require("../config/database");
 const { fail } = require("../utils/response");
 const { assertCanSetStatus, assertNotOwnSalary } = require("../utils/payrollAccess");
+const notificationDelivery = require("../services/notification-delivery.service");
 
 /** Throws 403 when HR (a non-admin) is about to change their own pay. */
 const guardOwnSalary = (req, employeeIds) =>
@@ -178,7 +179,7 @@ class PayrollController {
         return res.status(503).json({ success: false, message: "No HR or payroll administrator is available." });
       }
       const employeeName = `${employee.firstName || "Employee"} ${employee.lastName || ""}`.trim();
-      await prisma.notification.createMany({
+      await notificationDelivery.createMany({
         data: admins.map((admin) => ({
           organizationId: req.user.organizationId,
           userId: admin.id,

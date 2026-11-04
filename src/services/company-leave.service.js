@@ -1,4 +1,5 @@
 const prisma = require("../config/database");
+const notificationDelivery = require("./notification-delivery.service");
 const { toIsoKey } = require("../utils/payrollCycle");
 
 const MAX_SPAN_DAYS = 31;
@@ -107,7 +108,7 @@ class CompanyLeaveService {
       });
       const message = `${formatRange(startDate, endDate)} · ${record.isPaid ? "Paid" : "Unpaid"} company leave.${reason ? ` ${reason}` : ""}`;
       if (employees.length > 0) {
-        const result = await prisma.notification.createMany({
+        const result = await notificationDelivery.createMany({
           data: employees.map((employee) => ({
             organizationId,
             userId: employee.userId,

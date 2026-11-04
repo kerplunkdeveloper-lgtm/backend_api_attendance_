@@ -35,6 +35,11 @@ router.get(
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
   compOffController.listPending,
 );
+router.get(
+  "/all",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  compOffController.listAll,
+);
 
 router.post(
   "/:id/review",

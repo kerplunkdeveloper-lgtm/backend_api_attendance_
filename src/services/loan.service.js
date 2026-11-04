@@ -1,6 +1,7 @@
 const prisma = require("../config/database");
 const { assertCanReview, visibleToReviewer } = require("../utils/approvalChain");
 const notificationService = require("./notification.service");
+const notificationDelivery = require("./notification-delivery.service");
 
 function num(v) {
   const n = Number(v);
@@ -118,7 +119,7 @@ async function review(organizationId, id, payload, reviewerUserId, reviewerRole 
       throw err;
     }
   }
-  return prisma.loanAdvance.update({
+  const updated = await prisma.loanAdvance.update({
     where: { id },
     data: {
       status,
@@ -128,6 +129,18 @@ async function review(organizationId, id, payload, reviewerUserId, reviewerRole 
     },
     include: { employee: { select: { firstName: true, lastName: true, employeeCode: true } } },
   });
+  if (existing.employee?.userId) {
+    await notificationDelivery.create({
+      data: {
+        organizationId,
+        userId: existing.employee.userId,
+        title: `Loan or advance ${status.toLowerCase()}`,
+        message: `Your ${existing.type === "LOAN" ? "loan" : "salary advance"} request was ${status.toLowerCase()}.${payload.reviewNote ? ` ${payload.reviewNote}` : ""}`,
+        type: "LOAN",
+      },
+    });
+  }
+  return updated;
 }
 
 async function outstandingForEmployee(organizationId, employeeId, client = prisma) {

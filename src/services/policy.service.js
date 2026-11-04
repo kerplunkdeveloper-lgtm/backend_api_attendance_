@@ -21,6 +21,8 @@ const DEFAULT_POLICY = {
   shootRecoveryEnabled: true,
   shootRecoveryThresholdMinutes: 720,
   shootTravelOtEnabled: true,
+  shootTravelOtThresholdMinutes: 360,
+  shootTravelOtMultiplier: 0.5,
   shootOtMultiplier: 1.5,
   shootOtSalaryBasis: "BASE_SALARY",
   weeklyOffDays: "0",
@@ -58,6 +60,8 @@ const normalizePolicy = (policy, organizationId, isDefault = false) => ({
   shootRecoveryEnabled: Boolean(policy?.shootRecoveryEnabled ?? DEFAULT_POLICY.shootRecoveryEnabled),
   shootRecoveryThresholdMinutes: Number(policy?.shootRecoveryThresholdMinutes ?? DEFAULT_POLICY.shootRecoveryThresholdMinutes),
   shootTravelOtEnabled: Boolean(policy?.shootTravelOtEnabled ?? DEFAULT_POLICY.shootTravelOtEnabled),
+  shootTravelOtThresholdMinutes: Number(policy?.shootTravelOtThresholdMinutes ?? DEFAULT_POLICY.shootTravelOtThresholdMinutes),
+  shootTravelOtMultiplier: Number(policy?.shootTravelOtMultiplier ?? DEFAULT_POLICY.shootTravelOtMultiplier),
   shootOtMultiplier: Number(policy?.shootOtMultiplier ?? DEFAULT_POLICY.shootOtMultiplier),
   shootOtSalaryBasis: String(policy?.shootOtSalaryBasis ?? DEFAULT_POLICY.shootOtSalaryBasis),
   isDefault,
@@ -114,6 +118,8 @@ class PolicyService {
       shootRecoveryEnabled,
       shootRecoveryThresholdMinutes,
       shootTravelOtEnabled,
+      shootTravelOtThresholdMinutes,
+      shootTravelOtMultiplier,
       shootOtMultiplier,
       shootOtSalaryBasis,
       weeklyOffDays,
@@ -138,6 +144,8 @@ class PolicyService {
     if (shootRecoveryEnabled !== undefined) payload.shootRecoveryEnabled = parseBoolean(shootRecoveryEnabled);
     if (shootRecoveryThresholdMinutes !== undefined) payload.shootRecoveryThresholdMinutes = boundedNumber("Shoot recovery threshold", shootRecoveryThresholdMinutes, { min: 1, max: 2880, integer: true });
     if (shootTravelOtEnabled !== undefined) payload.shootTravelOtEnabled = parseBoolean(shootTravelOtEnabled);
+    if (shootTravelOtThresholdMinutes !== undefined) payload.shootTravelOtThresholdMinutes = boundedNumber("Travel OT threshold", shootTravelOtThresholdMinutes, { min: 1, max: 2880, integer: true });
+    if (shootTravelOtMultiplier !== undefined) payload.shootTravelOtMultiplier = boundedNumber("Travel overtime multiplier", shootTravelOtMultiplier, { min: 0, max: 5 });
     if (shootOtMultiplier !== undefined) payload.shootOtMultiplier = boundedNumber("Shoot overtime multiplier", shootOtMultiplier, { min: 0, max: 5 });
     if (shootOtSalaryBasis !== undefined) payload.shootOtSalaryBasis = ["BASE_SALARY", "MONTHLY_CTC"].includes(String(shootOtSalaryBasis)) ? String(shootOtSalaryBasis) : DEFAULT_POLICY.shootOtSalaryBasis;
     if (weeklyOffDays !== undefined) payload.weeklyOffDays = normalizeWeeklyOffDays(weeklyOffDays);
@@ -171,6 +179,8 @@ class PolicyService {
         delete legacyPayload.shootRecoveryEnabled;
         delete legacyPayload.shootRecoveryThresholdMinutes;
         delete legacyPayload.shootTravelOtEnabled;
+        delete legacyPayload.shootTravelOtThresholdMinutes;
+        delete legacyPayload.shootTravelOtMultiplier;
         delete legacyPayload.shootOtMultiplier;
         delete legacyPayload.shootOtSalaryBasis;
         policy = await prisma.attendancePolicy.upsert({

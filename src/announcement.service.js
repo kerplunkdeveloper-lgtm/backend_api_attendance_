@@ -1,5 +1,5 @@
 const prisma = require("../config/database");
-const webPushService = require("./services/web-push.service");
+const fcmService = require("./services/firebase-messaging.service");
 
 const MANAGE_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"];
 const ADMIN_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN"];
@@ -69,7 +69,7 @@ async function notifyEveryone(organizationId, authorUserId, title) {
         type: "ANNOUNCEMENT",
       })),
     });
-    void webPushService.sendToUsers(users.map((user) => ({
+    void fcmService.sendToUsers(users.map((user) => ({
       userId: user.id,
       title: "New announcement",
       message: title,

@@ -131,6 +131,15 @@ class CompOffController {
     }
   }
 
+  async listAll(req, res) {
+    try {
+      const result = await compOffService.listRedemptions(req.user.organizationId, req.user.role);
+      return res.status(200).json({ success: true, data: result, requests: result });
+    } catch (error) {
+      return fail(res, error);
+    }
+  }
+
   async reviewRedemption(req, res) {
     try {
       const result = await compOffService.reviewRedemption(

@@ -2,7 +2,7 @@ const express = require("express");
 const notificationService = require("../services/notification.service");
 const emailService = require("../services/email.service");
 const whatsappService = require("../services/whatsapp.service");
-const webPushService = require("../services/web-push.service");
+const fcmService = require("../services/firebase-messaging.service");
 const {
   authenticate,
   authorizeRoles,
@@ -31,37 +31,41 @@ router.get("/", async (req, res) => {
   }
 });
 
-// Browser push subscription lifecycle. The subscription is scoped to the
-// logged-in user, so closing the web tab does not stop future notifications.
-router.get("/push/public-key", (req, res) => {
-  return res.json({ success: true, enabled: webPushService.configured, publicKey: webPushService.publicKey || null });
+// Firebase Cloud Messaging token lifecycle. Tokens are scoped to the logged-in
+// user and may move when the same browser signs into another account.
+router.get("/fcm/config", (req, res) => {
+  return res.json({
+    success: true,
+    provider: "FCM",
+    enabled: fcmService.configured,
+    message: fcmService.configured
+      ? "Firebase Cloud Messaging is ready."
+      : "Firebase Admin credentials are not configured on the server.",
+  });
 });
 
-router.post("/push/subscribe", async (req, res) => {
+router.post("/fcm/token", async (req, res) => {
   try {
-    const subscription = req.body?.subscription || req.body;
-    const endpoint = String(subscription?.endpoint || "").trim();
-    const p256dh = String(subscription?.keys?.p256dh || "").trim();
-    const auth = String(subscription?.keys?.auth || "").trim();
-    if (!endpoint || !p256dh || !auth) {
-      return res.status(400).json({ success: false, message: "A valid browser push subscription is required." });
+    const token = String(req.body?.token || "").trim();
+    if (!token || token.length > 4096) {
+      return res.status(400).json({ success: false, message: "A valid Firebase registration token is required." });
     }
-    await require("../config/database").pushSubscription.upsert({
-      where: { endpoint },
-      create: { organizationId: req.user.organizationId, userId: req.user.id, endpoint, p256dh, auth, userAgent: req.get("user-agent") || null },
-      update: { organizationId: req.user.organizationId, userId: req.user.id, p256dh, auth, userAgent: req.get("user-agent") || null },
+    await require("../config/database").fcmToken.upsert({
+      where: { token },
+      create: { organizationId: req.user.organizationId, userId: req.user.id, token, userAgent: req.get("user-agent") || null },
+      update: { organizationId: req.user.organizationId, userId: req.user.id, userAgent: req.get("user-agent") || null, lastSeenAt: new Date() },
     });
-    return res.json({ success: true, message: "Web notifications enabled." });
+    return res.json({ success: true, message: "Firebase notifications enabled." });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
 });
 
-router.delete("/push/subscribe", async (req, res) => {
+router.delete("/fcm/token", async (req, res) => {
   try {
-    const endpoint = String(req.body?.endpoint || "").trim();
-    if (endpoint) {
-      await require("../config/database").pushSubscription.deleteMany({ where: { endpoint, userId: req.user.id } });
+    const token = String(req.body?.token || "").trim();
+    if (token) {
+      await require("../config/database").fcmToken.deleteMany({ where: { token, userId: req.user.id } });
     }
     return res.json({ success: true });
   } catch (err) {
@@ -96,7 +100,7 @@ router.get("/communication-status", adminOnly, async (req, res) => {
         resend: connectionStatus.resend,
         brevo: connectionStatus.brevo,
         from: connectionStatus.resend?.configured
-          ? process.env.RESEND_FROM_EMAIL
+          ? connectionStatus.resend.fromEmail
           : process.env.BREVO_FROM_EMAIL || "onboarding@workpulse.com",
       },
       whatsapp: {

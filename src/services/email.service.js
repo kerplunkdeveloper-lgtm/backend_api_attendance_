@@ -637,7 +637,7 @@ class EmailService {
     const resendStatus = {
       configured: this.resendService ? this.resendService.isReady() : false,
       provider: "Resend Transactional Email API",
-      fromEmail: process.env.RESEND_FROM_EMAIL || null,
+      fromEmail: this.resendService?.fromEmail || null,
     };
     const brevoStatus = {
       configured: this.brevoService ? this.brevoService.isReady() : false,

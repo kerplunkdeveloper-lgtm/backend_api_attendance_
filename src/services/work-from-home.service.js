@@ -1,4 +1,5 @@
 const prisma = require("../config/database");
+const notificationDelivery = require("./notification-delivery.service");
 const { assertCanReview, visibleToReviewer } = require("../utils/approvalChain");
 
 const MAX_REASON = 500;
@@ -13,7 +14,7 @@ const dateOnly = (value) => {
 const notify = async (organizationId, userIds, title, message) => {
   const ids = [...new Set(userIds.filter(Boolean))];
   if (!ids.length) return;
-  try { await prisma.notification.createMany({ data: ids.map((userId) => ({ organizationId, userId, title, message, type: "ATTENDANCE" })) }); }
+  try { await notificationDelivery.createMany({ data: ids.map((userId) => ({ organizationId, userId, title, message, type: "ATTENDANCE" })) }); }
   catch (error) { console.warn("[WorkFromHome] notification failed:", error.message); }
 };
 const nameOf = (employee) => ((employee?.firstName || "") + " " + (employee?.lastName || "")).trim() || "Employee";
