@@ -7,4 +7,5 @@ router.post("/", controller.create);
 router.get("/my", controller.mine);
 router.get("/", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"), controller.list);
 router.patch("/:id/review", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"), controller.review);
+router.patch("/:id/overtime-review", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"), controller.reviewOvertime);
 module.exports = router;

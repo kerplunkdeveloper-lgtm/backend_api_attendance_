@@ -2,7 +2,7 @@ const prisma = require("../config/database");
 const { assertCanReview, visibleToReviewer, ADMIN_ROLES } = require("../utils/approvalChain");
 const { parsePagination } = require("../utils/pagination");
 const { getDayOff, getOrgDateOnly } = require("./attendance.service");
-const webPushService = require("./web-push.service");
+const fcmService = require("./firebase-messaging.service");
 
 const REASONS = {
   SHOOT: "Shoot",
@@ -30,7 +30,7 @@ const notifyMany = async (organizationId, userIds, title, message, type = "ATTEN
     await prisma.notification.createMany({
       data: ids.map((userId) => ({ organizationId, userId, title, message, type })),
     });
-    void webPushService.sendToUsers(ids.map((userId) => ({ userId, title, message, type })));
+  void fcmService.sendToUsers(ids.map((userId) => ({ userId, title, message, type })));
   } catch (err) {
     // A failed notification must never undo the request itself.
     console.warn("[DayOffWork] notification failed:", err.message);

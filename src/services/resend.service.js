@@ -10,8 +10,14 @@ const { Resend } = require("resend");
 class ResendEmailService {
   constructor() {
     this.apiKey = String(process.env.RESEND_API_KEY || "").trim();
-    this.fromEmail = String(process.env.RESEND_FROM_EMAIL || "").trim();
-    this.fromName = String(process.env.RESEND_FROM_NAME || "WorkPluse").trim();
+    const configuredFrom = String(
+      process.env.RESEND_FROM_EMAIL || process.env.EMAIL_FROM || "",
+    ).trim();
+    const parsedFrom = configuredFrom.match(/^(.+?)\s*<([^<>\s]+@[^<>\s]+)>$/);
+    this.fromEmail = String(parsedFrom?.[2] || configuredFrom).trim();
+    this.fromName = String(
+      process.env.RESEND_FROM_NAME || parsedFrom?.[1] || "WorkPluse",
+    ).trim();
     this.client = this.apiKey ? new Resend(this.apiKey) : null;
   }
 

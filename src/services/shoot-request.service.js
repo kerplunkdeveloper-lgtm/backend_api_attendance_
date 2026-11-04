@@ -1,4 +1,5 @@
 const prisma = require("../config/database");
+const notificationDelivery = require("./notification-delivery.service");
 const { visibleToReviewer } = require("../utils/approvalChain");
 const notificationService = require("./notification.service");
 const SHOOT_REVIEWER_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"];
@@ -12,7 +13,7 @@ const clean = (value, max = MAX) => String(value || "").trim().slice(0, max);
 
 const getShootDate = async (organizationId, value) => { const org = await prisma.organization.findUnique({ where: { id: organizationId }, select: { timezone: true } }); return getLocalDateOnly(value, org?.timezone || DEFAULT_TIMEZONE); };
 const dateLabel = (date) => new Date(date).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "short", timeZone: "UTC" });
-const notify = async (organizationId, userIds, title, message, type = "ATTENDANCE") => { const ids = [...new Set((userIds || []).filter(Boolean))]; if (!ids.length) return; try { const result = await prisma.notification.createMany({ data: ids.map((userId) => ({ organizationId, userId, title, message, type })) }); if (type !== "APPROVAL") return; } catch (err) { console.warn("[ShootRequest] notification failed:", err.message); } };
+const notify = async (organizationId, userIds, title, message, type = "ATTENDANCE") => { const ids = [...new Set((userIds || []).filter(Boolean))]; if (!ids.length) return; try { const result = await notificationDelivery.createMany({ data: ids.map((userId) => ({ organizationId, userId, title, message, type })) }); if (type !== "APPROVAL") return; } catch (err) { console.warn("[ShootRequest] notification failed:", err.message); } };
 class ShootRequestService {
   async create(userId, organizationId, body = {}) {
     const date = await getShootDate(organizationId, new Date(body.date));

@@ -1,4 +1,5 @@
 const prisma = require("../config/database");
+const notificationDelivery = require("./notification-delivery.service");
 const { WORKING_STATUSES } = require("../utils/employeeStatus");
 const { getOrgDateOnly } = require("./attendance.service");
 const policyService = require("./policy.service");
@@ -282,7 +283,7 @@ class PayrollService {
           message: `Your annual CTC is now ₹${Math.round(breakdown.annualCtc).toLocaleString("en-IN")}.`,
         }));
       if (rows.length) {
-        const result = await prisma.notification.createMany({ data: rows });
+        const result = await notificationDelivery.createMany({ data: rows });
         notified = result.count;
       }
     }

@@ -1,4 +1,5 @@
 const prisma = require("../config/database");
+const notificationDelivery = require("./notification-delivery.service");
 const { ADMIN_ROLES, assertCanReview } = require("../utils/approvalChain");
 const webhookService = require("./webhook.service");
 
@@ -238,6 +239,21 @@ class CompOffService {
     return records.filter((record) => record.compOffBalance?.employee?.user?.role === "EMPLOYEE");
   }
 
+  async listRedemptions(organizationId, reviewerRole) {
+    const balances = await prisma.compOffBalance.findMany({ where: { organizationId }, select: { id: true } });
+    const balanceIds = balances.map((b) => b.id);
+    if (!balanceIds.length) return [];
+    const records = await prisma.compOffTransaction.findMany({
+      where: { compOffBalanceId: { in: balanceIds }, type: { in: ["PENDING_DEBIT", "DEBIT", "REJECTED"] } },
+      include: { compOffBalance: { include: { employee: { select: { id: true, firstName: true, lastName: true, employeeCode: true, user: { select: { role: true } } } } } } },
+      orderBy: { createdAt: "desc" },
+    });
+    const visible = ADMIN_ROLES.includes(reviewerRole)
+      ? records
+      : records.filter((record) => record.compOffBalance?.employee?.user?.role === "EMPLOYEE");
+    return visible.map((record) => ({ ...record, status: record.type === "PENDING_DEBIT" ? "PENDING" : record.type === "DEBIT" ? "APPROVED" : "REJECTED" }));
+  }
+
   async reviewRedemption(organizationId, transactionId, reviewerUserId, { status, reviewNote, reviewerRole }) {
     const action = String(status || "").toUpperCase();
     if (!["APPROVED", "REJECTED"].includes(action)) {
@@ -368,7 +384,7 @@ class CompOffService {
   async _notifyReview(employee, status, reviewNote, transactionId) {
     if (!employee?.userId || !prisma.notification?.create) return;
     try {
-      await prisma.notification.create({
+      await notificationDelivery.create({
         data: {
           organizationId: employee.organizationId,
           userId: employee.userId,

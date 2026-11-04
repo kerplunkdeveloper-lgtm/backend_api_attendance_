@@ -1,4 +1,5 @@
 const prisma = require("../config/database");
+const notificationDelivery = require("./notification-delivery.service");
 const emailService = require("./email.service");
 const { reminderFor, DAY_MS } = require("../utils/subscriptionReminders");
 
@@ -58,7 +59,7 @@ async function sendSubscriptionReminders(now = new Date()) {
     const fresh = admins.filter((admin) => !seen.has(`${admin.id}|${reminder.message}`));
     if (!fresh.length) continue;
 
-    await prisma.notification.createMany({
+    await notificationDelivery.createMany({
       data: fresh.map((admin) => ({
         organizationId: org.id,
         userId: admin.id,

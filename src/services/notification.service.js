@@ -7,7 +7,8 @@ const { sendSubscriptionReminders } = require("./subscriptionReminder.service");
 const emailService = require("./email.service");
 const { requiresAdminReview, ADMIN_ROLES } = require("../utils/approvalChain");
 const whatsappService = require("./whatsapp.service");
-const webPushService = require("./web-push.service");
+const fcmService = require("./firebase-messaging.service");
+const notificationDelivery = require("./notification-delivery.service");
 const { getLocalDateOnly, getLocalMinutesOfDay } = require("../utils/datetime");
 const {
   FALLBACK_TZ,
@@ -77,8 +78,8 @@ class NotificationService {
         type,
       },
     });
-    void webPushService.sendToUser({ userId, title, message, type, notificationId: notification.id }).catch((error) => {
-      console.warn("[WebPush] Notification delivery failed:", error.message);
+    void fcmService.sendToUser({ userId, title, message, type, notificationId: notification.id }).catch((error) => {
+      console.warn("[FCM] Notification delivery failed:", error.message);
     });
     return notification;
   }
@@ -96,7 +97,7 @@ class NotificationService {
     const result = await prisma.notification.createMany({
       data: users.map((user) => ({ organizationId, userId: user.id, title, message, type })),
     });
-    void webPushService.sendToUsers(users.map((user) => ({ userId: user.id, title, message, type })));
+    void fcmService.sendToUsers(users.map((user) => ({ userId: user.id, title, message, type })));
     return { sent: result.count };
   }
 
@@ -134,7 +135,7 @@ class NotificationService {
           type,
         })),
       });
-      void webPushService.sendToUsers(reviewers.map((reviewer) => ({ userId: reviewer.id, title, message: `${who} ${summary}`, type })));
+      void fcmService.sendToUsers(reviewers.map((reviewer) => ({ userId: reviewer.id, title, message: `${who} ${summary}`, type })));
       return reviewers.length;
     } catch (error) {
       console.warn("[ReviewerNotification] Could not notify reviewers:", error.message);
@@ -164,7 +165,7 @@ class NotificationService {
       const who = employee.employeeCode ? `${name} (${employee.employeeCode})` : name;
       const message = `${who} ${summary}`;
       await prisma.notification.createMany({ data: observers.map((observer) => ({ organizationId, userId: observer.id, title, message, type })) });
-      void webPushService.sendToUsers(observers.map((observer) => ({ userId: observer.id, title, message, type })));
+      void fcmService.sendToUsers(observers.map((observer) => ({ userId: observer.id, title, message, type })));
       return observers.length;
     } catch (error) {
       console.warn("[PauseNotification] Could not notify managers, HR and admins:", error.message);
@@ -205,7 +206,7 @@ class NotificationService {
       if (!targets.length) return 0;
 
       const preview = String(body || "").replace(/\s+/g, " ").trim().slice(0, 140);
-      await prisma.notification.createMany({
+      await notificationDelivery.createMany({
         data: targets.map((userId) => ({ organizationId, userId, title, message: preview, type: "CHAT" })),
       });
       return targets.length;
@@ -389,12 +390,12 @@ class NotificationService {
     // Deliver through the service worker too. This works when the dashboard
     // tab is closed, as long as the employee previously granted browser push
     // permission and subscribed on this device.
-    void webPushService.sendToUsers(toNotify.map(({ emp }) => ({
+    void fcmService.sendToUsers(toNotify.map(({ emp }) => ({
       userId: emp.userId,
       title: "Morning Shift Punch-In Reminder",
       message: `Good morning, ${emp.firstName}! Shift starts at ${emp.shift?.startTime || "09:00"}. Punch in on time to avoid a late mark.`,
       type: "ATTENDANCE",
-    }))).catch((error) => console.warn("[MorningReminder:WebPush] Delivery failed:", error.message));
+    }))).catch((error) => console.warn("[MorningReminder:FCM] Delivery failed:", error.message));
 
     const sentUsers = [];
     for (const { emp } of toNotify) {
@@ -528,12 +529,12 @@ class NotificationService {
 
     // Deliver through the service worker too, so punch-out reminders appear
     // even after the employee closes the website.
-    void webPushService.sendToUsers(toNotify.map(({ emp }) => ({
+    void fcmService.sendToUsers(toNotify.map(({ emp }) => ({
       userId: emp.userId,
       title: "Shift Completion & Punch-Out Reminder",
       message: `Great job today, ${emp.firstName}! Working hours ended at ${emp.shift?.endTime || "18:00"}. Punch out to close your shift.`,
       type: "ATTENDANCE",
-    }))).catch((error) => console.warn("[EveningReminder:WebPush] Delivery failed:", error.message));
+    }))).catch((error) => console.warn("[EveningReminder:FCM] Delivery failed:", error.message));
 
     // Same channels as the morning reminder. Fire-and-forget: a slow or failing provider must not hold up the pass.
     for (const { emp } of toNotify) {
@@ -651,7 +652,7 @@ class NotificationService {
         const alreadySent = new Set(already.map((n) => n.userId));
         const fresh = userIds.filter((id) => !alreadySent.has(id));
         if (fresh.length === 0) continue;
-        await prisma.notification.createMany({
+        await notificationDelivery.createMany({
           data: fresh.map((userId) => ({
             organizationId: org.id,
             userId,

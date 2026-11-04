@@ -6,7 +6,7 @@ const router = express.Router();
 router.use(authenticate);
 router.post("/", async (req, res) => { try { return res.status(201).json({ success: true, message: "WFH request submitted for approval", data: await service.createRequest(req.user.id, req.user.organizationId, req.body) }); } catch (error) { return fail(res, error); } });
 router.get("/my", async (req, res) => { try { return res.json({ success: true, data: await service.getMyRequests(req.user.id, req.user.organizationId) }); } catch (error) { return fail(res, error); } });
-const reviewers = authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER");
+const reviewers = authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR");
 router.get("/", reviewers, async (req, res) => { try { return paginated(res, await service.getRequests(req.user.organizationId, req.query, req.user.role)); } catch (error) { return fail(res, error); } });
 router.post("/:id/review", reviewers, async (req, res) => { try { const data = await service.reviewRequest(req.params.id, req.user.organizationId, req.user.id, req.body, req.user.role); return res.json({ success: true, message: "WFH request " + data.status.toLowerCase(), data }); } catch (error) { return fail(res, error); } });
 module.exports = router;

@@ -1,4 +1,5 @@
 const prisma = require("../config/database");
+const notificationDelivery = require("./notification-delivery.service");
 const { uploadImage, uploadBuffer } = require("../config/cloudinary");
 const { assertCanReview, visibleToReviewer } = require("../utils/approvalChain");
 const webhookService = require("./webhook.service");
@@ -310,7 +311,7 @@ class ExpenseService {
     // Create Notification for the employee
     if (claim.employee?.userId) {
       try {
-        await prisma.notification.create({
+        await notificationDelivery.create({
           data: {
             organizationId,
             userId: claim.employee.userId,

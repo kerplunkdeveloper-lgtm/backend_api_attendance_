@@ -47,6 +47,8 @@ const policySelect = {
   shootRecoveryEnabled: true,
   shootRecoveryThresholdMinutes: true,
   shootTravelOtEnabled: true,
+  shootTravelOtThresholdMinutes: true,
+  shootTravelOtMultiplier: true,
   shootOtMultiplier: true,
   shootOtSalaryBasis: true,
   weeklyOffDays: true,

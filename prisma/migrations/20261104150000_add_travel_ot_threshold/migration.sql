@@ -1,0 +1,3 @@
+ALTER TABLE "AttendancePolicy"
+  ADD COLUMN IF NOT EXISTS "shootTravelOtThresholdMinutes" INTEGER NOT NULL DEFAULT 360,
+  ADD COLUMN IF NOT EXISTS "shootTravelOtMultiplier" DECIMAL(4,2) NOT NULL DEFAULT 0.5;
