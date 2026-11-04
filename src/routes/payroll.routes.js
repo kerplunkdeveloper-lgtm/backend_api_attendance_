@@ -86,6 +86,13 @@ router.patch(
   payrollController.updateStatus,
 );
 
+// Distribute one approved payslip and notify only that employee.
+router.post(
+  "/payslips/:id/disburse",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"),
+  payrollController.disburseIndividual,
+);
+
 // Payroll Approval Workflow: Batch Approve
 router.post(
   "/approve-batch",

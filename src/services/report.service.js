@@ -2,6 +2,10 @@ const prisma = require("../config/database");
 const { WORKING_STATUSES } = require("../utils/employeeStatus");
 const { getOrgDateOnly } = require("./attendance.service");
 
+// Company and platform admins are account owners, not workforce members.
+// They must not appear in attendance logs, daily reports, or monthly reports.
+const workforceUserFilter = { role: { notIn: ["SUPER_ADMIN", "COMPANY_ADMIN"] } };
+
 class ReportService {
   /**
    * Daily Attendance Report
@@ -11,7 +15,7 @@ class ReportService {
 
     const [allEmployees, attendances, approvedLeaves, org, holidays] = await Promise.all([
       prisma.employee.findMany({
-        where: { organizationId, status: { in: WORKING_STATUSES } },
+        where: { organizationId, status: { in: WORKING_STATUSES }, user: workforceUserFilter },
         select: {
           id: true,
           firstName: true,
@@ -23,7 +27,7 @@ class ReportService {
         },
       }),
       prisma.attendance.findMany({
-        where: { organizationId, date: dateOnly },
+        where: { organizationId, date: dateOnly, employee: { user: workforceUserFilter } },
         include: {
           employee: {
             select: {
@@ -214,7 +218,7 @@ class ReportService {
 
     const [employees, attendances, leaves, org] = await Promise.all([
       prisma.employee.findMany({
-        where: { organizationId, status: { in: WORKING_STATUSES } },
+        where: { organizationId, status: { in: WORKING_STATUSES }, user: workforceUserFilter },
         include: {
           department: { select: { name: true } },
           branch: { select: { name: true } },
@@ -225,6 +229,7 @@ class ReportService {
         where: {
           organizationId,
           date: { gte: startDate, lte: endDate },
+          employee: { user: workforceUserFilter },
         },
       }),
       prisma.leaveRequest.findMany({

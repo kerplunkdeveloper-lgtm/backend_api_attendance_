@@ -1078,6 +1078,67 @@ class PayrollService {
     };
   }
 
+  /** Mark one approved payslip as disbursed and notify that employee. */
+  async disburseIndividualPayslip(organizationId, payslipId, adminUserId, remarks) {
+    const existing = await prisma.payslip.findFirst({
+      where: { id: payslipId, organizationId },
+      include: {
+        employee: {
+          include: {
+            user: { select: { email: true } },
+            organization: { select: { name: true, logoUrl: true } },
+          },
+        },
+      },
+    });
+
+    if (!existing) {
+      const error = new Error("Payslip not found");
+      error.statusCode = 404;
+      throw error;
+    }
+    if (existing.status !== "APPROVED") {
+      const error = new Error(`Only approved payslips can be distributed. Current status: ${existing.status}.`);
+      error.statusCode = 409;
+      throw error;
+    }
+
+    const payslip = await prisma.payslip.update({
+      where: { id: payslipId },
+      data: {
+        status: "DISBURSED",
+        disbursedAt: new Date(),
+        remarks: remarks || "Distributed individually via payroll",
+      },
+    });
+
+    const empName = `${existing.employee.firstName} ${existing.employee.lastName || ""}`.trim();
+    const email = existing.employee.user?.email;
+    const phone = existing.employee.phone;
+    if (email) {
+      emailService.sendPayslipDisbursedEmail(email, empName, {
+        month: existing.month,
+        year: existing.year,
+        netSalary: Number(existing.netSalary),
+        grossSalary: Number(existing.grossSalary),
+        deductionsTotal: Number(existing.deductionsTotal),
+        workingDays: existing.workingDays,
+        presentDays: existing.presentDays,
+        companyName: existing.employee.organization?.name,
+        companyLogoUrl: existing.employee.organization?.logoUrl,
+      }).catch((error) => console.warn(`[PayrollNotification:Email] Error for ${email}:`, error.message));
+    }
+    if (phone) {
+      whatsappService.sendPayslipDisbursedWhatsApp(phone, empName, {
+        month: existing.month,
+        year: existing.year,
+        netSalary: Number(existing.netSalary),
+      }).catch((error) => console.warn(`[PayrollNotification:WhatsApp] Error for ${phone}:`, error.message));
+    }
+
+    return payslip;
+  }
+
   /**
    * 9. Update Individual Payslip Status
    */
