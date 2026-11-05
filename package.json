@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "postinstall": "prisma generate",
-    "dev": "prisma generate && nodemon server.js",
+    "dev": "prisma generate && prisma migrate deploy && nodemon server.js",
     "start": "prisma generate && prisma migrate deploy && node server.js",
     "build": "prisma generate",
     "build:db": "prisma generate && prisma migrate deploy",

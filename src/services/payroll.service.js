@@ -474,14 +474,30 @@ class PayrollService {
     try {
       approvedShootSettlements = await prisma.shootSettlement.findMany({
         where: { organizationId, employeeId, status: "APPROVED", payrollStatus: "READY", shootDate: { gte: period.start, lte: period.end } },
-        select: { id: true, approvedShootMinutes: true, approvedShootOtMinutes: true, approvedTravelOtMinutes: true, approvedAllowanceAmount: true, approvedExpenseAmount: true, shootDate: true, shootRequest: { select: { shootName: true, location: true } } },
+        select: { id: true, approvedShootMinutes: true, approvedShootOtMinutes: true, approvedTravelOtMinutes: true, approvedTravelOtAmount: true, approvedAllowanceAmount: true, approvedExpenseAmount: true, shootDate: true, shootRequest: { select: { shootName: true, location: true } } },
       });
     } catch (error) {
       // A rollout may deploy the payroll code before the additive settlement table.
       // Keep existing payroll usable until the migration is applied.
       if (error?.code !== "P2021" && error?.code !== "P2022") throw error;
     }
+    const exactTravelOtMinutes = approvedShootSettlements.reduce((sum, row) => sum + (Number(row.approvedTravelOtAmount || 0) > 0 ? Number(row.approvedTravelOtMinutes || 0) : 0), 0);
+    const exactTravelOtAmount = approvedShootSettlements.reduce((sum, row) => sum + Number(row.approvedTravelOtAmount || 0), 0);
     totalOvertimeMinutes += approvedShootSettlements.reduce((sum, row) => sum + Number(row.approvedShootOtMinutes || 0) + Number(row.approvedTravelOtMinutes || 0), 0);
+    // Travel OT with an HR-entered amount is paid as an exact reimbursement;
+    // remove its minutes from formula-based OT so the employee is not paid twice.
+    totalOvertimeMinutes = Math.max(0, totalOvertimeMinutes - exactTravelOtMinutes);
+
+    // A reviewed monthly allocation is the source of truth for how approved OT
+    // is settled. Permission, leave and comp-off portions are already credited
+    // as entitlements; only the chosen cash remainder is payable here.
+    const overtimeAllocation = await prisma.overtimeAllocation.findUnique({
+      where: { employeeId_month_year: { employeeId, month: m, year: y } },
+      select: { id: true, status: true, approvedMinutes: true, permissionMinutes: true, leaveMinutes: true, compOffMinutes: true, cashMinutes: true },
+    });
+    if (overtimeAllocation?.status === "APPROVED") {
+      totalOvertimeMinutes = Math.max(0, Number(overtimeAllocation.cashMinutes || 0) - exactTravelOtMinutes);
+    }
 
     const overtimeHours = Math.round((totalOvertimeMinutes / 60) * 10) / 10;
     const overtimePay = money.multiply(
@@ -511,7 +527,7 @@ class PayrollService {
     }, 0);
     const permission = computePermissionDeduction({
       approvedHours: approvedPermissionHours,
-      allowanceHours: policy.monthlyPermissionHours,
+      allowanceHours: Number(policy.monthlyPermissionHours || 0) + (overtimeAllocation?.status === "APPROVED" ? Number(overtimeAllocation.permissionMinutes || 0) / 60 : 0),
       dailyRate,
     });
 
@@ -537,7 +553,7 @@ class PayrollService {
       },
     });
 
-    const shootReimbursements = approvedShootSettlements.reduce((sum, row) => sum + Number(row.approvedAllowanceAmount || 0) + Number(row.approvedExpenseAmount || 0), 0);
+    const shootReimbursements = approvedShootSettlements.reduce((sum, row) => sum + Number(row.approvedAllowanceAmount || 0) + Number(row.approvedExpenseAmount || 0), 0) + exactTravelOtAmount;
     const reimbursements = money.sum(...approvedExpenses.map((exp) => exp.amount), shootReimbursements);
 
     const loanService = require("./loan.service");
@@ -597,6 +613,15 @@ class PayrollService {
         permissionMinutes: Math.round(approvedPermissionHours * 60),
         permissionExcessHours: permission.excessHours,
         permissionExcessMinutes: Math.round(permission.excessHours * 60),
+        overtimeAllocation: overtimeAllocation ? {
+          id: overtimeAllocation.id,
+          status: overtimeAllocation.status,
+          approvedMinutes: Number(overtimeAllocation.approvedMinutes || 0),
+          permissionMinutes: Number(overtimeAllocation.permissionMinutes || 0),
+          leaveMinutes: Number(overtimeAllocation.leaveMinutes || 0),
+          compOffMinutes: Number(overtimeAllocation.compOffMinutes || 0),
+          cashMinutes: Number(overtimeAllocation.cashMinutes || 0),
+        } : null,
       },
       dailyPayroll,
       salaryBreakdown: {
@@ -640,6 +665,7 @@ class PayrollService {
         approvedShootMinutes: Number(settlement.approvedShootMinutes || 0),
         approvedShootOtMinutes: Number(settlement.approvedShootOtMinutes || 0),
         approvedTravelOtMinutes: Number(settlement.approvedTravelOtMinutes || 0),
+        approvedTravelOtAmount: Number(settlement.approvedTravelOtAmount || 0),
         approvedAllowanceAmount: Number(settlement.approvedAllowanceAmount || 0),
         approvedExpenseAmount: Number(settlement.approvedExpenseAmount || 0),
       })),
@@ -870,6 +896,13 @@ class PayrollService {
         const settlementIds = payroll.approvedShootSettlements?.map((settlement) => settlement.id) || [];
         if (settlementIds.length) {
           await tx.shootSettlement.updateMany({ where: { id: { in: settlementIds }, organizationId, payrollStatus: "READY" }, data: { payrollStatus: "PROCESSED" } });
+        }
+
+        if (payroll.attendanceSummary?.overtimeAllocation?.id) {
+          await tx.overtimeAllocation.updateMany({
+            where: { id: payroll.attendanceSummary.overtimeAllocation.id, organizationId, status: "APPROVED" },
+            data: { lockedAt: new Date() },
+          });
         }
 
         const loanService = require("./loan.service");

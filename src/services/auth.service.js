@@ -30,6 +30,9 @@ const {
   otpauthUrl,
 } = require("../utils/totp");
 
+const { verifyPassword } = require("../utils/passwordVerifier");
+
+const LAST_LOGIN_REFRESH_MS = 10 * 60 * 1000;
 const MIN_PASSWORD_LENGTH = 8;
 const VERIFICATION_CODE_TTL_MS = 15 * 60 * 1000;
 
@@ -480,11 +483,12 @@ const login = async (email, password, client = null, employeeCode = null, phone 
     include: loginInclude,
   });
 
-  const matches = [];
-  for (const candidate of candidates) {
-    const passwordValid = await bcrypt.compare(password, candidate.passwordHash);
-    if (passwordValid) matches.push(candidate);
-  }
+  // Comparisons run on the bounded worker pool so a login spike cannot block the
+  // event loop; overload surfaces as a retryable 503 (see utils/passwordVerifier).
+  const verdicts = await Promise.all(
+    candidates.map((candidate) => verifyPassword(password, candidate.passwordHash)),
+  );
+  const matches = candidates.filter((_, index) => verdicts[index]);
 
   if (matches.length === 0) {
     const error = new Error("Invalid email or password");
@@ -546,13 +550,17 @@ const login = async (email, password, client = null, employeeCode = null, phone 
   const accessToken = generateAccessToken(tokenPayload);
   const refreshToken = await issueRefreshToken(user.id, tokenPayload);
 
-  // Update lastLoginAt in background without blocking login response latency
-  prisma.user
-    .update({
-      where: { id: user.id },
-      data: { lastLoginAt: new Date() },
-    })
-    .catch((err) => console.warn("[Auth] Failed to update lastLoginAt:", err.message));
+  // lastLoginAt is informational. Writing it on every sign-in turns a login
+  // spike into a spike of row updates, so refresh it at most every few minutes.
+  const lastLogin = user.lastLoginAt ? new Date(user.lastLoginAt).getTime() : 0;
+  if (Date.now() - lastLogin > LAST_LOGIN_REFRESH_MS) {
+    prisma.user
+      .update({
+        where: { id: user.id },
+        data: { lastLoginAt: new Date() },
+      })
+      .catch((err) => console.warn("[Auth] Failed to update lastLoginAt:", err.message));
+  }
 
   return {
     accessToken,

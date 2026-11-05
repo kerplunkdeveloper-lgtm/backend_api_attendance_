@@ -138,6 +138,7 @@ model Organization {
   attendancePolicy     AttendancePolicy?
   shiftOverrides       ShiftOverride[]
   overtimeRequests     OvertimeRequest[]
+  overtimeAllocations   OvertimeAllocation[]
   employeeInvites      EmployeeInvite[]
   employeeDocuments    EmployeeDocument[]
   employeeExits        EmployeeExit[]
@@ -453,6 +454,36 @@ model OvertimeRequest {
   @@index([attendanceId, status])
 }
 
+// Monthly employee choice for approved overtime. Only cashMinutes is sent to
+// payroll; the other approved minutes become employee entitlements.
+model OvertimeAllocation {
+  id                String        @id @default(uuid())
+  organizationId    String
+  employeeId        String
+  month             Int
+  year              Int
+  approvedMinutes   Int           @default(0)
+  permissionMinutes Int           @default(0)
+  leaveMinutes      Int           @default(0)
+  compOffMinutes    Int           @default(0)
+  cashMinutes       Int           @default(0)
+  status            RequestStatus @default(PENDING)
+  employeeNote      String?
+  reviewNote        String?
+  reviewedBy        String?
+  reviewedAt        DateTime?
+  lockedAt          DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  organization      Organization  @relation(fields: [organizationId], references: [id])
+  employee          Employee      @relation(fields: [employeeId], references: [id])
+
+  @@unique([employeeId, month, year])
+  @@index([organizationId, month, year, status])
+  @@index([employeeId, year])
+}
+
 // Employee-submitted settlement after an approved shoot. The three claim areas
 // stay separate in JSON so each item can be reviewed without creating duplicate
 // expense/OT records before HR approves the settlement.
@@ -484,6 +515,7 @@ model ShootSettlement {
   approvedShootMinutes    Int?
   approvedShootOtMinutes  Int?
   approvedTravelOtMinutes Int?
+  approvedTravelOtAmount  Decimal?       @db.Decimal(10, 2)
   approvedAllowanceAmount Decimal?       @db.Decimal(10, 2)
   approvedExpenseAmount   Decimal?       @db.Decimal(10, 2)
   overtimePay             Decimal?       @db.Decimal(10, 2)
@@ -714,6 +746,7 @@ model Employee {
   shiftOverrides           ShiftOverride[]
   compOffBalance           CompOffBalance?
   overtimeRequests         OvertimeRequest[]
+  overtimeAllocations      OvertimeAllocation[]
   documents                EmployeeDocument[]
   exits                    EmployeeExit[]
   finalSettlements         FinalSettlement[]

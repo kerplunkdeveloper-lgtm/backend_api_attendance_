@@ -46,6 +46,7 @@ const loginErrorResponse = (error) => {
       status: error.statusCode,
       code: error.code || (error.statusCode === 401 ? "INVALID_CREDENTIALS" : "AUTH_FAILED"),
       message: error.message,
+      retryAfterSeconds: error.retryAfterSeconds,
     };
   }
   if (isInfrastructureError(error)) {
@@ -221,10 +222,13 @@ const login = async (req, res) => {
     });
   } catch (error) {
     const response = loginErrorResponse(error);
+    // Overload shedding: tell clients when to come back so retries spread out.
+    if (response.retryAfterSeconds) res.setHeader("Retry-After", response.retryAfterSeconds);
     return res.status(response.status).json({
       success: false,
       code: response.code,
       message: response.message,
+      ...(response.retryAfterSeconds ? { retryAfterSeconds: response.retryAfterSeconds } : {}),
     });
   }
 };

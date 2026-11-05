@@ -7,7 +7,7 @@ const { getTenantId } = require("../utils/tenantContext");
  */
 const TENANT_MODELS = new Set([
   "Subscription", "AttendancePolicy", "LateComingLopRule", "ShiftOverride",
-  "CompOffBalance", "OvertimeRequest", "Branch", "Department", "User",
+  "CompOffBalance", "OvertimeRequest", "OvertimeAllocation", "ShootSettlement", "Branch", "Department", "User",
   "SsoLoginCode", "Employee", "Shift", "Attendance", "AttendanceCorrection",
   "LeaveType", "LeaveRequest", "LeaveBalance", "PermissionRequest",
   "CompanyLeave", "WorkFromHomeRequest", "ShootRequest", "Holiday", "SalaryStructure", "Payslip", "PayslipTemplate",
