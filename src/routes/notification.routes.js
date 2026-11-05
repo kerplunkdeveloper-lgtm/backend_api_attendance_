@@ -9,6 +9,7 @@ const {
 } = require("../middleware/auth.middleware");
 
 const router = express.Router();
+const { DEFAULT_TIMEZONE } = require("../utils/datetime");
 
 router.use(authenticate);
 
@@ -177,7 +178,7 @@ router.post("/test-whatsapp", adminOnly, async (req, res) => {
 
     const result = await whatsappService.sendMessage({
       to: recipient,
-      message: `*WorkPluse Notification System Test* 🚀\nHello ${req.user.name || "User"},\nYour WorkPluse WhatsApp alerts are active and running!\nTime: ${new Date().toLocaleTimeString("en-IN")}`,
+      message: `*WorkPluse Notification System Test* 🚀\nHello ${req.user.name || "User"},\nYour WorkPluse WhatsApp alerts are active and running!\nTime: ${new Date().toLocaleTimeString("en-IN", { timeZone: DEFAULT_TIMEZONE, hour: "2-digit", minute: "2-digit", hour12: true })}`,
     });
 
     return res.json({

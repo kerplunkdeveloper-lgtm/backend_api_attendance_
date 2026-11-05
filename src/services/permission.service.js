@@ -170,7 +170,7 @@ const hasTimeRange = data.startTime !== undefined || data.endTime !== undefined;
     const today = getPermissionDateOnly();
     const cycle = findCycleContaining(today, policy.payrollCycleStartDay, policy.payrollCycleEndDay);
 
-    const [requests, approved] = await Promise.all([
+    const [requests, approved, overtimePermission] = await Promise.all([
       prisma.permissionRequest.findMany({
         where: { organizationId, employeeId: employee.id },
         orderBy: { date: "desc" },
@@ -185,9 +185,14 @@ const hasTimeRange = data.startTime !== undefined || data.endTime !== undefined;
         },
         _sum: { hours: true },
       }),
+      prisma.overtimeAllocation.aggregate({
+        where: { organizationId, employeeId: employee.id, month: cycle.month, year: cycle.year, status: "APPROVED" },
+        _sum: { permissionMinutes: true },
+      }),
     ]);
 
-    const allowanceHours = Number(policy.monthlyPermissionHours || 0);
+    const overtimePermissionMinutes = Number(overtimePermission._sum.permissionMinutes || 0);
+    const allowanceHours = Number(policy.monthlyPermissionHours || 0) + overtimePermissionMinutes / 60;
     const usedHours = Number(approved._sum.hours || 0);
     const allowanceMinutes = Math.round(allowanceHours * 60);
     const usedMinutes = Math.round(usedHours * 60);
@@ -198,6 +203,7 @@ const hasTimeRange = data.startTime !== undefined || data.endTime !== undefined;
         cycleEnd: toIsoKey(cycle.period.end),
         allowanceHours,
         allowanceMinutes,
+        overtimePermissionMinutes,
         usedHours: round2(usedHours),
         usedMinutes,
         remainingHours: round2(Math.max(0, allowanceHours - usedHours)),

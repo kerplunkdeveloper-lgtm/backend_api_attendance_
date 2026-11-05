@@ -1,6 +1,22 @@
 const rateStore = new Map();
 const { getRedis, logRedisError } = require("../config/redis");
 let limiterSequence = 0;
+
+// Without Redis every distinct IP/email adds a key, and the 10-minute sweep is
+// too slow to stop a flood from many addresses (or a legitimate login spike)
+// from growing the map without bound. Cap it: sweep expired keys first, then
+// evict the oldest. Evicting only resets that caller's counter.
+const MAX_LOCAL_KEYS = Number(process.env.RATE_LIMIT_MAX_KEYS) > 0 ? Number(process.env.RATE_LIMIT_MAX_KEYS) : 200_000;
+const makeRoomInStore = (now) => {
+  if (rateStore.size < MAX_LOCAL_KEYS) return;
+  for (const [key, entry] of rateStore) if (now > entry.resetAt) rateStore.delete(key);
+  if (rateStore.size < MAX_LOCAL_KEYS) return;
+  let drop = Math.ceil(MAX_LOCAL_KEYS * 0.1);
+  for (const key of rateStore.keys()) {
+    rateStore.delete(key);
+    if (--drop <= 0) break;
+  }
+};
 /**
  * Creates an Express rate-limiter middleware.
  * @param {object} options
@@ -46,6 +62,7 @@ const createRateLimiter = ({
     const entry = rateStore.get(key);
     if (!entry || now > entry.resetAt) {
       const resetAt = now + windowMs;
+      if (!entry) makeRoomInStore(now);
       rateStore.set(key, { count: 1, resetAt });
       return applyResult(req, res, next, 1, resetAt);
     }

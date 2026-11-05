@@ -26,6 +26,14 @@ const { resolvePunchLocation } = require("../utils/reverseGeocode");
 const shootRequestService = require("./shoot-request.service");
 const notificationService = require("./notification.service");
 
+const formatLocalTime = (value, timezone = DEFAULT_TIMEZONE) =>
+  new Date(value).toLocaleTimeString("en-IN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: timezone || DEFAULT_TIMEZONE,
+  });
+
 // A configured late-coming rule is the company's source of truth for grace.
 // Fall back to the shift value for older organizations with no rule yet.
 const getLateGraceMinutes = async (organizationId, fallback = 10) => {
@@ -576,7 +584,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
   });
 
   if (existingAttendance?.checkIn) {
-    const timeStr = new Date(existingAttendance.checkIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const timeStr = formatLocalTime(existingAttendance.checkIn, timezone);
     const error = new Error(`Already punched in for today at ${timeStr}`);
     error.statusCode = 400;
     error.attendance = existingAttendance;
@@ -902,7 +910,7 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
   }
 
   if (attendance.checkOut) {
-    const timeStr = new Date(attendance.checkOut).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const timeStr = formatLocalTime(attendance.checkOut, timezone);
     const error = new Error(`Already punched out for today at ${timeStr}`);
     error.statusCode = 400;
     error.attendance = attendance;
@@ -1221,6 +1229,7 @@ const pauseTypes = {
 const startPause = async ({ userId, employeeId, organizationId, latitude, longitude, timestamp, actorRole = null, pauseType = "BREAK" }) => {
   const config = pauseTypes[pauseType] || pauseTypes.BREAK;
   const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
+  const timezone = await getOrgTimezone(organizationId);
   const eventTime = assertPunchTimestamp(timestamp, { actorRole, source: "WEB" });
   const attendance = await findOpenAttendance(employee.id, organizationId, eventTime, { events: { orderBy: { timestamp: "desc" } }, shift: true });
   if (!attendance?.checkIn) { const error = new Error(`You must punch in before taking ${config.label.toLowerCase()}`); error.statusCode = 400; throw error; }
@@ -1235,19 +1244,20 @@ const startPause = async ({ userId, employeeId, organizationId, latitude, longit
       organizationId,
       employeeId: employee.id,
       title: `${config.label} Started`,
-      summary: `started ${config.label.toLowerCase()} at ${eventTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+      summary: `started ${config.label.toLowerCase()} at ${formatLocalTime(eventTime, timezone)}`,
       type: "ATTENDANCE",
     });
   } catch (err) {
     console.warn("[PauseNotification] Failed to alert reviewers:", err.message);
   }
 
-  return { success: true, message: `${config.label} started at ${eventTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`, event, attendance };
+  return { success: true, message: `${config.label} started at ${formatLocalTime(eventTime, timezone)}`, event, attendance };
 };
 
 const endPause = async ({ userId, employeeId, organizationId, latitude, longitude, timestamp, actorRole = null, pauseType = "BREAK" }) => {
   const config = pauseTypes[pauseType] || pauseTypes.BREAK;
   const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
+  const timezone = await getOrgTimezone(organizationId);
   const eventTime = assertPunchTimestamp(timestamp, { actorRole, source: "WEB" });
   const attendance = await findOpenAttendance(employee.id, organizationId, eventTime, { events: { orderBy: { timestamp: "desc" } }, shift: true });
   if (!attendance?.checkIn) { const error = new Error("No active attendance record found for today"); error.statusCode = 400; throw error; }

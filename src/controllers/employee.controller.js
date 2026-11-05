@@ -243,7 +243,15 @@ const bulkImport = async (req, res) => {
   } catch (error) { return sendControllerError(res, error, { fallbackMessage: "Failed to process bulk import" }); }
 };
 
+const celebrations = async (req, res) => {
+  try {
+    const data = await employeeService.getCelebrations(req.user.organizationId, req.user.role);
+    return res.json({ success: true, message: "Celebrations fetched successfully", data });
+  } catch (error) { return sendControllerError(res, error, { fallbackMessage: "Failed to load celebrations" }); }
+};
+
 module.exports = {
+  celebrations,
   exportCsv,
   bulkImport,
   bulkSetAccess,

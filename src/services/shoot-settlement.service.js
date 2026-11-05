@@ -29,6 +29,14 @@ const companyWorkingMinutes = (shift) => {
   return Math.max(0, minutes);
 };
 const sumItems = (items) => Array.isArray(items) ? items.reduce((sum, item) => sum + Math.max(0, number(item?.amount)), 0) : 0;
+const travelOtAmountFor = (salary, policy, minutes) => {
+  let salaryBase = policy.shootOtSalaryBasis === "MONTHLY_CTC" ? number(salary?.monthlyCtc) : number(salary?.baseSalary);
+  // Some employee records only have CTC populated. Keep the auto amount useful
+  // instead of displaying ₹0 when another valid salary basis is available.
+  if (salaryBase <= 0) salaryBase = number(salary?.monthlyCtc) || number(salary?.annualCtc) / 12;
+  const hourlyRate = salaryBase > 0 ? salaryBase / Number(policy.workingDaysPerMonth || 26) / 8 : 0;
+  return Math.round((hourlyRate * Math.max(0, Number(minutes) || 0) / 60 * number(policy.shootTravelOtMultiplier, 0.5)) * 100) / 100;
+};
 const normalizeItems = (items, label) => {
   if (!Array.isArray(items)) return [];
   return items.slice(0, 50).map((item) => ({ category: clean(item?.category || label, 60), amount: Math.round(Math.max(0, number(item?.amount)) * 100) / 100, note: clean(item?.note, 300) })).filter((item) => item.amount > 0);
@@ -67,8 +75,10 @@ class ShootSettlementService {
     const recoveryLeaveEligible = Boolean(policy.shootRecoveryEnabled && returnedNextDay && totalDutyMinutes >= Number(policy.shootRecoveryThresholdMinutes || 720));
     const companyMinutes = companyWorkingMinutes(employee.shift);
     const shootOvertimeMinutes = returnedNextDay ? Math.max(0, shootMinutes - companyMinutes) : 0;
-    const travelOvertimeEligible = policy.shootTravelOtEnabled && travelMinutes >= Number(policy.shootTravelOtThresholdMinutes || 360);
-    const travelOvertimeMinutes = travelOvertimeEligible ? travelMinutes : 0;
+    // Travel is submitted as evidence only. A reviewer must enter the payable
+    // travel OT minutes after checking the claim; never auto-convert travel time
+    // into overtime at submission time.
+    const travelOvertimeMinutes = 0;
     const data = {
       organizationId, employeeId: employee.id, shootRequestId: shootRequest.id, attendanceId: returnedAttendance.id || null, shootDate, shootStart, shootEnd,
       travelStart, travelEnd,
@@ -77,12 +87,11 @@ class ShootSettlementService {
       totalDutyMinutes, recoveryLeaveEligible, recoveryLeaveRequested: Boolean(body.recoveryLeaveRequested && recoveryLeaveEligible),
       recoveryLeaveStatus: null, recoveryLeaveDate: body.recoveryLeaveDate ? dateOnly(body.recoveryLeaveDate) : null,
       allowances: normalizeItems(body.allowances, "Allowance"), expenses: normalizeItems(body.expenses, "Expense"), employeeNote: clean(body.employeeNote, 1000) || null,
-      overtimeStatus: shootOvertimeMinutes + travelOvertimeMinutes > 0 ? "PENDING" : "APPROVED",
+      overtimeStatus: shootOvertimeMinutes > 0 || travelMinutes > 0 ? "PENDING" : "APPROVED",
       overtimeReviewNote: null, overtimeReviewedBy: null, overtimeReviewedAt: null,
       shootOvertimeStatus: shootOvertimeMinutes > 0 ? "PENDING" : "APPROVED",
       shootOvertimeReviewNote: null, shootOvertimeReviewedBy: null, shootOvertimeReviewedAt: null,
-      // Travel OT is calculated from total travel duration and is included in payroll with settlement approval.
-      travelOvertimeStatus: "APPROVED",
+      travelOvertimeStatus: travelMinutes > 0 ? "PENDING" : "APPROVED",
       travelOvertimeReviewNote: null, travelOvertimeReviewedBy: null, travelOvertimeReviewedAt: null,
       status: "PENDING", payrollStatus: "NOT_READY", reviewedBy: null, reviewedAt: null, hrNote: null,
     };
@@ -105,8 +114,21 @@ class ShootSettlementService {
 
   async list(organizationId, role, query = {}) {
     if (!REVIEWERS.includes(role)) throw fail("Only HR or an approved reviewer can view shoot settlements.", 403);
+    let policy = { shootOtSalaryBasis: "BASE_SALARY", workingDaysPerMonth: 26, shootTravelOtMultiplier: 0.5 };
     try {
-      return await prisma.shootSettlement.findMany({ where: { organizationId, ...(query.status && query.status !== "ALL" ? { status: query.status } : {}) }, include: { employee: { select: { id: true, firstName: true, lastName: true, employeeCode: true } }, shootRequest: { select: { shootName: true, location: true, date: true } } }, orderBy: [{ status: "asc" }, { createdAt: "desc" }], take: 200 });
+      policy = { ...policy, ...(await policyService.getPolicy(organizationId)) };
+    } catch (error) {
+      // Older databases may not have the newest policy columns yet. Settlement
+      // rows must still load; only the suggested amount falls back to defaults.
+      if (error?.code !== "P2021" && error?.code !== "P2022") throw error;
+    }
+    try {
+      const rows = await prisma.shootSettlement.findMany({ where: { organizationId, ...(query.status && query.status !== "ALL" ? { status: query.status } : {}) }, include: { employee: { include: { salaryStructure: true } }, shootRequest: { select: { shootName: true, location: true, date: true } } }, orderBy: [{ status: "asc" }, { createdAt: "desc" }], take: 200 });
+      return rows.map((row) => ({
+        ...row,
+        employee: row.employee ? { id: row.employee.id, firstName: row.employee.firstName, lastName: row.employee.lastName, employeeCode: row.employee.employeeCode } : null,
+        suggestedTravelOtAmount: travelOtAmountFor(row.employee?.salaryStructure, policy, row.approvedTravelOtMinutes || row.travelMinutes),
+      }));
     } catch (error) {
       if (error?.code === "P2021" || error?.code === "P2022") return [];
       throw error;
@@ -124,9 +146,7 @@ class ShootSettlementService {
     const submittedAllowanceAmount = Math.round(sumItems(row.allowances) * 100) / 100;
     const submittedExpenseAmount = Math.round(sumItems(row.expenses) * 100) / 100;
     const approvedShootMinutes = Math.min(Math.max(0, Math.round(number(body.approvedShootMinutes, row.shootMinutes))), Math.max(0, row.shootMinutes));
-    const approvedTravelOtMinutes = policy.shootTravelOtEnabled && Number(row.travelOvertimeMinutes || 0) > 0
-      ? Math.min(Math.max(0, Math.round(number(body.approvedTravelOtMinutes, row.travelOvertimeMinutes))), Math.max(0, row.travelOvertimeMinutes))
-      : 0;
+    const approvedTravelOtMinutes = Math.min(Math.max(0, Math.round(number(row.approvedTravelOtMinutes))), Math.max(0, row.travelMinutes || 0));
     const approvedAllowanceAmount = Math.min(Math.max(0, Math.round(number(body.approvedAllowanceAmount, submittedAllowanceAmount) * 100) / 100), submittedAllowanceAmount);
     const approvedExpenseAmount = Math.min(Math.max(0, Math.round(number(body.approvedExpenseAmount, submittedExpenseAmount) * 100) / 100), submittedExpenseAmount);
     const salary = row.employee.salaryStructure;
@@ -135,10 +155,12 @@ class ShootSettlementService {
     const approvedTravelMinutes = row.travelOvertimeStatus === "APPROVED" ? approvedTravelOtMinutes : 0;
     const approvedShootOtMinutes = Math.min(Math.max(0, Math.round(number(body.approvedShootOtMinutes, row.shootOvertimeMinutes))), Math.max(0, row.shootOvertimeMinutes));
     const shootOtPay = hourlyRate * (row.shootOvertimeStatus === "APPROVED" ? approvedShootOtMinutes : 0) / 60 * number(policy.shootOtMultiplier, 1.5);
-    const travelOtPay = hourlyRate * approvedTravelMinutes / 60 * number(policy.shootTravelOtMultiplier, 0.5);
+    const travelOtPay = row.approvedTravelOtAmount !== null && row.approvedTravelOtAmount !== undefined
+      ? number(row.approvedTravelOtAmount)
+      : hourlyRate * approvedTravelMinutes / 60 * number(policy.shootTravelOtMultiplier, 0.5);
     const finalOtPay = Math.round((shootOtPay + travelOtPay) * 100) / 100;
     return prisma.$transaction(async (tx) => {
-      const updated = await tx.shootSettlement.update({ where: { id }, data: { status: "APPROVED", approvedShootMinutes, approvedShootOtMinutes: row.shootOvertimeStatus === "APPROVED" ? approvedShootOtMinutes : 0, approvedTravelOtMinutes: approvedTravelMinutes, approvedAllowanceAmount, approvedExpenseAmount, overtimePay: finalOtPay, recoveryLeaveStatus: row.recoveryLeaveRequested && row.recoveryLeaveEligible ? "APPROVED" : null, hrNote: clean(body.reviewNote, 1000) || null, reviewedBy: reviewerUserId, reviewedAt: new Date(), payrollStatus: "READY" } });
+      const updated = await tx.shootSettlement.update({ where: { id }, data: { status: "APPROVED", approvedShootMinutes, approvedShootOtMinutes: row.shootOvertimeStatus === "APPROVED" ? approvedShootOtMinutes : 0, approvedTravelOtMinutes: approvedTravelMinutes, approvedTravelOtAmount: row.approvedTravelOtAmount, approvedAllowanceAmount, approvedExpenseAmount, overtimePay: finalOtPay, recoveryLeaveStatus: row.recoveryLeaveRequested && row.recoveryLeaveEligible ? "APPROVED" : null, hrNote: clean(body.reviewNote, 1000) || null, reviewedBy: reviewerUserId, reviewedAt: new Date(), payrollStatus: row.travelOvertimeStatus === "PENDING" || row.shootOvertimeStatus === "PENDING" ? "NOT_READY" : "READY" } });
       if (row.recoveryLeaveRequested && row.recoveryLeaveEligible && row.recoveryLeaveDate) {
         const leaveType = await tx.leaveType.upsert({ where: { organizationId_code: { organizationId, code: "RECOVERY" } }, update: { name: "Recovery Leave", isPaid: true, isActive: true }, create: { organizationId, name: "Recovery Leave", code: "RECOVERY", daysAllowed: 365, isPaid: true, isActive: true } });
         const existingLeave = await tx.leaveRequest.findFirst({ where: { organizationId, employeeId: row.employeeId, leaveTypeId: leaveType.id, startDate: row.recoveryLeaveDate, endDate: row.recoveryLeaveDate, reason: { contains: row.id } }, select: { id: true } });
@@ -155,24 +177,36 @@ class ShootSettlementService {
     const row = await prisma.shootSettlement.findFirst({ where: { id, organizationId } });
     if (!row) throw fail("Shoot settlement not found.", 404);
     if (row.status === "REJECTED") throw fail("The settlement is rejected.", 409);
+    if (row.payrollStatus === "PROCESSED") throw fail("This travel OT has already been processed in payroll and cannot be corrected.", 409);
     const statusField = body.kind === "TRAVEL" ? "travelOvertimeStatus" : "shootOvertimeStatus";
     const currentStatus = row[statusField];
-    if (currentStatus !== "PENDING") throw fail(`This ${body.kind.toLowerCase()} overtime is already ${currentStatus.toLowerCase()}.`, 409);
+    // Travel OT can be corrected after approval. This is intentional: the
+    // reviewer may discover that the originally entered payable amount was wrong.
+    if (body.kind === "SHOOT" && currentStatus !== "PENDING") throw fail(`This ${body.kind.toLowerCase()} overtime is already ${currentStatus.toLowerCase()}.`, 409);
     const reviewNote = clean(body.reviewNote, 1000);
     if (body.status === "REJECTED" && !reviewNote) throw fail("Enter a reason when rejecting overtime.");
     const policy = await policyService.getPolicy(organizationId);
-    const approvedShootOtMinutes = body.kind === "SHOOT" && body.status === "APPROVED" ? Math.min(Math.max(0, Math.round(number(body.approvedShootOtMinutes, row.shootOvertimeMinutes))), Math.max(0, row.shootOvertimeMinutes)) : Number(row.approvedShootOtMinutes || 0);
-    const approvedTravelOtMinutes = body.kind === "TRAVEL" && body.status === "APPROVED" && policy.shootTravelOtEnabled && Number(row.travelOvertimeMinutes || 0) > 0
-      ? Math.min(Math.max(0, Math.round(number(body.approvedTravelOtMinutes, row.travelOvertimeMinutes))), Math.max(0, row.travelOvertimeMinutes))
-      : Number(row.approvedTravelOtMinutes || 0);
     const salary = await prisma.employee.findFirst({ where: { id: row.employeeId, organizationId }, select: { salaryStructure: true } });
+    const approvedShootOtMinutes = body.kind === "SHOOT" && body.status === "APPROVED" ? Math.min(Math.max(0, Math.round(number(body.approvedShootOtMinutes, row.shootOvertimeMinutes))), Math.max(0, row.shootOvertimeMinutes)) : Number(row.approvedShootOtMinutes || 0);
+    const approvedTravelOtMinutes = body.kind === "TRAVEL" && body.status === "APPROVED"
+      ? Math.min(Math.max(0, Math.round(number(body.approvedTravelOtMinutes))), Math.max(0, Number(row.travelMinutes || 0)))
+      : body.kind === "TRAVEL" ? 0 : Number(row.approvedTravelOtMinutes || 0);
+    const rawTravelOtAmount = body.approvedTravelOtAmount;
+    const suggestedTravelOtAmount = travelOtAmountFor(salary?.salaryStructure, policy, body.approvedTravelOtMinutes || row.travelMinutes);
+    const approvedTravelOtAmount = body.kind === "TRAVEL" && body.status === "APPROVED"
+      ? Math.round(Math.max(0, Number(rawTravelOtAmount ?? suggestedTravelOtAmount)) * 100) / 100
+      : body.kind === "TRAVEL" ? 0 : Number(row.approvedTravelOtAmount || 0);
+    if (body.kind === "TRAVEL" && body.status === "APPROVED" && rawTravelOtAmount !== undefined && (!Number.isFinite(Number(rawTravelOtAmount)) || Number(rawTravelOtAmount) < 0)) throw fail("Enter a valid travel OT amount.");
     const salaryBase = policy.shootOtSalaryBasis === "MONTHLY_CTC" ? number(salary?.salaryStructure?.monthlyCtc) : number(salary?.salaryStructure?.baseSalary);
     const hourlyRate = salaryBase > 0 ? salaryBase / Number(policy.workingDaysPerMonth || 26) / 8 : 0;
-    const overtimePay = Math.round((hourlyRate * (approvedShootOtMinutes / 60) * number(policy.shootOtMultiplier, 1.5) + hourlyRate * (approvedTravelOtMinutes / 60) * number(policy.shootTravelOtMultiplier, 0.5)) * 100) / 100;
+    const travelOtPay = body.kind === "TRAVEL" && body.status === "APPROVED"
+      ? approvedTravelOtAmount
+      : Number(row.approvedTravelOtAmount || 0) || hourlyRate * (approvedTravelOtMinutes / 60) * number(policy.shootTravelOtMultiplier, 0.5);
+    const overtimePay = Math.round((hourlyRate * (approvedShootOtMinutes / 60) * number(policy.shootOtMultiplier, 1.5) + travelOtPay) * 100) / 100;
     const nextShootStatus = body.kind === "SHOOT" ? body.status : row.shootOvertimeStatus;
     const nextTravelStatus = body.kind === "TRAVEL" ? body.status : row.travelOvertimeStatus;
     const nextOverallStatus = nextShootStatus !== "PENDING" && nextTravelStatus !== "PENDING" ? "APPROVED" : "PENDING";
-    return prisma.shootSettlement.update({ where: { id }, data: { overtimeStatus: nextOverallStatus, approvedShootOtMinutes, approvedTravelOtMinutes, overtimePay, ...(body.kind === "SHOOT" ? { shootOvertimeStatus: body.status, shootOvertimeReviewNote: reviewNote || null, shootOvertimeReviewedBy: reviewerUserId, shootOvertimeReviewedAt: new Date() } : { travelOvertimeStatus: body.status, travelOvertimeReviewNote: reviewNote || null, travelOvertimeReviewedBy: reviewerUserId, travelOvertimeReviewedAt: new Date() }), payrollStatus: row.status === "APPROVED" ? "READY" : row.payrollStatus } });
+    return prisma.shootSettlement.update({ where: { id }, data: { overtimeStatus: nextOverallStatus, approvedShootOtMinutes, approvedTravelOtMinutes, approvedTravelOtAmount, overtimePay, ...(body.kind === "SHOOT" ? { shootOvertimeStatus: body.status, shootOvertimeReviewNote: reviewNote || null, shootOvertimeReviewedBy: reviewerUserId, shootOvertimeReviewedAt: new Date() } : { travelOvertimeStatus: body.status, travelOvertimeReviewNote: reviewNote || null, travelOvertimeReviewedBy: reviewerUserId, travelOvertimeReviewedAt: new Date() }), payrollStatus: row.status === "APPROVED" && nextOverallStatus !== "PENDING" ? "READY" : row.status === "APPROVED" ? "NOT_READY" : row.payrollStatus } });
   }
 }
 

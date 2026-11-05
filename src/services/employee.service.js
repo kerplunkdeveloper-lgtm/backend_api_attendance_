@@ -396,6 +396,61 @@ const getEmployees = async (organizationId, query = {}, actorRole = "EMPLOYEE") 
 };
 
 /**
+ * GET /api/employees/celebrations
+ *
+ * Feeds the dashboard's "People moments" card. The employee list deliberately
+ * strips dateOfBirth (privacy), so birthdays could never be built from it. This
+ * returns only what the card needs: the birth month and day (never the year, so no
+ * age is revealed) and the joining date. It is not paginated, so a large company is
+ * not silently cut to the newest N employees, and it only returns people who have a date.
+ */
+const getCelebrations = async (organizationId, actorRole = "EMPLOYEE") => {
+  await assertRolesAccess(organizationId, actorRole);
+  const where = {
+    organizationId,
+    deletedAt: null,
+    status: { in: WORKING_STATUSES },
+    OR: [{ dateOfBirth: { not: null } }, { dateOfJoining: { not: null } }],
+  };
+  let rows;
+  try {
+    rows = await prisma.employee.findMany({
+      where,
+      select: {
+        id: true, firstName: true, lastName: true, dateOfBirth: true,
+        dateOfJoining: true, designation: true, avatarUrl: true,
+        department: { select: { name: true } }, user: { select: { avatarUrl: true } },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+  } catch (error) {
+    // Keep celebrations working during rolling deployments where optional
+    // profile/avatar columns or relations are not yet present in the DB.
+    if (error?.code !== "P2021" && error?.code !== "P2022") throw error;
+    rows = await prisma.employee.findMany({
+      where,
+      select: { id: true, firstName: true, lastName: true, dateOfBirth: true, dateOfJoining: true },
+      orderBy: { createdAt: "desc" },
+    });
+  }
+  // Dates are stored as calendar dates at UTC midnight, so read them in UTC; local getters
+  // would move the day for servers or browsers west of UTC.
+  return rows.map((row) => ({
+    id: row.id,
+    firstName: row.firstName,
+    lastName: row.lastName,
+    designation: row.designation || null,
+    department: row.department?.name || null,
+    // Only a photo someone actually uploaded. Not the generated placeholder avatar, so the
+    // card can fall back to initials instead of showing a fake face-less image.
+    photoUrl: (row.avatarUrl || row.user?.avatarUrl || "").trim() || null,
+    birthMonth: row.dateOfBirth ? row.dateOfBirth.getUTCMonth() + 1 : null,
+    birthDay: row.dateOfBirth ? row.dateOfBirth.getUTCDate() : null,
+    dateOfJoining: row.dateOfJoining ? row.dateOfJoining.toISOString().slice(0, 10) : null,
+  }));
+};
+
+/**
  * 3. GET /api/employees/:id - Get Employee by ID
  */
 const getEmployeeById = async (organizationId, employeeId, actorRole = "EMPLOYEE") => {
@@ -1552,6 +1607,7 @@ module.exports = {
   setEmployeesAccess,
   createEmployee,
   getEmployees,
+  getCelebrations,
   getEmployeeById,
   updateEmployee,
   deleteEmployee,

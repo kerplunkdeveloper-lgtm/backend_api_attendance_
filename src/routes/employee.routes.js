@@ -35,6 +35,13 @@ router.get(
   employeeController.list,
 );
 
+// Must stay above "/:id" or "celebrations" would be treated as an employee id.
+router.get(
+  "/celebrations",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
+  employeeController.celebrations,
+);
+
 router.get(
   "/export",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),

@@ -4,6 +4,10 @@ const app = require("./src/app");
 const prisma = require("./src/config/database");
 const notificationService = require("./src/services/notification.service");
 const { disconnectRedis } = require("./src/config/redis");
+const { warmVerifier, shutdownVerifier } = require("./src/utils/passwordVerifier");
+
+// Spin up the password-hashing workers now, not on the first login spike.
+warmVerifier();
 
 /**
  * The reminder / absent-marking scheduler runs on an interval inside this
@@ -98,6 +102,7 @@ const shutdown = async (signal) => {
     try {
       await prisma.$disconnect();
       await disconnectRedis();
+      await shutdownVerifier();
     } catch (err) {
       console.error("Error disconnecting Prisma:", err.message);
     }
