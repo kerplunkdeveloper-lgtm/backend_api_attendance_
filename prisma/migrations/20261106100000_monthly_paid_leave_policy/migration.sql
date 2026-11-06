@@ -1,0 +1,3 @@
+ALTER TABLE "AttendancePolicy"
+  ADD COLUMN IF NOT EXISTS "monthlyPaidLeaveDays" DECIMAL(4,1) NOT NULL DEFAULT 1.0,
+  ADD COLUMN IF NOT EXISTS "paidLeaveCarryForward" BOOLEAN NOT NULL DEFAULT true;

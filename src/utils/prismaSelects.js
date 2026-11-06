@@ -32,6 +32,8 @@ const policySelect = {
   organizationId: true,
   workingDaysPerMonth: true,
   probationMonths: true,
+  monthlyPaidLeaveDays: true,
+  paidLeaveCarryForward: true,
   monthlyPermissionHours: true,
   permissionRequiresProbation: true,
   payrollCycleStartDay: true,

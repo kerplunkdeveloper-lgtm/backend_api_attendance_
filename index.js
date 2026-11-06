@@ -31,7 +31,6 @@ if (typeof PhusionPassenger !== "undefined") {
     startBackgroundScheduler();
   });
 }
-  
-// Export the Express app for compatible process managers and adapters.
+
 module.exports = app;
 

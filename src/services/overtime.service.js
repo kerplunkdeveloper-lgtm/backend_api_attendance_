@@ -353,13 +353,16 @@ class OvertimeService {
     }
     assertCanReview(request.employee?.user?.role, reviewerRole);
 
-    const finalOtMinutes =
-      approvedMinutes !== undefined && approvedMinutes !== null
-        ? parseInt(approvedMinutes, 10)
-        : request.requestedMinutes;
+    const hasApprovedMinutes = approvedMinutes !== undefined && approvedMinutes !== null;
+    const finalOtMinutes = hasApprovedMinutes
+      ? Number(approvedMinutes)
+      : Number(request.requestedMinutes);
 
-    if (status === "APPROVED" && (!Number.isFinite(finalOtMinutes) || finalOtMinutes < 0)) {
-      const error = new Error("approvedMinutes must be zero or a positive number");
+    if (
+      status === "APPROVED" &&
+      (!Number.isInteger(finalOtMinutes) || finalOtMinutes < 0)
+    ) {
+      const error = new Error("approvedMinutes must be a whole number of minutes (0 or more)");
       error.statusCode = 400;
       throw error;
     }

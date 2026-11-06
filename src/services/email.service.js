@@ -43,8 +43,8 @@ class EmailService {
     const safeLogoUrl = getEmailLogo(companyLogoUrl);
     const escapedLogoUrl = safeLogoUrl ? escapeHtml(safeLogoUrl) : null;
     const brandMark = safeLogoUrl
-      ? `<img src="${escapedLogoUrl}" alt="${displayCompanyName} logo" width="240" height="90" style="width: 240px; height: 90px; object-fit: contain; margin: 0 auto 10px; display: block; background: #ffffff; border-radius: 10px; padding: 8px; border: 0;">`
-      : `<div class="logo" style="font-size: 24px; font-weight: 800; letter-spacing: -0.5px; margin: 0 0 8px 0; color: #ffffff;">Work<span style="color: #60a5fa;">Pluse</span></div>`;
+      ? `<img src="${escapedLogoUrl}" alt="${displayCompanyName} logo" width="240" height="90" style="width: 100%; max-width: 240px; height: auto; max-height: 90px; object-fit: contain; margin: 0 auto 10px; display: block; background: #ffffff; border-radius: 10px; padding: 8px; border: 0;">`
+      : `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin: 0 auto 10px;"><tr><td style="width: 38px; height: 38px; border-radius: 12px; background: #ffffff; color: #1e3a8a; font-size: 16px; font-weight: 800; text-align: center; vertical-align: middle;">WP</td><td style="padding-left: 10px; color: #ffffff; font-size: 24px; font-weight: 800; letter-spacing: -0.5px; text-align: left;">Work<span style="color: #60a5fa;">Pluse</span></td></tr></table>`;
 
     return `
 <!DOCTYPE html>
@@ -55,7 +55,7 @@ class EmailService {
   <title>${title}</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; margin: 0; padding: 24px; color: #1e293b; }
-    .container { max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.06); border: 1px solid #e2e8f0; }
+    .container { width: 100%; max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.06); border: 1px solid #e2e8f0; }
     .header { background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%); padding: 32px 28px; text-align: center; color: #ffffff; }
     .logo { font-size: 24px; font-weight: 800; letter-spacing: -0.5px; margin: 0 0 8px 0; }
     .logo span { color: #60a5fa; }
@@ -65,19 +65,30 @@ class EmailService {
     .heading { font-size: 20px; font-weight: 700; color: #0f172a; margin: 0 0 16px 0; }
     .text { font-size: 15px; line-height: 1.6; color: #475569; margin: 0 0 20px 0; }
     .info-card { background-color: #f8fafc; border-radius: 12px; border: 1px solid #e2e8f0; padding: 18px 20px; margin: 20px 0; }
-    .info-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px dashed #e2e8f0; font-size: 14px; }
+    .info-row { display: table; width: 100%; table-layout: fixed; padding: 6px 0; border-bottom: 1px dashed #e2e8f0; font-size: 14px; }
     .info-row:last-child { border-bottom: none; }
-    .info-label { color: #64748b; font-weight: 500; }
-    .info-value { color: #0f172a; font-weight: 600; text-align: right; }
+    .info-label { display: table-cell; color: #64748b; font-weight: 500; width: 42%; vertical-align: top; padding-right: 10px; }
+    .info-value { display: table-cell; color: #0f172a; font-weight: 600; text-align: right; width: 58%; vertical-align: top; overflow-wrap: anywhere; word-break: break-word; }
     .btn { display: inline-block; background: #2563eb; color: #ffffff !important; text-decoration: none; padding: 14px 28px; border-radius: 10px; font-weight: 600; font-size: 15px; margin-top: 10px; box-shadow: 0 4px 12px rgba(37,99,235,0.25); text-align: center; }
     .footer { padding: 24px; background: #f8fafc; border-top: 1px solid #e2e8f0; text-align: center; font-size: 12px; color: #94a3b8; line-height: 1.5; }
     .footer a { color: #64748b; text-decoration: underline; }
+    @media only screen and (max-width: 600px) {
+      body { padding: 8px !important; }
+      .container { border-radius: 12px !important; }
+      .header, .body { padding: 24px 18px !important; }
+      .heading { font-size: 19px !important; }
+      .text { font-size: 14px !important; }
+      .info-card { padding: 12px 14px !important; margin: 16px 0 !important; }
+      .info-row td { padding: 7px 0 !important; }
+      .btn { display: block !important; width: auto !important; }
+    }
   </style>
 </head>
 <body style="font-family: Arial, Helvetica, sans-serif; background-color: #f1f5f9; margin: 0; padding: 24px; color: #1e293b;">
   <div class="container" style="max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0;">
     <div class="header" style="background: #1e3a8a; padding: 32px 28px; text-align: center; color: #ffffff;">
       ${brandMark}
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin: 0 auto 14px;"><tr><td style="padding: 5px 9px; border: 1px solid #93c5fd; border-radius: 999px; color: #dbeafe; font-size: 11px; white-space: nowrap;">&#128100; Secure account</td><td style="width: 6px;"></td><td style="padding: 5px 9px; border: 1px solid #93c5fd; border-radius: 999px; color: #dbeafe; font-size: 11px; white-space: nowrap;">&#9632; WorkPluse platform</td></tr></table>
       <p class="header-sub" style="font-size: 13px; color: #bfdbfe; margin: 0; font-weight: 500;">${displayCompanyName} · Powered by WorkPluse</p>
     </div>
     <div class="body" style="padding: 32px 28px;">
@@ -664,7 +675,7 @@ class EmailService {
       </p>
       <div class="info-card" style="text-align: center; padding: 28px;">
         <p style="margin: 0 0 8px; font-size: 13px; color: #64748b; font-weight: 500; text-transform: uppercase; letter-spacing: 1px;">Your Verification Code</p>
-        <div style="font-size: 32px; font-weight: 800; letter-spacing: 8px; color: #2563eb; font-family: 'Courier New', monospace; background: #eff6ff; border: 2px dashed #bfdbfe; border-radius: 10px; padding: 16px 24px; display: inline-block;">
+        <div style="font-size: 32px; font-weight: 800; letter-spacing: 8px; color: #2563eb; font-family: 'Courier New', monospace; background: #eff6ff; border: 2px dashed #bfdbfe; border-radius: 10px; padding: 16px 24px; display: inline-block; max-width: 100%; box-sizing: border-box; word-break: break-all;">
           ${code}
         </div>
         <p style="margin: 12px 0 0; font-size: 12px; color: #94a3b8;">This code expires in ${expiresIn}.</p>

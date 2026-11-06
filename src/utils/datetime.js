@@ -96,6 +96,21 @@ const toLocalDateKey = (date = new Date(), timeZone = DEFAULT_TIMEZONE) => {
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 };
 
+/** Convert a UTC-midnight calendar date into that date's local-midnight instant. */
+const getLocalMidnightInstant = (dateOnly, timeZone = DEFAULT_TIMEZONE) => {
+  const target = new Date(dateOnly);
+  let guess = new Date(target.getTime());
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const parts = getZonedParts(guess, timeZone);
+    const currentWall = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+    const targetWall = Date.UTC(target.getUTCFullYear(), target.getUTCMonth(), target.getUTCDate());
+    const adjustment = targetWall - currentWall;
+    if (adjustment === 0) break;
+    guess = new Date(guess.getTime() + adjustment);
+  }
+  return guess;
+};
+
 /** Parses "HH:mm" into minutes since midnight. Returns null when unparseable. */
 const parseTimeToMinutes = (value) => {
   if (!value || typeof value !== "string") return null;
@@ -123,6 +138,7 @@ module.exports = {
   isValidTimeZone,
   getZonedParts,
   getLocalDateOnly,
+  getLocalMidnightInstant,
   getLocalMinutesOfDay,
   getLocalDayOfWeek,
   toLocalDateKey,

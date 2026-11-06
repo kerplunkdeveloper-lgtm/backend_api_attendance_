@@ -16,8 +16,26 @@ const ADMIN_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"];
 
 /** Statuses that still occupy leave balance and block an overlapping request. */
 const BLOCKING_STATUSES = ["PENDING", "APPROVED"];
+const OT_LEAVE_CODE = "OTL";
+const isOtLeaveType = (leaveType) => String(leaveType?.code || "").toUpperCase() === OT_LEAVE_CODE;
 
 const toDateKey = (date) => new Date(date).toISOString().split("T")[0];
+
+const monthStartUtc = (date) => {
+  const value = new Date(date);
+  return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), 1));
+};
+
+const monthEndUtc = (date) => {
+  const value = new Date(date);
+  return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth() + 1, 0));
+};
+
+const calendarMonthsInclusive = (from, to) => {
+  const start = monthStartUtc(from);
+  const end = monthStartUtc(to);
+  return Math.max(0, (end.getUTCFullYear() - start.getUTCFullYear()) * 12 + end.getUTCMonth() - start.getUTCMonth() + 1);
+};
 
 /**
  * Parses a Shift.workingDays CSV ("1,2,3,4,5" where 0=Sunday) into a Set.
@@ -65,6 +83,67 @@ const classifyRangeDays = (start, end, holidayDateKeys, workingDaySet) => {
 };
 
 class LeaveService {
+  async getMonthlyPaidLeaveStatus({ db = prisma, employee, organizationId, eligibleFrom, leaveDate, excludeRequestId = null, policy }) {
+    const currentLeaveDate = leaveDate || new Date();
+    const currentPolicy = policy || await policyService.getPolicy(organizationId);
+    const monthlyPaidLeaveDays = Math.max(0, Number(currentPolicy.monthlyPaidLeaveDays ?? 1));
+    const carryForward = currentPolicy.paidLeaveCarryForward !== false;
+    const eligibleDate = eligibleFrom ? new Date(eligibleFrom) : null;
+    if (eligibleDate && currentLeaveDate < eligibleDate) {
+      return { monthlyAllowance: monthlyPaidLeaveDays, carryForward, accruedDays: 0, usedDays: 0, remainingDays: 0 };
+    }
+    const accrualStart = carryForward
+      ? monthStartUtc(eligibleFrom || employee.dateOfJoining || employee.createdAt || currentLeaveDate)
+      : monthStartUtc(currentLeaveDate);
+    const accrualEnd = monthEndUtc(currentLeaveDate);
+    const accruedDays = (carryForward ? calendarMonthsInclusive(accrualStart, accrualEnd) : 1) * monthlyPaidLeaveDays;
+
+    if (accruedDays <= 0) {
+      return { monthlyAllowance: monthlyPaidLeaveDays, carryForward, accruedDays: 0, usedDays: 0, remainingDays: 0 };
+    }
+
+    const requests = await db.leaveRequest.findMany({
+      where: {
+        organizationId,
+        employeeId: employee.id,
+        status: { in: BLOCKING_STATUSES },
+        ...(excludeRequestId ? { id: { not: excludeRequestId } } : {}),
+        startDate: { lte: accrualEnd },
+        endDate: { gte: accrualStart },
+        leaveType: { isPaid: true },
+      },
+      select: { totalDays: true },
+    });
+
+    const usedDays = requests.reduce((sum, request) => sum + Number(request.totalDays || 0), 0);
+    return {
+      monthlyAllowance: monthlyPaidLeaveDays,
+      carryForward,
+      accruedDays,
+      usedDays,
+      remainingDays: Math.max(0, accruedDays - usedDays),
+    };
+  }
+
+  async assertMonthlyPaidLeaveAvailable({ db = prisma, employee, organizationId, eligibility, leaveDate, requestedDays, excludeRequestId = null }) {
+    const status = await this.getMonthlyPaidLeaveStatus({
+      db,
+      employee,
+      organizationId,
+      eligibleFrom: eligibility.eligibleFrom,
+      leaveDate,
+      excludeRequestId,
+    });
+    if (status.remainingDays < requestedDays) {
+      const error = new Error(
+        `Monthly paid leave limit exceeded. Available: ${status.remainingDays} day(s); requested: ${requestedDays} day(s). Unused monthly paid leave carries forward.`
+      );
+      error.statusCode = 400;
+      throw error;
+    }
+    return status;
+  }
+
   async getEligibilityForEmployee(employee, organizationId) {
     const policy = await policyService.getPolicy(organizationId);
     const joinedAt = employee.dateOfJoining || employee.createdAt;
@@ -191,6 +270,13 @@ class LeaveService {
     if (!employee) return [];
 
     const leaveTypes = await this.getLeaveTypes(organizationId);
+    const eligibility = await this.getEligibilityForEmployee(employee, organizationId);
+    const monthlyPaidLeave = await this.getMonthlyPaidLeaveStatus({
+      employee,
+      organizationId,
+      eligibleFrom: eligibility.eligibleFrom,
+      leaveDate: new Date(),
+    });
 
     const balances = await Promise.all(
       leaveTypes.map(async (type) => {
@@ -236,6 +322,7 @@ class LeaveService {
           allocatedDays: allocated,
           usedDays: used,
           remainingDays: remaining,
+          monthlyPaidLeave: type.isPaid ? monthlyPaidLeave : null,
         };
       })
     );
@@ -373,7 +460,9 @@ class LeaveService {
 
     // Check balance for paid leaves
     if (leaveType.isPaid) {
-      if (!eligibility.eligible) {
+      const isOtLeave = isOtLeaveType(leaveType);
+      const eligibleOnStartDate = !eligibility.leaveEligibilityActive || start >= new Date(eligibility.eligibleFrom);
+      if (!isOtLeave && !eligibleOnStartDate) {
         const error = new Error(`Paid leave becomes available after the ${eligibility.probationMonths}-month eligibility period. ${eligibility.remainingDays} day(s) remaining.`);
         error.statusCode = 400;
         throw error;
@@ -417,6 +506,16 @@ class LeaveService {
         );
         error.statusCode = 400;
         throw error;
+      }
+
+      if (!isOtLeave) {
+        await this.assertMonthlyPaidLeaveAvailable({
+          employee,
+          organizationId,
+          eligibility,
+          leaveDate: end,
+          requestedDays: calculatedDays,
+        });
       }
     }
 
@@ -551,6 +650,24 @@ class LeaveService {
       );
       error.statusCode = 403;
       throw error;
+    }
+
+    if (status === "APPROVED" && request.leaveType.isPaid && !isOtLeaveType(request.leaveType)) {
+      const eligibility = await this.getEligibilityForEmployee(request.employee, organizationId);
+      const eligibleOnStartDate = !eligibility.leaveEligibilityActive || request.startDate >= new Date(eligibility.eligibleFrom);
+      if (!eligibleOnStartDate) {
+        const error = new Error("This paid leave date is outside the employee's eligibility period.");
+        error.statusCode = 400;
+        throw error;
+      }
+      await this.assertMonthlyPaidLeaveAvailable({
+        employee: request.employee,
+        organizationId,
+        eligibility,
+        leaveDate: request.endDate,
+        requestedDays: Number(request.totalDays),
+        excludeRequestId: request.id,
+      });
     }
 
     const result = await prisma.$transaction(async (tx) => {

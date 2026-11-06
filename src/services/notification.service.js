@@ -9,7 +9,7 @@ const { requiresAdminReview, ADMIN_ROLES } = require("../utils/approvalChain");
 const whatsappService = require("./whatsapp.service");
 const fcmService = require("./firebase-messaging.service");
 const notificationDelivery = require("./notification-delivery.service");
-const { getLocalDateOnly, getLocalMinutesOfDay } = require("../utils/datetime");
+const { getLocalDateOnly, getLocalMidnightInstant, getLocalMinutesOfDay } = require("../utils/datetime");
 const {
   FALLBACK_TZ,
   clockMinutes,
@@ -220,14 +220,28 @@ class NotificationService {
    * Get notifications for the logged in user
    */
   async getUserNotifications(userId, organizationId) {
+    const organization = await prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { timezone: true },
+    });
+    const today = getLocalDateOnly(new Date(), zoneOf({ organization }));
+    const todayStart = getLocalMidnightInstant(today, zoneOf({ organization }));
+    const visibleWhere = {
+      userId,
+      organizationId,
+      OR: [
+        { type: { not: "CELEBRATION" } },
+        { type: "CELEBRATION", createdAt: { gte: todayStart } },
+      ],
+    };
     const [notifications, unreadCount] = await Promise.all([
       prisma.notification.findMany({
-        where: { userId, organizationId },
+        where: visibleWhere,
         orderBy: { createdAt: "desc" },
         take: 30,
       }),
       prisma.notification.count({
-        where: { userId, organizationId, isRead: false },
+        where: { ...visibleWhere, isRead: false },
       }),
     ]);
 
@@ -668,9 +682,99 @@ class NotificationService {
     return { success: true, sentCount: sent };
   }
 
+  /**
+   * Publish today's birthdays and work anniversaries as one-day company announcements.
+   * The scheduler is leader-locked, and the live announcement lookup makes this safe
+   * to retry after a restart without duplicating the same celebration.
+   */
+  async sendDailyCelebrationAnnouncements(now = new Date()) {
+    const organizations = await prisma.organization.findMany({
+      select: { id: true, name: true, timezone: true },
+    });
+    let sent = 0;
+
+    for (const org of organizations) {
+      const timeZone = zoneOf({ organization: org });
+      const today = getLocalDateOnly(now, timeZone);
+      const nextDay = new Date(today.getTime() + 86400000);
+      const expiresAt = getLocalMidnightInstant(nextDay, timeZone);
+      const month = today.getUTCMonth() + 1;
+      const day = today.getUTCDate();
+      const year = today.getUTCFullYear();
+
+      const employees = await prisma.employee.findMany({
+        where: {
+          organizationId: org.id,
+          deletedAt: null,
+          status: { in: WORKING_STATUSES },
+          OR: [{ dateOfBirth: { not: null } }, { dateOfJoining: { not: null } }],
+        },
+        select: { id: true, firstName: true, lastName: true, userId: true, dateOfBirth: true, dateOfJoining: true },
+      });
+
+      for (const employee of employees) {
+        const name = `${employee.firstName || ""} ${employee.lastName || ""}`.trim() || "Team member";
+        const celebrations = [];
+        if (employee.dateOfBirth && employee.dateOfBirth.getUTCMonth() + 1 === month && employee.dateOfBirth.getUTCDate() === day) {
+          celebrations.push({
+            title: `Birthday today: ${name}`,
+            body: `Wishing ${name} a very happy birthday! Thank you for everything you bring to ${org.name || "the team"}.`,
+          });
+        }
+        if (employee.dateOfJoining && employee.dateOfJoining.getUTCMonth() + 1 === month && employee.dateOfJoining.getUTCDate() === day) {
+          const years = year - employee.dateOfJoining.getUTCFullYear();
+          if (years >= 1) {
+            celebrations.push({
+              title: `Work anniversary today: ${name}`,
+              body: `Congratulations to ${name} on ${years} ${years === 1 ? "year" : "years"} with ${org.name || "the team"}!`,
+            });
+          }
+        }
+
+        for (const event of celebrations) {
+          const existing = await prisma.announcement.findFirst({
+            where: { organizationId: org.id, title: event.title, expiresAt: { gt: now } },
+            select: { id: true },
+          });
+          if (existing) continue;
+
+          await prisma.announcement.create({
+            data: {
+              organizationId: org.id,
+              title: event.title,
+              body: event.body,
+              pinned: false,
+              expiresAt,
+              createdByUserId: null,
+            },
+          });
+
+          const users = await prisma.user.findMany({
+            where: { organizationId: org.id, isActive: true },
+            select: { id: true },
+          });
+          if (users.length) {
+            const result = await notificationDelivery.createMany({
+              data: users.map((user) => ({
+                organizationId: org.id,
+                userId: user.id,
+                title: event.title,
+                message: event.body,
+                type: "CELEBRATION",
+              })),
+            });
+            sent += result.count || 0;
+          }
+        }
+      }
+    }
+    return { success: true, sentCount: sent };
+  }
+
   async evaluateScheduledReminders() {
     try {
       await this.cleanupOldNotifications();
+      await this.sendDailyCelebrationAnnouncements();
       await this.sendUpcomingHolidayReminders();
       await this.sendMorningCheckInReminders(null, true);
       await this.sendEveningCheckOutReminders(null, true);

@@ -299,6 +299,8 @@ model AttendancePolicy {
   organizationId                String   @unique
   workingDaysPerMonth           Int      @default(26) // Used in payroll calculation (Mon-Sat = 26 days)
   probationMonths               Int      @default(3) // Paid leave and permission eligibility waiting period
+  monthlyPaidLeaveDays          Decimal  @default(1.0) @db.Decimal(4, 1) // Paid leave earned each month
+  paidLeaveCarryForward         Boolean  @default(true) // Unused monthly paid leave rolls into later months
   monthlyPermissionHours        Decimal  @default(3.0) @db.Decimal(4, 1) // Monthly short-permission allowance
   permissionRequiresProbation   Boolean  @default(true)
   payrollCycleStartDay          Int      @default(1) // Payroll period start day (1-31)
