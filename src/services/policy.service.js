@@ -6,6 +6,8 @@ const { normalizeCycleDay, normalizeDayBasis } = require("../utils/payrollCycle"
 const DEFAULT_POLICY = {
   workingDaysPerMonth: 26,
   probationMonths: 3,
+  monthlyPaidLeaveDays: 1,
+  paidLeaveCarryForward: true,
   monthlyPermissionHours: 3,
   permissionRequiresProbation: true,
   payrollCycleStartDay: 1,
@@ -35,6 +37,8 @@ const LEGACY_POLICY_SELECT = {
   organizationId: true,
   workingDaysPerMonth: true,
   probationMonths: true,
+  // New paid-leave fields are omitted here so old branches can still be read
+  // until the additive migration has been deployed.
   monthlyPermissionHours: true,
   permissionRequiresProbation: true,
   payrollCycleStartDay: true,
@@ -55,6 +59,8 @@ const normalizePolicy = (policy, organizationId, isDefault = false) => ({
   ...(policy || {}),
   organizationId,
   lateDeductionPercent: Number(policy?.lateDeductionPercent ?? DEFAULT_POLICY.lateDeductionPercent),
+  monthlyPaidLeaveDays: Number(policy?.monthlyPaidLeaveDays ?? DEFAULT_POLICY.monthlyPaidLeaveDays),
+  paidLeaveCarryForward: Boolean(policy?.paidLeaveCarryForward ?? DEFAULT_POLICY.paidLeaveCarryForward),
   monthlyPermissionHours: Number(policy?.monthlyPermissionHours ?? DEFAULT_POLICY.monthlyPermissionHours),
   leaveEligibilityActive: Boolean(policy?.permissionRequiresProbation ?? true),
   shootRecoveryEnabled: Boolean(policy?.shootRecoveryEnabled ?? DEFAULT_POLICY.shootRecoveryEnabled),
@@ -102,6 +108,8 @@ class PolicyService {
     const {
       workingDaysPerMonth,
       probationMonths,
+      monthlyPaidLeaveDays,
+      paidLeaveCarryForward,
       monthlyPermissionHours,
       permissionRequiresProbation,
       leaveEligibilityActive,
@@ -128,6 +136,8 @@ class PolicyService {
     const payload = {};
     if (workingDaysPerMonth !== undefined) payload.workingDaysPerMonth = boundedNumber("Working days per month", workingDaysPerMonth, { min: 1, max: 31, integer: true });
     if (probationMonths !== undefined) payload.probationMonths = boundedNumber("Probation months", probationMonths, { min: 0, max: 36, integer: true });
+    if (monthlyPaidLeaveDays !== undefined) payload.monthlyPaidLeaveDays = boundedNumber("Monthly paid leave days", monthlyPaidLeaveDays, { min: 0, max: 31 });
+    if (paidLeaveCarryForward !== undefined) payload.paidLeaveCarryForward = parseBoolean(paidLeaveCarryForward);
     if (monthlyPermissionHours !== undefined) payload.monthlyPermissionHours = boundedNumber("Monthly permission hours", monthlyPermissionHours, { min: 0, max: 100 });
     if (permissionRequiresProbation !== undefined) payload.permissionRequiresProbation = parseBoolean(permissionRequiresProbation);
     if (leaveEligibilityActive !== undefined) payload.permissionRequiresProbation = parseBoolean(leaveEligibilityActive);

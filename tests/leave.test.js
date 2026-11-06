@@ -46,6 +46,7 @@ const prisma = {
     findFirst: async () => employee,
   },
   leaveRequest: {
+    findMany: async () => [],
     findFirst: async ({ where }) => {
       if (where?.status?.in) return null;
       if (where?.id === "lr-1") {

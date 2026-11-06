@@ -4,6 +4,7 @@ const { getPayrollPeriod } = require("../utils/payrollCycle");
 
 const REVIEWERS = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"];
 const MINUTES_PER_LEAVE_DAY = 8 * 60;
+const OT_LEAVE_CODE = "OTL";
 const fail = (message, statusCode = 400) => Object.assign(new Error(message), { statusCode });
 const int = (value) => Math.max(0, Math.round(Number(value) || 0));
 
@@ -87,8 +88,22 @@ class OvertimeAllocationService {
         await tx.compOffTransaction.create({ data: { compOffBalanceId: balance.id, type: "CREDIT", days, reason: `OT conversion ${row.month}/${row.year}`, createdBy: reviewerUserId } });
       }
       if (row.leaveMinutes > 0) {
-        const leaveType = await tx.leaveType.findFirst({ where: { organizationId, isActive: true, isPaid: true }, orderBy: { code: "asc" } });
-        if (!leaveType) throw fail("Create an active paid leave type before approving leave conversion.", 422);
+        let leaveType = await tx.leaveType.findFirst({ where: { organizationId, code: OT_LEAVE_CODE } });
+        if (leaveType?.isActive === false) {
+          leaveType = await tx.leaveType.update({ where: { id: leaveType.id }, data: { isActive: true, isPaid: true, name: "OT Leave" } });
+        }
+        if (!leaveType) {
+          leaveType = await tx.leaveType.create({
+            data: {
+              organizationId,
+              name: "OT Leave",
+              code: OT_LEAVE_CODE,
+              daysAllowed: 0,
+              isPaid: true,
+              isActive: true,
+            },
+          });
+        }
         await tx.leaveBalance.upsert({ where: { employeeId_leaveTypeId_year: { employeeId: row.employeeId, leaveTypeId: leaveType.id, year: row.year } }, update: { allocatedDays: { increment: row.leaveMinutes / MINUTES_PER_LEAVE_DAY } }, create: { organizationId, employeeId: row.employeeId, leaveTypeId: leaveType.id, year: row.year, allocatedDays: row.leaveMinutes / MINUTES_PER_LEAVE_DAY, usedDays: 0 } });
       }
       return tx.overtimeAllocation.update({ where: { id }, data: { status: "APPROVED", reviewNote: String(body.reviewNote || "").trim().slice(0, 500) || null, reviewedBy: reviewerUserId, reviewedAt: new Date() } });
