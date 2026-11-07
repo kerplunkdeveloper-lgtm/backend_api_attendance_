@@ -1065,6 +1065,7 @@ model Payslip {
   overtimePay          Decimal   @db.Decimal(10, 2)
   grossSalary          Decimal   @default(0) @db.Decimal(10, 2)
   unpaidLeaveDeduction Decimal   @default(0) @db.Decimal(10, 2)
+  hoursShortfallDeduction Decimal @default(0) @db.Decimal(10, 2)
   lateDeduction        Decimal   @default(0) @db.Decimal(10, 2)
   pfDeduction          Decimal   @default(0) @db.Decimal(10, 2)
   esiDeduction         Decimal   @default(0) @db.Decimal(10, 2)

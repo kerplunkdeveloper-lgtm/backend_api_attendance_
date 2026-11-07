@@ -9,6 +9,7 @@ const whatsappService = require("./whatsapp.service");
 const money = require("../utils/money");
 const statutoryService = require("./statutory.service");
 const { normalizeSplit, buildSalaryBreakdown } = require("../utils/salarySplit");
+const { getScheduledDurationMinutes } = require("../utils/shiftCalculator");
 
 /** Mask a bank account so only the last 4 digits are shown on payslips. */
 const maskAccount = (value) => {
@@ -33,8 +34,19 @@ const STATUS_TRANSITIONS = {
 /** Normalise a Date to a YYYY-MM-DD key for set membership tests. */
 const toDateKey = (date) => new Date(date).toISOString().slice(0, 10);
 
+const productiveMinutesForShift = (shift) => {
+  if (!shift) return 480;
+  const configuredTotal = Number(shift.totalWorkingMinutes);
+  const scheduledMinutes = Number.isFinite(configuredTotal) && configuredTotal > 0
+    ? configuredTotal
+    : getScheduledDurationMinutes(shift.startTime, shift.endTime);
+  const breakMinutes = shift.breakIncluded === false ? 0 : Math.max(0, Number(shift.breakMinutes) || 0);
+  const lunchMinutes = shift.lunchIncluded === false ? 0 : Math.max(0, Number(shift.lunchMinutes) || 0);
+  return Math.max(1, scheduledMinutes - breakMinutes - lunchMinutes);
+};
+
 /** A tenant-visible, auditable day ledger used by payroll preview and payslips. */
-const buildDailyPayrollLedger = ({ period, asOf, workingDays, holidayKeys, attendanceByKey, approvedOvertimeByKey, unpaidLeaveKeys, companyLeaveByKey, todayKey, dailyRate, hourlyRate, overtimeMultiplier, lateComingRules, maxLatesBeforeDeduction, lateDeductionPercent }) => {
+const buildDailyPayrollLedger = ({ period, asOf, workingDays, holidayKeys, attendanceByKey, approvedOvertimeByKey, unpaidLeaveKeys, companyLeaveByKey, todayKey, dailyRate, hourlyRate, requiredProductiveMinutes = 480, overtimeMultiplier, lateComingRules, maxLatesBeforeDeduction, lateDeductionPercent }) => {
   const rows = [];
   let lateCount = 0;
   const lateRules = (lateComingRules || []).filter((rule) => rule.isActive && Number(rule.lateDays) > 0 && Number(rule.lopDays) > 0);
@@ -89,13 +101,22 @@ const buildDailyPayrollLedger = ({ period, asOf, workingDays, holidayKeys, atten
     const approvedSessionMinutes = Number(approvedOvertimeByKey?.get(dateKey) || 0);
     const overtimeMinutes = Number(attendance?.overtimeMinutes || 0) + approvedSessionMinutes;
     const overtimePay = round2((overtimeMinutes / 60) * Number(hourlyRate || 0) * Number(overtimeMultiplier || 1.5));
+    const isWorkedDay = ["PRESENT", "LATE", "WORK_FROM_HOME"].includes(attendance?.status);
+    const workingMinutes = Number(attendance?.workingMinutes || 0);
+    const shortfallMinutes = isWorkedDay
+      ? Math.max(0, requiredProductiveMinutes - workingMinutes)
+      : 0;
+    const hoursShortfallDeduction = round2((shortfallMinutes / requiredProductiveMinutes) * Number(dailyRate || 0));
     rows.push({
       date: dateKey,
       status: category,
       note,
       punchIn: attendance?.checkIn || null,
       punchOut: attendance?.checkOut || null,
-      workingMinutes: Number(attendance?.workingMinutes || 0),
+      workingMinutes,
+      requiredProductiveMinutes,
+      shortfallMinutes,
+      hoursShortfallDeduction,
       overtimeMinutes,
       overtimePay,
       lateMinutes: Number(attendance?.lateMinutes || 0),
@@ -104,7 +125,7 @@ const buildDailyPayrollLedger = ({ period, asOf, workingDays, holidayKeys, atten
       lopDeduction: round2(lopDeduction),
       lateDeductionDays,
       lateDeduction: round2(lateDeduction),
-      earnedSalary: round2(Math.max(0, dailyRate - lopDeduction - lateDeduction + overtimePay)),
+      earnedSalary: round2(Math.max(0, dailyRate - lopDeduction - lateDeduction - hoursShortfallDeduction + overtimePay)),
     });
   }
   return rows;
@@ -321,7 +342,7 @@ class PayrollService {
       where: { id: employeeId, organizationId },
       include: {
         salaryStructure: true,
-        shift: { select: { workingDays: true } },
+        shift: { select: { workingDays: true, startTime: true, endTime: true, breakMinutes: true, lunchMinutes: true, breakIncluded: true, lunchIncluded: true, totalWorkingMinutes: true } },
         user: { select: { email: true } },
       },
     });
@@ -439,6 +460,7 @@ class PayrollService {
       todayKey,
       dailyRate,
       hourlyRate,
+      requiredProductiveMinutes: productiveMinutesForShift(employee.shift),
       overtimeMultiplier,
       lateComingRules,
       maxLatesBeforeDeduction,
@@ -535,9 +557,11 @@ class PayrollService {
     const unpaidLeaveDeduction = money.multiply(dailyRate, unpaidLeaveDays);
     const lateCount = dayCounts.lateCount;
     const lateDeduction = money.round(dailyPayroll.reduce((sum, row) => sum + Number(row.lateDeduction || 0), 0));
+    const hoursShortfallDeduction = money.round(dailyPayroll.reduce((sum, row) => sum + Number(row.hoursShortfallDeduction || 0), 0));
     const statutoryDeductions = money.sum(pf, esi, professionalTax);
     const deductionsTotal = money.sum(
       unpaidLeaveDeduction,
+      hoursShortfallDeduction,
       lateDeduction,
       permission.deduction,
       statutoryDeductions
@@ -640,6 +664,7 @@ class PayrollService {
       },
       deductions: {
         unpaidLeaveDeduction,
+        hoursShortfallDeduction,
         lateDeduction,
         permissionDeduction: permission.deduction,
         pfDeduction: pf,
@@ -854,6 +879,7 @@ class PayrollService {
         overtimePay: payroll.salaryBreakdown.overtimePay,
         grossSalary: payroll.salaryBreakdown.grossSalary,
         unpaidLeaveDeduction: payroll.deductions.unpaidLeaveDeduction || 0,
+        hoursShortfallDeduction: payroll.deductions.hoursShortfallDeduction || 0,
         lateDeduction: payroll.deductions.lateDeduction || 0,
         pfDeduction: payroll.deductions.pfDeduction || 0,
         esiDeduction: payroll.deductions.esiDeduction || 0,
@@ -1314,6 +1340,12 @@ class PayrollService {
         category: "ATTENDANCE_LATE",
         explanation: "Deduction for late arrival(s) exceeding grace policy",
       }] : []),
+      ...(Number(payslip.hoursShortfallDeduction || 0) > 0 ? [{
+        label: "Short Working Hours Deduction",
+        amount: Number(payslip.hoursShortfallDeduction),
+        category: "ATTENDANCE_HOURS",
+        explanation: "Productive hours below the assigned shift target were deducted proportionally.",
+      }] : []),
       ...(Number(payslip.permissionDeduction || 0) > 0 ? [{
         label: "Permission / Excess Hours Deduction",
         amount: Number(payslip.permissionDeduction),
@@ -1390,6 +1422,7 @@ class PayrollService {
         paidLeaveDays: Number(payslip.paidLeaveDays),
         unpaidLeaveDays: Number(payslip.unpaidLeaveDays),
         lopDeduction: Number(payslip.unpaidLeaveDeduction || 0),
+        hoursShortfallDeduction: Number(payslip.hoursShortfallDeduction || 0),
         overtimeHours: Number(payslip.overtimeHours),
         overtimeMinutes: Math.round(Number(payslip.overtimeHours || 0) * 60),
         overtimePay: Number(payslip.overtimePay || 0),
@@ -1719,3 +1752,5 @@ class PayrollService {
 }
 
 module.exports = new PayrollService();
+module.exports.buildDailyPayrollLedger = buildDailyPayrollLedger;
+module.exports.productiveMinutesForShift = productiveMinutesForShift;
