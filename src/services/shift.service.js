@@ -168,4 +168,19 @@ const assignEmployeesToShift = async (organizationId, shiftId, employeeIds, flex
   return { success: true, message: `Assigned ${employeeIds.length} employees to ${shift.name}`, shift, count: employeeIds.length };
 };
 
-module.exports = { createShift, getShifts, getShiftById, updateShift, deleteShift, assignEmployeesToShift };
+const removeEmployeeFromShift = async (organizationId, shiftId, employeeId) => {
+  const shift = await prisma.shift.findFirst({ where: { id: shiftId, organizationId }, select: { id: true, name: true } });
+  if (!shift) throw new Error("Shift not found in this organization");
+  const result = await prisma.employee.updateMany({
+    where: { id: employeeId, organizationId, shiftId },
+    data: { shiftId: null, flexiblePunching: false },
+  });
+  if (!result.count) {
+    const error = new Error("This employee is not assigned to the selected shift");
+    error.statusCode = 404;
+    throw error;
+  }
+  return { success: true, message: `Employee removed from ${shift.name}`, count: result.count };
+};
+
+module.exports = { createShift, getShifts, getShiftById, updateShift, deleteShift, assignEmployeesToShift, removeEmployeeFromShift };

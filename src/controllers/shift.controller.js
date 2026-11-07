@@ -102,6 +102,19 @@ const assign = async (req, res) => {
   }
 };
 
+const removeEmployee = async (req, res) => {
+  try {
+    const result = await shiftService.removeEmployeeFromShift(
+      req.user.organizationId,
+      req.params.id,
+      req.params.employeeId,
+    );
+    return res.json({ success: true, message: result.message, data: result });
+  } catch (error) {
+    return sendControllerError(res, error);
+  }
+};
+
 // Interactive Shift Simulator endpoint
 const simulate = async (req, res) => {
   try {
@@ -136,5 +149,6 @@ module.exports = {
   update,
   remove,
   assign,
+  removeEmployee,
   simulate,
 };
