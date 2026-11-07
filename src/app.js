@@ -138,18 +138,24 @@ app.use("/billing/webhook", express.raw({ type: "application/json" }), billingWe
 app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true, limit: "5mb" }));
 app.use(rejectUnsafePayload);
+const slowApiThresholdMs = Math.max(100, Number(process.env.SLOW_API_THRESHOLD_MS) || 1000);
 app.use(
-  morgan((tokens, req, res) =>
-    JSON.stringify({
+  morgan((tokens, req, res) => {
+    const responseTimeMs = Number(tokens["response-time"](req, res));
+    const entry = {
       timestamp: new Date().toISOString(),
       requestId: req.requestId,
       method: tokens.method(req, res),
       path: String(tokens.url(req, res)).split("?")[0],
       status: Number(tokens.status(req, res)),
-      responseTimeMs: Number(tokens["response-time"](req, res)),
+      responseTimeMs,
+      slow: responseTimeMs >= slowApiThresholdMs,
       contentLength: Number(tokens.res(req, res, "content-length")) || 0,
       remoteAddress: tokens["remote-addr"](req, res),
-    }),
+    };
+    if (entry.slow) console.warn("[SlowAPI]", JSON.stringify({ ...entry, thresholdMs: slowApiThresholdMs }));
+    return JSON.stringify(entry);
+  },
   ),
 );
 app.use(apiRateLimiter);

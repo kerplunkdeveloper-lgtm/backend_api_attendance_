@@ -51,4 +51,11 @@ router.post(
   shiftController.assign
 );
 
+router.delete(
+  "/:id/employees/:employeeId",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  requireFeature("hasShiftPlanner", "Shift planner"),
+  shiftController.removeEmployee,
+);
+
 module.exports = router;

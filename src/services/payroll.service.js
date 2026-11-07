@@ -794,23 +794,31 @@ class PayrollService {
     const generated = [];
     const skipped = [];
 
-    for (const emp of employees) {
-      const existingPayslip = await prisma.payslip.findFirst({
-        where: { organizationId, employeeId: emp.id, month: m, year: y },
-        select: { id: true, status: true },
-      });
-
-      if (existingPayslip && !LOCKED_PAYSLIP_STATUSES.includes(existingPayslip.status)) {
-        await prisma.expenseClaim.updateMany({
-          where: { organizationId, payslipId: existingPayslip.id },
+    // Re-generation used to look up and detach the previous payslip inside the
+    // employee loop. That added up to three extra round trips per employee.
+    // Load the run once and clear all recyclable links in bulk before calculating.
+    const existingPayslips = await prisma.payslip.findMany({
+      where: { organizationId, month: m, year: y },
+      select: { id: true, employeeId: true, status: true },
+    });
+    const recyclablePayslips = existingPayslips.filter((payslip) => !LOCKED_PAYSLIP_STATUSES.includes(payslip.status));
+    if (recyclablePayslips.length) {
+      const recyclableIds = recyclablePayslips.map((payslip) => payslip.id);
+      const recyclableEmployeeIds = recyclablePayslips.map((payslip) => payslip.employeeId);
+      const periodStart = new Date(Date.UTC(y, m - 1, 1));
+      const periodEnd = new Date(Date.UTC(y, m, 0, 23, 59, 59, 999));
+      await Promise.all([
+        prisma.expenseClaim.updateMany({
+          where: { organizationId, payslipId: { in: recyclableIds } },
           data: { payslipId: null, status: "APPROVED" },
-        });
-        await prisma.shootSettlement.updateMany({
-          where: { organizationId, employeeId: emp.id, payrollStatus: "PROCESSED", shootDate: { gte: new Date(Date.UTC(y, m - 1, 1)), lte: new Date(Date.UTC(y, m, 0, 23, 59, 59, 999)) } },
+        }),
+        prisma.shootSettlement.updateMany({
+          where: { organizationId, employeeId: { in: recyclableEmployeeIds }, payrollStatus: "PROCESSED", shootDate: { gte: periodStart, lte: periodEnd } },
           data: { payrollStatus: "READY" },
-        });
-      }
-
+        }),
+      ]);
+    }
+    for (const emp of employees) {
       let payroll;
       try {
         payroll = await this.calculateEmployeePayroll(organizationId, emp.id, m, y);

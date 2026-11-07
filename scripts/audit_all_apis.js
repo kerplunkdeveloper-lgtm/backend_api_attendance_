@@ -1,6 +1,11 @@
 const http = require("http");
+const https = require("https");
 
 const BASE_URL = process.env.API_BASE_URL || "http://localhost:5000/api";
+const SLOW_THRESHOLD_MS = Math.max(100, Number(process.env.API_AUDIT_SLOW_THRESHOLD_MS) || 1000);
+const REQUEST_TIMEOUT_MS = Math.max(1000, Number(process.env.API_AUDIT_TIMEOUT_MS) || 15000);
+const FAIL_ON_SLOW = process.env.API_AUDIT_FAIL_ON_SLOW === "true";
+const latencySamples = [];
 const credentials = {
   admin: {
     email: process.env.AUDIT_ADMIN_EMAIL,
@@ -18,13 +23,15 @@ const credentials = {
 
 async function request(path, options = {}) {
   const url = new URL(`${BASE_URL}${path}`);
+  const startedAt = Date.now();
   return new Promise((resolve, reject) => {
     const headers = {
       "Content-Type": "application/json",
       ...(options.headers || {}),
     };
 
-    const req = http.request(
+    const transport = url.protocol === "https:" ? https : http;
+    const req = transport.request(
       url,
       {
         method: options.method || "GET",
@@ -34,24 +41,31 @@ async function request(path, options = {}) {
         let data = "";
         res.on("data", (chunk) => (data += chunk));
         res.on("end", () => {
+          const durationMs = Date.now() - startedAt;
+          latencySamples.push({ endpoint: path, durationMs });
           try {
             const parsed = data ? JSON.parse(data) : {};
             resolve({
               status: res.statusCode,
               headers: res.headers,
               data: parsed,
+              durationMs,
             });
           } catch (e) {
             resolve({
               status: res.statusCode,
               headers: res.headers,
               raw: data,
+              durationMs,
             });
           }
         });
       },
     );
 
+    req.setTimeout(REQUEST_TIMEOUT_MS, () => {
+      req.destroy(new Error(`Request timed out after ${REQUEST_TIMEOUT_MS}ms`));
+    });
     req.on("error", reject);
     if (options.body) {
       req.write(
@@ -78,21 +92,30 @@ async function runAudit() {
 
   let passed = 0;
   let failed = 0;
+  let slow = 0;
   const results = [];
 
   function logTest(moduleName, endpoint, status, pass, info = "") {
+    const requestPath = endpoint.startsWith("/api/") ? endpoint.slice(4) : endpoint;
+    const sample = latencySamples.findLast(
+      (item) => item.endpoint === endpoint || item.endpoint === requestPath,
+    );
+    const durationMs = sample?.durationMs ?? null;
+    const isSlow = durationMs !== null && durationMs >= SLOW_THRESHOLD_MS;
+    if (isSlow) slow++;
+    const timing = durationMs === null ? "" : ` [${durationMs}ms${isSlow ? ", SLOW" : ""}]`;
     if (pass) {
       passed++;
       console.log(
-        `  [PASS] ${moduleName.padEnd(16)} | ${endpoint.padEnd(35)} | HTTP ${status} ${info}`,
+        `  [PASS] ${moduleName.padEnd(16)} | ${endpoint.padEnd(35)} | HTTP ${status} ${info}${timing}`,
       );
     } else {
       failed++;
       console.log(
-        `  [FAIL] ${moduleName.padEnd(16)} | ${endpoint.padEnd(35)} | HTTP ${status} - ${info}`,
+        `  [FAIL] ${moduleName.padEnd(16)} | ${endpoint.padEnd(35)} | HTTP ${status} - ${info}${timing}`,
       );
     }
-    results.push({ module: moduleName, endpoint, status, pass, info });
+    results.push({ module: moduleName, endpoint, status, pass, info, durationMs, slow: isSlow });
   }
 
   try {
@@ -496,15 +519,19 @@ async function runAudit() {
 
   console.log("\n====================================================");
   console.log(
-    `AUDIT COMPLETE: ${passed} PASSED | ${failed} FAILED | TOTAL: ${passed + failed}`,
+    `AUDIT COMPLETE: ${passed} PASSED | ${failed} FAILED | ${slow} SLOW | TOTAL: ${passed + failed}`,
   );
+  console.log(`Latency threshold: ${SLOW_THRESHOLD_MS}ms | Request timeout: ${REQUEST_TIMEOUT_MS}ms`);
   console.log("====================================================");
 
-  if (failed === 0) {
+  if (failed === 0 && (!FAIL_ON_SLOW || slow === 0)) {
     console.log("ALL API MODULES ARE RUNNING SMOOTHLY WITH 100% SUCCESS!");
     process.exit(0);
   } else {
-    console.log(`WARNING: ${failed} API calls did not return HTTP 200.`);
+    const reasons = [];
+    if (failed) reasons.push(`${failed} API calls did not return HTTP 200`);
+    if (FAIL_ON_SLOW && slow) reasons.push(`${slow} API calls exceeded the latency threshold`);
+    console.log(`WARNING: ${reasons.join("; ")}.`);
     process.exit(1);
   }
 }
