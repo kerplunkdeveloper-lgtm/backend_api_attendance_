@@ -74,6 +74,7 @@ class ReportService {
     let present = 0;
     let late = 0;
     let halfDay = 0;
+    let shortHours = 0;
     let onLeave = 0;
     let wfh = 0;
     let absent = 0;
@@ -86,6 +87,7 @@ class ReportService {
         if (att.status === "PRESENT") present++;
         else if (att.status === "LATE") late++;
         else if (att.status === "HALF_DAY") halfDay++;
+        else if (att.status === "SHORT_HOURS") shortHours++;
         else if (att.status === "WORK_FROM_HOME") wfh++;
         else if (att.status === "ON_LEAVE") onLeave++;
         else if (att.status === "ABSENT") absent++;
@@ -193,6 +195,7 @@ class ReportService {
         present,
         late,
         halfDay,
+      shortHours,
         wfh,
         onLeave,
         absent,
@@ -252,6 +255,7 @@ class ReportService {
       let presentDays = 0;
       let lateDays = 0;
       let halfDays = 0;
+      let shortHoursDays = 0;
       let wfhDays = 0;
       let totalOvertimeMinutes = 0;
       let totalWorkingMinutes = 0;
@@ -269,6 +273,10 @@ class ReportService {
         if (att.status === "HALF_DAY") {
           presentDays += 0.5;
           halfDays++;
+        }
+        if (att.status === "SHORT_HOURS") {
+          presentDays++;
+          shortHoursDays++;
         }
         totalOvertimeMinutes += att.overtimeMinutes || 0;
         totalWorkingMinutes += att.workingMinutes || 0;
@@ -292,6 +300,7 @@ class ReportService {
         approvedLeaveDays,
         absentDays,
         totalWorkingHours: (totalWorkingMinutes / 60).toFixed(1),
+        shortHoursDays,
         overtimeHours: (totalOvertimeMinutes / 60).toFixed(1),
       };
     });

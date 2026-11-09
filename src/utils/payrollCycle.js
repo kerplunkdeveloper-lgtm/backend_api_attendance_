@@ -123,7 +123,7 @@ const classifyPayrollDays = ({
       result.holidayDays += 1;
     } else if (status === "WEEK_OFF" || !workingDays.has(new Date(t).getUTCDay())) {
       result.weekOffDays += 1;
-    } else if (status === "PRESENT" || status === "WORK_FROM_HOME") {
+    } else if (status === "PRESENT" || status === "WORK_FROM_HOME" || status === "SHORT_HOURS") {
       result.presentDays += 1;
     } else if (status === "LATE") {
       result.presentDays += 1;

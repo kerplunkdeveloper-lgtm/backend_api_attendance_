@@ -64,7 +64,7 @@ const buildDailyPayrollLedger = ({ period, asOf, workingDays, holidayKeys, atten
 
     if (holiday) { category = "HOLIDAY"; lopDays = 0; note = "Paid company holiday"; }
     else if (weekOff) { category = "WEEK_OFF"; lopDays = 0; note = "Weekly off"; }
-    else if (attendance?.status === "PRESENT" || attendance?.status === "WORK_FROM_HOME") { category = attendance.status; note = "Present"; }
+    else if (attendance?.status === "PRESENT" || attendance?.status === "WORK_FROM_HOME" || attendance?.status === "SHORT_HOURS") { category = attendance.status; note = attendance.status === "SHORT_HOURS" ? "Short working hours" : "Present"; }
     else if (attendance?.status === "LATE") { category = "LATE"; note = `${Number(attendance.lateMinutes || 0)} late minutes`; }
     else if (attendance?.status === "HALF_DAY") { category = "HALF_DAY"; lopDays = 0.5; note = "Half day attendance"; }
     else if (attendance?.status === "ON_LEAVE") {
@@ -101,7 +101,7 @@ const buildDailyPayrollLedger = ({ period, asOf, workingDays, holidayKeys, atten
     const approvedSessionMinutes = Number(approvedOvertimeByKey?.get(dateKey) || 0);
     const overtimeMinutes = Number(attendance?.overtimeMinutes || 0) + approvedSessionMinutes;
     const overtimePay = round2((overtimeMinutes / 60) * Number(hourlyRate || 0) * Number(overtimeMultiplier || 1.5));
-    const isWorkedDay = ["PRESENT", "LATE", "WORK_FROM_HOME"].includes(attendance?.status);
+    const isWorkedDay = ["PRESENT", "LATE", "WORK_FROM_HOME", "SHORT_HOURS"].includes(attendance?.status);
     const workingMinutes = Number(attendance?.workingMinutes || 0);
     const shortfallMinutes = isWorkedDay
       ? Math.max(0, requiredProductiveMinutes - workingMinutes)

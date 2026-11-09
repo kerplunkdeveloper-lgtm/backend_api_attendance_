@@ -1370,7 +1370,7 @@ const getBreakDetails = async ({ userId, employeeId, organizationId, attendanceI
  * the correction request flow.
  */
 const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, date, status, checkIn, checkOut, reason }) => {
-  const validStatuses = ["PRESENT", "ABSENT", "LATE", "HALF_DAY", "ON_LEAVE", "HOLIDAY", "WEEK_OFF", "WORK_FROM_HOME"];
+  const validStatuses = ["PRESENT", "ABSENT", "LATE", "HALF_DAY", "SHORT_HOURS", "ON_LEAVE", "HOLIDAY", "WEEK_OFF", "WORK_FROM_HOME"];
   if (!validStatuses.includes(status)) {
     const error = new Error(`Invalid status. Allowed: ${validStatuses.join(", ")}`);
     error.statusCode = 400;
@@ -1392,16 +1392,31 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
   const timezone = await getOrgTimezone(organizationId);
   const policy = await getPolicy(organizationId);
 
+  // Admin corrections enter wall-clock times for the attendance date. For a
+  // flexible or overnight shift, an out time earlier than the in time means
+  // the checkout happened after midnight on the following calendar date.
+  let normalizedCheckIn = checkIn ? new Date(checkIn) : null;
+  let normalizedCheckOut = checkOut ? new Date(checkOut) : null;
+  if (normalizedCheckIn && normalizedCheckOut && normalizedCheckOut <= normalizedCheckIn) {
+    if (shift?.flexiblePunching || isOvernightShift(shift)) {
+      normalizedCheckOut = new Date(normalizedCheckOut.getTime() + 24 * 60 * 60 * 1000);
+    } else {
+      const error = new Error("Punch-out time must be after punch-in time");
+      error.statusCode = 400;
+      throw error;
+    }
+  }
+
   let workingMinutes = 0;
   let lateMinutes = 0;
   let earlyMinutes = 0;
   let overtimeMinutes = 0;
 
-  if (checkIn && checkOut && shift) {
+  if (normalizedCheckIn && normalizedCheckOut && shift) {
     const metrics = evaluateAttendanceAgainstShift(
       shift,
-      new Date(checkIn),
-      new Date(checkOut),
+      normalizedCheckIn,
+      normalizedCheckOut,
       0,
       { timeZone: timezone, halfDayThresholdMinutes: policy.halfDayThresholdMinutes }
     );
@@ -1418,8 +1433,8 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
       where: { employeeId_date: { employeeId, date: targetDate } },
       update: {
         status,
-        checkIn: checkIn ? new Date(checkIn) : undefined,
-        checkOut: checkOut ? new Date(checkOut) : undefined,
+        checkIn: normalizedCheckIn || undefined,
+        checkOut: normalizedCheckOut || undefined,
         workingMinutes,
         lateMinutes,
         earlyMinutes,
@@ -1431,8 +1446,8 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
         branchId: employee.branchId || null,
         shiftId: shift?.id || null,
         date: targetDate,
-        checkIn: checkIn ? new Date(checkIn) : null,
-        checkOut: checkOut ? new Date(checkOut) : null,
+        checkIn: normalizedCheckIn,
+        checkOut: normalizedCheckOut,
         status,
         workingMinutes,
         lateMinutes,
@@ -1882,7 +1897,7 @@ const getAttendanceSummary = async (organizationId, targetDate, branchId = null)
     prisma.holiday.findFirst({ where: holidayWhere }),
   ]);
 
-  let present = 0, late = 0, halfDay = 0, onLeave = 0, holidayCount = 0, wfh = 0, weekOff = 0, currentlyClockedIn = 0;
+  let present = 0, late = 0, halfDay = 0, shortHours = 0, onLeave = 0, holidayCount = 0, wfh = 0, weekOff = 0, currentlyClockedIn = 0;
   // Clock-ins by local hour of day (index 0-23), for the "when does the team
   // start" chart. Counted here so the dashboard never has to download rows.
   const hourlyCheckIns = new Array(24).fill(0);
@@ -1896,6 +1911,7 @@ const getAttendanceSummary = async (organizationId, targetDate, branchId = null)
     if (att.status === "PRESENT") present++;
     if (att.status === "LATE") late++;
     if (att.status === "HALF_DAY") halfDay++;
+    if (att.status === "SHORT_HOURS") shortHours++;
     if (att.status === "ON_LEAVE") onLeave++;
     if (att.status === "HOLIDAY") holidayCount++;
     if (att.status === "WORK_FROM_HOME") wfh++;
@@ -1907,7 +1923,7 @@ const getAttendanceSummary = async (organizationId, targetDate, branchId = null)
   const totalMarked = todayAttendances.length;
   const absent = isTodayHoliday ? 0 : Math.max(0, totalEmployees - totalMarked);
   if (isTodayHoliday && holidayCount === 0) {
-    holidayCount = Math.max(0, totalEmployees - (present + late + halfDay + onLeave + wfh + weekOff));
+    holidayCount = Math.max(0, totalEmployees - (present + late + halfDay + shortHours + onLeave + wfh + weekOff));
   }
 
   return {
@@ -1916,6 +1932,7 @@ const getAttendanceSummary = async (organizationId, targetDate, branchId = null)
     present,
     late,
     halfDay,
+    shortHours,
     onLeave,
     wfh,
     weekOff,
@@ -1927,7 +1944,7 @@ const getAttendanceSummary = async (organizationId, targetDate, branchId = null)
     totalPunches,
     hourlyCheckIns,
     timezone,
-    attendanceRate: totalEmployees > 0 ? Math.round(((present + late + wfh) / totalEmployees) * 100) : 0,
+    attendanceRate: totalEmployees > 0 ? Math.round(((present + late + shortHours + wfh) / totalEmployees) * 100) : 0,
   };
 };
 
@@ -1975,7 +1992,7 @@ const getBranchSummary = async (organizationId) => {
     const attendance = attendances.find((a) => a.employeeId === emp.id);
     const status = attendance?.checkIn && attendance.status === "ABSENT" ? "PRESENT" : statusOf.get(emp.id);
     if (status) {
-      if (["PRESENT", "LATE", "HALF_DAY", "WORK_FROM_HOME"].includes(status)) {
+      if (["PRESENT", "LATE", "HALF_DAY", "SHORT_HOURS", "WORK_FROM_HOME"].includes(status)) {
         row.present += 1;
         if (status === "LATE") row.late += 1;
         if (status === "WORK_FROM_HOME") row.wfh += 1;

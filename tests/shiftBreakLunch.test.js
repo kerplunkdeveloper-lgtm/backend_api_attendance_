@@ -64,3 +64,16 @@ test("a late arrival remains late after completing the full productive target", 
   assert.equal(result.status, "LATE");
   assert.equal(result.lateMinutes, 20);
 });
+
+test("marks a workday short-hours when it is above half day but below the productive target", () => {
+  const result = evaluateAttendanceAgainstShift(
+    { startTime: "00:00", endTime: "23:59", graceMinutes: 0, breakMinutes: 15, lunchMinutes: 40, breakIncluded: true, lunchIncluded: true, flexiblePunching: true, totalWorkingMinutes: 540 },
+    "2026-11-05T10:28:00.000Z",
+    "2026-11-05T17:28:00.000Z",
+    15,
+    { lunchMinutes: 40, timeZone: "Asia/Calcutta", halfDayThresholdMinutes: 240 }
+  );
+  assert.equal(result.workingMinutes, 365);
+  assert.equal(result.scheduledWorkMinutes, 485);
+  assert.equal(result.status, "SHORT_HOURS");
+});
