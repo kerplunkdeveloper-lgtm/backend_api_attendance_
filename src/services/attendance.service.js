@@ -591,6 +591,27 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
     throw error;
   }
 
+  // Do not start a second session on the next calendar day while a flexible
+  // or overnight session is still open. The normal UI already shows the open
+  // session as "Punch out", but this guard also protects direct/API callers.
+  const carriedOpenAttendance = await findOpenAttendance(employee.id, organizationId, checkInTime, { shift: true });
+  if (carriedOpenAttendance?.checkIn && !carriedOpenAttendance.checkOut && carriedOpenAttendance.date < today) {
+    const elapsedHours = (checkInTime.getTime() - new Date(carriedOpenAttendance.checkIn).getTime()) / 3_600_000;
+    const belongsToFlexibleSession = Boolean(employee.flexiblePunching || carriedOpenAttendance.shift?.flexiblePunching);
+    if (
+      (belongsToFlexibleSession || isOvernightShift(carriedOpenAttendance.shift)) &&
+      elapsedHours > 0 &&
+      elapsedHours <= 20
+    ) {
+      const timeStr = formatLocalTime(carriedOpenAttendance.checkIn, timezone);
+      const error = new Error(`You are already punched in from ${timeStr}. Punch out that shift before punching in again.`);
+      error.statusCode = 400;
+      error.code = "OPEN_ATTENDANCE_EXISTS";
+      error.attendance = carriedOpenAttendance;
+      throw error;
+    }
+  }
+
   // Keep the selected work mode alongside the optional note. The attendance
   // table has one legacy wfhNote field, so a stable prefix prevents Travel and
   // Client Visit from being mistaken for Remote/WFH in downstream views.
@@ -891,13 +912,20 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
       orderBy: { date: "desc" },
     });
 
-    // Only adopt it when the open punch genuinely belongs to an overnight shift
-    // and is still within a plausible window, so a forgotten checkout from days
-    // ago is not silently closed against today's punch.
+    // Adopt an open punch from the previous local date for both overnight and
+    // flexible ("Any time") shifts. A flexible shift has no reliable wall-clock
+    // end time, so the punch-in record is the source of truth for its attendance
+    // date. Keep the elapsed-time guard so a forgotten punch is not silently
+    // closed against a later day's checkout.
     if (openShift) {
       const elapsedHours =
         (checkOutTime.getTime() - new Date(openShift.checkIn).getTime()) / 3_600_000;
-      if ((openShift.workMode === "SHOOT" || isOvernightShift(openShift.shift)) && elapsedHours > 0 && elapsedHours <= 20) {
+      const belongsToFlexibleShift = Boolean(employee.flexiblePunching || openShift.shift?.flexiblePunching);
+      if (
+        (openShift.workMode === "SHOOT" || isOvernightShift(openShift.shift) || belongsToFlexibleShift) &&
+        elapsedHours > 0 &&
+        elapsedHours <= 20
+      ) {
         attendance = openShift;
       }
     }
