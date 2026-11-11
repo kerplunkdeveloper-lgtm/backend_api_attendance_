@@ -12,8 +12,7 @@ const router = express.Router();
 // Require valid JWT authentication for all attendance endpoints
 router.use(authenticate);
 
-// ── Employee Self-Service Punch Station ───────────────────────────────────────
-// Standard GPS check-in (geofence enforced)
+ 
 router.post(
   "/check-in",
   denyCompanyAdminSelfPunch,
