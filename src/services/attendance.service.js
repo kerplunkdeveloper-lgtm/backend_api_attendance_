@@ -331,12 +331,45 @@ const assertTrustedDevice = async (employee, organizationId, policy, deviceId) =
 const isOnBehalf = (employee, userId) => Boolean(userId && employee?.userId && employee.userId !== userId);
 
 const assertPersonalLeaveDoesNotBlockAdmin = ({ approvedLeave, employee, userId, actorRole }) => {
-  if (!approvedLeave || (isOnBehalf(employee, userId) && ADMIN_ROLES.includes(actorRole))) return;
+  if (!approvedLeave || approvedLeave.halfDayPeriod || (isOnBehalf(employee, userId) && ADMIN_ROLES.includes(actorRole))) return;
   const leaveName = approvedLeave.leaveType?.name || "approved leave";
   const error = new Error(`Punch-in is disabled today because your ${leaveName} was approved. If you need to work, ask HR or an admin to cancel the leave first.`);
   error.statusCode = 403;
   error.code = "APPROVED_LEAVE_BLOCKED";
   error.leave = { title: leaveName };
+  throw error;
+};
+
+/**
+ * A half-day leave is the half of the employee's assigned company shift. The
+ * midpoint is calculated from the configured shift clock, so 09:00-18:00
+ * opens the afternoon punch at 13:30 and closes an afternoon leave checkout
+ * at 13:30. Administrators recording attendance for someone else are not
+ * constrained by this self-service window.
+ */
+const assertHalfDayPunchWindow = ({ approvedLeave, shift, at, timezone, action, employee, userId, actorRole }) => {
+  if (!approvedLeave?.halfDayPeriod || (isOnBehalf(employee, userId) && ADMIN_ROLES.includes(actorRole))) return;
+  const start = parseTimeToMinutes(shift?.startTime);
+  const end = parseTimeToMinutes(shift?.endTime);
+  if (start === null || end === null || start === end) return;
+
+  const endOnTimeline = end <= start ? end + 1440 : end;
+  const midpoint = (start + (endOnTimeline - start) / 2) % 1440;
+  const current = getLocalMinutesOfDay(at, timezone);
+  const afterMidpoint = start <= end ? current >= midpoint : current >= start || current < midpoint;
+  const beforeMidpoint = start <= end ? current <= midpoint : current >= start || current <= midpoint;
+  const allowed = approvedLeave.halfDayPeriod === "MORNING" ? action === "CHECK_IN" ? afterMidpoint : true : action === "CHECK_OUT" ? beforeMidpoint : current <= midpoint;
+  if (allowed) return;
+
+  const boundary = `${String(Math.floor(midpoint / 60)).padStart(2, "0")}:${String(Math.round(midpoint % 60)).padStart(2, "0")}`;
+  const error = new Error(
+    approvedLeave.halfDayPeriod === "MORNING"
+      ? `Morning half-day leave is active. You can punch in from ${boundary}, after the first half of your company hours.`
+      : `Afternoon half-day leave is active. You must complete your punch before ${boundary}, the end of the first half of your company hours.`
+  );
+  error.statusCode = 403;
+  error.code = "HALF_DAY_PUNCH_WINDOW";
+  error.leave = { period: approvedLeave.halfDayPeriod, boundary };
   throw error;
 };
 
@@ -437,9 +470,11 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
 
   const isHoliday = Boolean(holiday);
   const isOnLeave = Boolean(approvedLeave);
-  const isOvertimeShift = isOffDay || isHoliday || isOnLeave;
+  const isFullDayLeave = isOnLeave && !approvedLeave.halfDayPeriod;
+  const isOvertimeShift = isOffDay || isHoliday || isFullDayLeave;
 
   assertPersonalLeaveDoesNotBlockAdmin({ approvedLeave, employee, userId, actorRole });
+  assertHalfDayPunchWindow({ approvedLeave, shift, at: checkInTime, timezone, action: "CHECK_IN", employee, userId, actorRole });
 
   // Weekly off, holiday and company leave are closed for punching unless HR or an admin approved work today.
   await assertDayOffWorkApproved({
@@ -572,7 +607,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
   let status = workMode === "WORK_FROM_HOME" ? "WORK_FROM_HOME" : "PRESENT";
 
   // If working on rest day/leave/holiday, late does not penalize the employee
-  if (!isOvertimeShift && shift) {
+  if (!isOvertimeShift && approvedLeave?.halfDayPeriod !== "MORNING" && shift) {
     lateMinutes = calculateLateMinutes(shift.startTime, await getLateGraceMinutes(organizationId, shift.graceMinutes), checkInTime);
     if (lateMinutes > 0 && status !== "WORK_FROM_HOME") status = "LATE";
   }
@@ -772,9 +807,11 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
 
   const isHoliday = Boolean(holiday);
   const isOnLeave = Boolean(approvedLeave);
-  const isOvertimeShift = isOffDay || isHoliday || isOnLeave;
+  const isFullDayLeave = isOnLeave && !approvedLeave.halfDayPeriod;
+  const isOvertimeShift = isOffDay || isHoliday || isFullDayLeave;
 
   assertPersonalLeaveDoesNotBlockAdmin({ approvedLeave, employee, userId, actorRole });
+  assertHalfDayPunchWindow({ approvedLeave, shift, at: checkInTime, timezone, action: "CHECK_IN", employee, userId, actorRole });
 
   await assertDayOffWorkApproved({
     employee,
@@ -805,7 +842,7 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
   }
 
   let lateMinutes = 0;
-  if (!isOvertimeShift && shift) {
+  if (!isOvertimeShift && approvedLeave?.halfDayPeriod !== "MORNING" && shift) {
     lateMinutes = calculateLateMinutes(shift.startTime, await getLateGraceMinutes(organizationId, shift.graceMinutes), checkInTime);
   }
 
@@ -982,7 +1019,9 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
   ]);
   const holiday = holidayRow || (companyLeave ? { name: companyLeave.title } : null);
 
-  const isNonWorkingDay = isOffDay || Boolean(holiday) || Boolean(approvedLeave);
+  const isFullDayLeave = Boolean(approvedLeave && !approvedLeave.halfDayPeriod);
+  const isNonWorkingDay = isOffDay || Boolean(holiday) || isFullDayLeave;
+  assertHalfDayPunchWindow({ approvedLeave, shift, at: checkOutTime, timezone, action: "CHECK_OUT", employee, userId, actorRole });
 
   // Auto-close either kind of pause at checkout and keep break/lunch totals separate.
   const activePauseStart = attendance.events?.[0];
@@ -1049,6 +1088,20 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
       overtimeFormatted: formatMinutes(Math.max(0, calculatedWorkingMinutes - 480)),
       status: attendance.status,
     };
+  }
+
+  // Half-day leave is an approved schedule adjustment, not a late arrival or
+  // early departure. Keep the attendance record clean for dashboards and
+  // payroll; the leave request itself supplies the paid/unpaid half-day.
+  if (approvedLeave?.halfDayPeriod) {
+    metrics.lateMinutes = 0;
+    metrics.originalLateMinutes = 0;
+    metrics.lateFormatted = formatMinutes(0);
+    if (metrics.status === "LATE") metrics.status = "PRESENT";
+    if (approvedLeave.halfDayPeriod === "AFTERNOON") {
+      metrics.earlyMinutes = 0;
+      metrics.earlyFormatted = formatMinutes(0);
+    }
   }
 
   // Shoot overtime is approved through Shoot Settlement, so retain the raw
@@ -1411,6 +1464,7 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
   let lateMinutes = 0;
   let earlyMinutes = 0;
   let overtimeMinutes = 0;
+  let attendanceStatus = status;
 
   if (normalizedCheckIn && normalizedCheckOut && shift) {
     const metrics = evaluateAttendanceAgainstShift(
@@ -1424,6 +1478,11 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
     lateMinutes = metrics.lateMinutes;
     earlyMinutes = metrics.earlyMinutes;
     overtimeMinutes = metrics.overtimeMinutes;
+    // A completed pair of punches owns the duration status. Preserve explicit
+    // non-work modes such as leave, holiday, week-off, or WFH.
+    if (["PRESENT", "LATE", "HALF_DAY", "SHORT_HOURS"].includes(status)) {
+      attendanceStatus = metrics.status;
+    }
   }
 
   // The attendance row and its audit trail must land together, otherwise a
@@ -1432,7 +1491,7 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
     const record = await tx.attendance.upsert({
       where: { employeeId_date: { employeeId, date: targetDate } },
       update: {
-        status,
+        status: attendanceStatus,
         checkIn: normalizedCheckIn || undefined,
         checkOut: normalizedCheckOut || undefined,
         workingMinutes,
@@ -1448,7 +1507,7 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
         date: targetDate,
         checkIn: normalizedCheckIn,
         checkOut: normalizedCheckOut,
-        status,
+        status: attendanceStatus,
         workingMinutes,
         lateMinutes,
         earlyMinutes,
@@ -1499,7 +1558,7 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
         action: "UPDATE",
         entity: "ATTENDANCE",
         entityId: record.id,
-        details: `Admin manually marked attendance as ${status} for employee ${employeeId} on ${date}. Reason: ${reason || "N/A"}`,
+        details: `Admin manually marked attendance as ${attendanceStatus} for employee ${employeeId} on ${date}. Reason: ${reason || "N/A"}`,
       },
     });
 
@@ -1508,7 +1567,7 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
 
   return {
     success: true,
-    message: `Attendance marked as ${status} for ${employee.firstName} ${employee.lastName || ""}`.trim(),
+    message: `Attendance marked as ${attendanceStatus} for ${employee.firstName} ${employee.lastName || ""}`.trim(),
     attendance,
     markedBy: adminUserId,
   };

@@ -334,7 +334,7 @@ class LeaveService {
    * 4. Submit Leave Request (Employee)
    */
   async createLeaveRequest(userId, organizationId, data, actorRole = "EMPLOYEE") {
-    const { leaveTypeId, startDate, endDate, totalDays, reason } = data;
+    const { leaveTypeId, startDate, endDate, totalDays, halfDayPeriod, reason } = data;
 
     if (!leaveTypeId || !startDate || !endDate || !reason) {
       const error = new Error("leaveTypeId, startDate, endDate, and reason are required");
@@ -365,6 +365,19 @@ class LeaveService {
 
     if (end < start) {
       const error = new Error("End date cannot be before start date");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const requestedTotalDays = totalDays === undefined || totalDays === null ? null : Number(totalDays);
+    const isHalfDay = requestedTotalDays === 0.5 || Boolean(halfDayPeriod);
+    if (isHalfDay && !["MORNING", "AFTERNOON"].includes(halfDayPeriod)) {
+      const error = new Error("Choose whether the half-day leave is for the morning or afternoon.");
+      error.statusCode = 400;
+      throw error;
+    }
+    if (isHalfDay && toDateKey(start) !== toDateKey(end)) {
+      const error = new Error("Half-day leave must be for one date only.");
       error.statusCode = 400;
       throw error;
     }
@@ -423,8 +436,7 @@ class LeaveService {
     }
 
     // A caller-supplied totalDays may never exceed the computed working days.
-    const requestedDays =
-      totalDays !== undefined && totalDays !== null ? Number(totalDays) : effectiveWorkingDays;
+    const requestedDays = isHalfDay ? 0.5 : (requestedTotalDays !== null ? requestedTotalDays : effectiveWorkingDays);
 
     if (!Number.isFinite(requestedDays) || requestedDays <= 0) {
       const error = new Error("totalDays must be a positive number");
@@ -527,6 +539,7 @@ class LeaveService {
         startDate: start,
         endDate: end,
         totalDays: calculatedDays,
+        halfDayPeriod: isHalfDay ? halfDayPeriod : null,
         reason,
         status: "PENDING",
       },
@@ -542,7 +555,7 @@ class LeaveService {
       organizationId,
       employeeId: employee.id,
       title: "New leave request",
-      summary: `applied for ${request.leaveType?.name || "leave"} from ${toDateKey(request.startDate)} to ${toDateKey(request.endDate)} (${calculatedDays} day${Number(calculatedDays) === 1 ? "" : "s"}).`,
+      summary: `applied for ${request.leaveType?.name || "leave"} from ${toDateKey(request.startDate)} to ${toDateKey(request.endDate)} (${calculatedDays} day${Number(calculatedDays) === 1 ? "" : "s"}${request.halfDayPeriod ? `, ${request.halfDayPeriod.toLowerCase()} half` : ""}).`,
     });
 
     return request;
@@ -735,7 +748,7 @@ class LeaveService {
           workingDaySet
         );
 
-        for (const day of leaveDays) {
+        for (const day of request.halfDayPeriod ? [] : leaveDays) {
           const dateOnly = getTodayDateOnly(day);
           const assignedStatus = "ON_LEAVE";
 

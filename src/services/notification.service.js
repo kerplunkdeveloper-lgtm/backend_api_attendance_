@@ -688,6 +688,20 @@ class NotificationService {
    * to retry after a restart without duplicating the same celebration.
    */
   async sendDailyCelebrationAnnouncements(now = new Date()) {
+    // These announcements are generated for one calendar day only. Expiry is
+    // also enforced by announcement.list(), but remove the rows so the board
+    // does not retain stale generated celebrations for managers/admins.
+    const cleaned = await prisma.announcement.deleteMany({
+      where: {
+        createdByUserId: null,
+        expiresAt: { lte: now },
+        OR: [
+          { title: { startsWith: "Birthday today:" } },
+          { title: { startsWith: "Work anniversary today:" } },
+        ],
+      },
+    });
+
     const organizations = await prisma.organization.findMany({
       select: { id: true, name: true, timezone: true },
     });
@@ -768,7 +782,7 @@ class NotificationService {
         }
       }
     }
-    return { success: true, sentCount: sent };
+    return { success: true, sentCount: sent, deletedCount: cleaned.count || 0 };
   }
 
   async evaluateScheduledReminders() {

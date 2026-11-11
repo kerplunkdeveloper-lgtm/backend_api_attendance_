@@ -46,7 +46,7 @@ const productiveMinutesForShift = (shift) => {
 };
 
 /** A tenant-visible, auditable day ledger used by payroll preview and payslips. */
-const buildDailyPayrollLedger = ({ period, asOf, workingDays, holidayKeys, attendanceByKey, approvedOvertimeByKey, unpaidLeaveKeys, companyLeaveByKey, todayKey, dailyRate, hourlyRate, requiredProductiveMinutes = 480, overtimeMultiplier, lateComingRules, maxLatesBeforeDeduction, lateDeductionPercent }) => {
+const buildDailyPayrollLedger = ({ period, asOf, workingDays, holidayKeys, attendanceByKey, approvedOvertimeByKey, unpaidLeaveKeys, halfDayLeaveByKey = new Map(), companyLeaveByKey, todayKey, dailyRate, hourlyRate, requiredProductiveMinutes = 480, overtimeMultiplier, lateComingRules, maxLatesBeforeDeduction, lateDeductionPercent }) => {
   const rows = [];
   let lateCount = 0;
   const lateRules = (lateComingRules || []).filter((rule) => rule.isActive && Number(rule.lateDays) > 0 && Number(rule.lopDays) > 0);
@@ -64,6 +64,10 @@ const buildDailyPayrollLedger = ({ period, asOf, workingDays, holidayKeys, atten
 
     if (holiday) { category = "HOLIDAY"; lopDays = 0; note = "Paid company holiday"; }
     else if (weekOff) { category = "WEEK_OFF"; lopDays = 0; note = "Weekly off"; }
+    else if (halfDayLeaveByKey.has(dateKey)) {
+      if (halfDayLeaveByKey.get(dateKey)) { category = "PAID_HALF_DAY_LEAVE"; note = "Approved paid half-day leave"; }
+      else { category = "UNPAID_HALF_DAY_LEAVE"; lopDays = 0.5; note = "Approved unpaid half-day leave"; }
+    }
     else if (attendance?.status === "PRESENT" || attendance?.status === "WORK_FROM_HOME" || attendance?.status === "SHORT_HOURS") { category = attendance.status; note = attendance.status === "SHORT_HOURS" ? "Short working hours" : "Present"; }
     else if (attendance?.status === "LATE") { category = "LATE"; note = `${Number(attendance.lateMinutes || 0)} late minutes`; }
     else if (attendance?.status === "HALF_DAY") { category = "HALF_DAY"; lopDays = 0.5; note = "Half day attendance"; }
@@ -146,7 +150,7 @@ class PayrollService {
         startDate: { lte: endDate },
         endDate: { gte: startDate },
       },
-      select: { startDate: true, endDate: true },
+      select: { startDate: true, endDate: true, halfDayPeriod: true },
     });
 
     const dates = new Set();
@@ -156,11 +160,30 @@ class PayrollService {
       );
       const last = new Date(Math.min(new Date(req.endDate).getTime(), endDate.getTime()));
       while (cursor <= last) {
-        dates.add(toDateKey(cursor));
+        if (!req.halfDayPeriod) dates.add(toDateKey(cursor));
         cursor.setUTCDate(cursor.getUTCDate() + 1);
       }
     }
     return dates;
+  }
+
+  async _getHalfDayLeaveDays(organizationId, employeeId, startDate, endDate) {
+    const requests = await prisma.leaveRequest.findMany({
+      where: {
+        organizationId,
+        employeeId,
+        status: "APPROVED",
+        totalDays: 0.5,
+        startDate: { lte: endDate },
+        endDate: { gte: startDate },
+      },
+      select: { startDate: true, halfDayPeriod: true, leaveType: { select: { isPaid: true } } },
+    });
+    const days = new Map();
+    for (const request of requests) {
+      if (request.halfDayPeriod) days.set(toDateKey(request.startDate), Boolean(request.leaveType?.isPaid));
+    }
+    return days;
   }
 
   /**
@@ -413,6 +436,7 @@ class PayrollService {
     // lives on LeaveType.isPaid. Without this lookup, loss-of-pay leave would be
     // counted as paid leave and the employee would be paid in full.
     const unpaidLeaveKeys = await this._getUnpaidLeaveDates(organizationId, employeeId, period.start, period.end);
+    const halfDayLeaveByKey = await this._getHalfDayLeaveDays(organizationId, employeeId, period.start, period.end);
 
     // Company-wide holidays plus holidays for this employee's branch
     const holidays = await prisma.holiday.findMany({
@@ -444,6 +468,7 @@ class PayrollService {
       holidayKeys,
       attendanceStatusByKey,
       unpaidLeaveKeys,
+      halfDayLeaveByKey,
       companyLeaveByKey,
       todayKey,
     });
@@ -456,6 +481,7 @@ class PayrollService {
       attendanceByKey,
       approvedOvertimeByKey,
       unpaidLeaveKeys,
+      halfDayLeaveByKey,
       companyLeaveByKey,
       todayKey,
       dailyRate,
@@ -515,10 +541,10 @@ class PayrollService {
     // as entitlements; only the chosen cash remainder is payable here.
     const overtimeAllocation = await prisma.overtimeAllocation.findUnique({
       where: { employeeId_month_year: { employeeId, month: m, year: y } },
-      select: { id: true, status: true, approvedMinutes: true, permissionMinutes: true, leaveMinutes: true, compOffMinutes: true, cashMinutes: true },
+      select: { id: true, status: true, approvedMinutes: true, permissionMinutes: true, leaveMinutes: true, compOffMinutes: true, cashMinutes: true, settledPermissionMinutes: true, settledLeaveMinutes: true, settledCompOffMinutes: true, settledCashMinutes: true },
     });
-    if (overtimeAllocation?.status === "APPROVED") {
-      totalOvertimeMinutes = Math.max(0, Number(overtimeAllocation.cashMinutes || 0) - exactTravelOtMinutes);
+    if (overtimeAllocation && (overtimeAllocation.status === "APPROVED" || overtimeAllocation.settledCashMinutes != null)) {
+      totalOvertimeMinutes = Math.max(0, Number(overtimeAllocation.settledCashMinutes ?? overtimeAllocation.cashMinutes ?? 0) - exactTravelOtMinutes);
     }
 
     const overtimeHours = Math.round((totalOvertimeMinutes / 60) * 10) / 10;
@@ -549,7 +575,7 @@ class PayrollService {
     }, 0);
     const permission = computePermissionDeduction({
       approvedHours: approvedPermissionHours,
-      allowanceHours: Number(policy.monthlyPermissionHours || 0) + (overtimeAllocation?.status === "APPROVED" ? Number(overtimeAllocation.permissionMinutes || 0) / 60 : 0),
+      allowanceHours: Number(policy.monthlyPermissionHours || 0) + (overtimeAllocation && (overtimeAllocation.status === "APPROVED" || overtimeAllocation.settledPermissionMinutes != null) ? Number(overtimeAllocation.settledPermissionMinutes ?? overtimeAllocation.permissionMinutes ?? 0) / 60 : 0),
       dailyRate,
     });
 
@@ -641,10 +667,10 @@ class PayrollService {
           id: overtimeAllocation.id,
           status: overtimeAllocation.status,
           approvedMinutes: Number(overtimeAllocation.approvedMinutes || 0),
-          permissionMinutes: Number(overtimeAllocation.permissionMinutes || 0),
-          leaveMinutes: Number(overtimeAllocation.leaveMinutes || 0),
-          compOffMinutes: Number(overtimeAllocation.compOffMinutes || 0),
-          cashMinutes: Number(overtimeAllocation.cashMinutes || 0),
+          permissionMinutes: Number(overtimeAllocation.settledPermissionMinutes ?? overtimeAllocation.permissionMinutes ?? 0),
+          leaveMinutes: Number(overtimeAllocation.settledLeaveMinutes ?? overtimeAllocation.leaveMinutes ?? 0),
+          compOffMinutes: Number(overtimeAllocation.settledCompOffMinutes ?? overtimeAllocation.compOffMinutes ?? 0),
+          cashMinutes: Number(overtimeAllocation.settledCashMinutes ?? overtimeAllocation.cashMinutes ?? 0),
         } : null,
       },
       dailyPayroll,
