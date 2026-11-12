@@ -1692,15 +1692,27 @@ const getTodayStatus = async (userId, organizationId, role = "EMPLOYEE") => {
     }),
     prisma.leaveRequest.findFirst({
       where: { employeeId: employee.id, status: "APPROVED", startDate: { lte: todayDate }, endDate: { gte: todayDate } },
-      select: { leaveType: { select: { name: true, isPaid: true } } },
+      select: {
+        halfDayPeriod: true,
+        leaveType: { select: { name: true, isPaid: true } },
+      },
     }),
   ]);
   // Someone already punched in (an approved day of work, or an admin marked them) is never locked out of punching out.
   const personalLeaveDay = approvedLeaveToday
-    ? { kind: "PERSONAL_LEAVE", title: approvedLeaveToday.leaveType?.name || "Approved leave", reason: null, isPaid: approvedLeaveToday.leaveType?.isPaid ?? true }
+    ? {
+        kind: "PERSONAL_LEAVE",
+        title: approvedLeaveToday.leaveType?.name || "Approved leave",
+        reason: null,
+        isPaid: approvedLeaveToday.leaveType?.isPaid ?? true,
+        halfDayPeriod: approvedLeaveToday.halfDayPeriod || null,
+        // Half-day leave still permits one punch window; the service enforces
+        // the exact midpoint when the punch is submitted.
+        canPunch: Boolean(approvedLeaveToday.halfDayPeriod),
+      }
     : null;
   const dayOff = personalLeaveDay
-    ? { ...personalLeaveDay, workRequest: null, canPunch: false }
+    ? { ...personalLeaveDay, workRequest: null }
     : dayOffBase
     ? { kind: dayOffBase.kind, title: dayOffBase.title, reason: dayOffBase.reason, isPaid: dayOffBase.isPaid, workRequest: dayOffBase.kind === "PERSONAL_LEAVE" ? null : workRequest || null, canPunch: dayOffBase.kind !== "PERSONAL_LEAVE" && workRequest?.status === "APPROVED" }
     : null;
@@ -2078,7 +2090,7 @@ const getBranchSummary = async (organizationId) => {
   return { success: true, date: date.toISOString().split("T")[0], timezone, branches: list, totals };
 };
 
-const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, from, to, status, page = 1, limit = 20 }) => {
+const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, branchId, from, to, status, page = 1, limit = 20 }) => {
   const where = { organizationId, employee: { user: workforceUserFilter } };
   const teamRoles = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"];
   const canSeeTeam = teamRoles.includes(role);
@@ -2091,6 +2103,12 @@ const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, 
     where.employeeId = employee.id;
   } else if (employeeId) {
     where.employeeId = employeeId;
+  }
+
+  // Branch view follows the employee's assigned branch. This keeps records visible
+  // even when a punch was matched to a different branch geofence.
+  if (canSeeTeam && branchId && branchId !== "ALL") {
+    where.employee = { ...where.employee, branchId: String(branchId) };
   }
 
   if (from || to) {
@@ -2141,7 +2159,14 @@ const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, 
   if (canSeeTeam && exactToday && (!status || status === "ALL" || status === "ABSENT")) {
     const [employees, todayAttendances, approvedLeaves, holidays, companyLeaves] = await Promise.all([
       prisma.employee.findMany({
-        where: { organizationId, deletedAt: null, status: { in: WORKING_STATUSES }, user: workforceUserFilter, ...(employeeId ? { id: employeeId } : {}) },
+        where: {
+          organizationId,
+          deletedAt: null,
+          status: { in: WORKING_STATUSES },
+          user: workforceUserFilter,
+          ...(employeeId ? { id: employeeId } : {}),
+          ...(branchId && branchId !== "ALL" ? { branchId: String(branchId) } : {}),
+        },
         select: {
           id: true, firstName: true, lastName: true, employeeCode: true, designation: true, avatarUrl: true, branchId: true,
           department: { select: { id: true, name: true } },

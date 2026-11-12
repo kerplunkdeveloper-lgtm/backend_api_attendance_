@@ -224,6 +224,7 @@ class AttendanceController {
         organizationId: req.user.organizationId,
         role: req.user.role,
         employeeId: req.query.employeeId,
+        branchId: req.query.branchId,
         from: req.query.from || req.query.date,
         to: req.query.to || req.query.date,
         status: req.query.status,

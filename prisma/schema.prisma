@@ -163,6 +163,7 @@ model Organization {
   chatThreads          ChatThread[]
   chatMessages         ChatMessage[]
   biometricDevices     BiometricDevice[]
+  biometricCredentials BiometricCredential[]
   loanAdvances         LoanAdvance[]
   appraisalCycles      AppraisalCycle[]
   appraisalReviews     AppraisalReview[]
@@ -771,6 +772,7 @@ model Employee {
   loanAdvances             LoanAdvance[]
   appraisals               AppraisalReview[]
   dayOffWorkRequests       DayOffWorkRequest[]
+  biometricCredentials     BiometricCredential[]
 
   @@unique([organizationId, employeeCode])
   @@index([organizationId])
@@ -2017,6 +2019,26 @@ model BiometricDevice {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([organizationId])
+}
+
+model BiometricCredential {
+  id             String   @id @default(uuid())
+  organizationId String
+  employeeId     String
+  credentialType String   @default("CARD_UID")
+  cardUid        String
+  label          String?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, credentialType, cardUid])
+  @@unique([organizationId, employeeId, credentialType])
+  @@index([organizationId])
+  @@index([employeeId])
 }
 
 model LoanAdvance {

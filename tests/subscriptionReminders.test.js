@@ -38,11 +38,17 @@ test("after the trial ends: grace period first, then locked", () => {
 test("a paid plan warns before it expires and once after", () => {
   const paid = (n, status = "ACTIVE") => reminderFor({ status, plan: "PROFESSIONAL", expiresAt: inDays(n) }, NOW);
   assert.equal(paid(30), null);
+  assert.equal(paid(10).key, "renew-10");
   assert.equal(paid(7).key, "renew-7");
   assert.match(paid(7).title, /Professional plan expires in 7 days/);
   assert.equal(paid(-1).key, "paid-expired");
   assert.equal(paid(3, "CANCELED").key, "canceled-3");
   assert.match(paid(3, "CANCELED").message, /You canceled/);
+});
+
+test("only monthly paid plans receive the 10-day reminder", () => {
+  assert.equal(reminderFor({ status: "ACTIVE", plan: "PROFESSIONAL", billingCycle: "MONTHLY", expiresAt: inDays(10) }, NOW).key, "renew-10");
+  assert.equal(reminderFor({ status: "ACTIVE", plan: "PROFESSIONAL", billingCycle: "ANNUAL", expiresAt: inDays(10) }, NOW), null);
 });
 
 test("each period has its own message, so a renewed plan is warned again next time", () => {
