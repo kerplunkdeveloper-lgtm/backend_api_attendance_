@@ -7,6 +7,11 @@ on:
         description: Full commit SHA already deployed and tested on Alpha
         required: true
         type: string
+      allow_destructive_migrations:
+        description: Confirm that reviewed DROP/TRUNCATE statements may be promoted to production
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -38,6 +43,7 @@ jobs:
       DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/ci
       DATABASE_URL_UNPOOLED: postgresql://ci:ci@127.0.0.1:5432/ci
       RELEASE_SHA: ${{ inputs.alpha_sha }}
+      ALLOW_DESTRUCTIVE_MIGRATIONS: ${{ inputs.allow_destructive_migrations }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -78,8 +84,11 @@ jobs:
             fi
           done < migration-review/changes.txt
           if [[ -f migration-review/new-migrations.sql ]] && grep -Ein '(^|[[:space:]])(DROP|TRUNCATE)([[:space:]]|;)' migration-review/new-migrations.sql; then
-            echo 'Destructive migration SQL is blocked from automatic production promotion.' >&2
-            exit 1
+            if [[ "$ALLOW_DESTRUCTIVE_MIGRATIONS" != "true" ]]; then
+              echo 'Destructive migration SQL requires explicit allow_destructive_migrations approval.' >&2
+              exit 1
+            fi
+            echo 'Reviewed destructive migration explicitly approved for this promotion.'
           fi
           printf 'Commit: %s\nAlpha ancestry: verified\nNew migration SQL: %s\n' "$RELEASE_SHA" "$(wc -l < migration-review/new-migrations.sql 2>/dev/null || echo 0)" > migration-review/summary.txt
       - uses: actions/upload-artifact@v4
