@@ -43,10 +43,10 @@ router.post(
 );
 
 // Break management
-router.post("/break-start", denyCompanyAdminSelfPunch, attendanceController.startBreak);
-router.post("/break-end", denyCompanyAdminSelfPunch, attendanceController.endBreak);
-router.post("/lunch-start", denyCompanyAdminSelfPunch, attendanceController.startLunch);
-router.post("/lunch-end", denyCompanyAdminSelfPunch, attendanceController.endLunch);
+router.post("/break-start", denyCompanyAdminSelfPunch, validate(schemas.checkIn), attendanceController.startBreak);
+router.post("/break-end", denyCompanyAdminSelfPunch, validate(schemas.checkIn), attendanceController.endBreak);
+router.post("/lunch-start", denyCompanyAdminSelfPunch, validate(schemas.checkIn), attendanceController.startLunch);
+router.post("/lunch-end", denyCompanyAdminSelfPunch, validate(schemas.checkIn), attendanceController.endLunch);
 
 // Offline sync — batch sync locally-queued punches when internet is restored
 router.post("/sync-offline", denyCompanyAdminSelfPunch, attendanceController.syncOfflinePunches);
@@ -59,7 +59,7 @@ router.get("/:attendanceId/breaks", attendanceController.getBreakDetails);
 router.get("/today", attendanceController.getTodayStatus);
 
 // Where everyone punched today. Locations are for admins and HR only.
-router.get("/live-today", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"), attendanceController.getLiveToday);
+router.get("/live-today", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"), attendanceController.getLiveToday);
 
 // Personal attendance history
 router.get("/my", attendanceController.getMyAttendance);

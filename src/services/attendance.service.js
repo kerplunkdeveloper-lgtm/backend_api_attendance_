@@ -389,6 +389,27 @@ const assertLocationCaptured = ({ latitude, longitude, action, skip }) => {
   }
 };
 
+// Breaks and lunch follow the same office boundary as an office check-in.
+// Away-from-office sessions (WFH, travel, client visit and shoot) are exempt.
+const assertPauseGeofence = async ({ organizationId, employee, attendance, latitude, longitude, accuracy, label, userId, actorRole }) => {
+  const isAdminOnBehalf = isOnBehalf(employee, userId) && ADMIN_ROLES.includes(actorRole);
+  const isAwaySession = attendance?.status === "WORK_FROM_HOME" || /^(WORK_FROM_HOME|CLIENT_VISIT|TRAVEL|SHOOT):/i.test(String(attendance?.wfhNote || ""));
+  if (isAdminOnBehalf || isAwaySession) return { isBypassed: true, bypassReason: isAwaySession ? "AWAY_SESSION" : "ADMIN" };
+  assertLocationCaptured({ latitude, longitude, action: `take ${label.toLowerCase()}`, skip: false });
+  const branches = await prisma.branch.findMany({ where: { organizationId } });
+  const branchesWithCoords = branches.filter(hasCoordinatePair);
+  if (!branchesWithCoords.length) return { isBypassed: true, bypassReason: "NO_BRANCH_GPS_CONFIGURED" };
+  const rejection = officeOnlyRejection({ latitude, longitude, accuracy, branches: branchesWithCoords });
+  if (rejection) {
+    const error = new Error(rejection.code === "LOCATION_IMPRECISE" ? rejection.message : `You're outside the office geofence. ${label} can only be started or ended within ${rejection.details.allowedRadiusMeters} m of ${rejection.details.branchName || "your office"}.`);
+    error.statusCode = 403;
+    error.code = rejection.code;
+    error.details = rejection.details;
+    throw error;
+  }
+  return { isBypassed: false, bypassReason: null };
+};
+
 // Employees may punch in at any time before the assigned shift ends. Once the
 // end time passes, only people who already punched in may punch out.
 const isShiftPastPunchInCutoff = (shift, at, timezone) => {
@@ -1133,6 +1154,9 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
 
   // Preserve the mode selected at punch-in when punching out. Shoot is stored in wfhNote.
   const effectiveWorkMode = attendance.wfhNote?.startsWith("SHOOT:") ? "SHOOT" : (workMode || "OFFICE");
+  const checkoutGeofence = skipGeofence || source === "BIOMETRIC"
+    ? { isBypassed: true, bypassReason: source === "BIOMETRIC" ? "BIOMETRIC_DEVICE" : "DEVICE" }
+    : await assertPauseGeofence({ organizationId, employee, attendance, latitude, longitude, accuracy, label: "Punch-out", userId, actorRole });
   const checkOutLocation = await resolvePunchLocation({
     locationLabel,
     latitude,
@@ -1247,8 +1271,8 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
         latitude: latitude ? String(latitude) : null,
         longitude: longitude ? String(longitude) : null,
         accuracy: accuracy ? String(accuracy) : null,
-        isBypassed: true,
-        bypassReason: effectiveWorkMode || "GEOFENCE_FLEXIBLE",
+        isBypassed: checkoutGeofence.isBypassed,
+        bypassReason: checkoutGeofence.bypassReason || effectiveWorkMode || "GEOFENCE_FLEXIBLE",
         ...(durableClientEventId(organizationId, employee.userId || userId, clientEventId)
           ? { clientEventId: durableClientEventId(organizationId, employee.userId || userId, clientEventId) }
           : {}),
@@ -1307,7 +1331,7 @@ const pauseTypes = {
   LUNCH: { start: "LUNCH_START", end: "LUNCH_END", field: "lunchMinutes", label: "Lunch" },
 };
 
-const startPause = async ({ userId, employeeId, organizationId, latitude, longitude, timestamp, actorRole = null, pauseType = "BREAK" }) => {
+const startPause = async ({ userId, employeeId, organizationId, latitude, longitude, accuracy, timestamp, actorRole = null, pauseType = "BREAK" }) => {
   const config = pauseTypes[pauseType] || pauseTypes.BREAK;
   const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
   const timezone = await getOrgTimezone(organizationId);
@@ -1317,7 +1341,8 @@ const startPause = async ({ userId, employeeId, organizationId, latitude, longit
   if (attendance.checkOut) { const error = new Error(`Cannot take ${config.label.toLowerCase()} after punching out`); error.statusCode = 400; throw error; }
   const lastEvent = attendance.events[0];
   if (lastEvent && (lastEvent.type === "BREAK_START" || lastEvent.type === "LUNCH_START")) { const error = new Error(`You are already on ${lastEvent.type === "LUNCH_START" ? "lunch" : "a break"}`); error.statusCode = 400; throw error; }
-  const event = await prisma.attendanceEvent.create({ data: { attendanceId: attendance.id, type: config.start, timestamp: eventTime, latitude: latitude ? String(latitude) : null, longitude: longitude ? String(longitude) : null, isBypassed: false } });
+  const location = await assertPauseGeofence({ organizationId, employee, attendance, latitude, longitude, accuracy, label: config.label, userId, actorRole });
+  const event = await prisma.attendanceEvent.create({ data: { attendanceId: attendance.id, type: config.start, timestamp: eventTime, latitude: latitude ? String(latitude) : null, longitude: longitude ? String(longitude) : null, isBypassed: location.isBypassed, bypassReason: location.bypassReason } });
   
   // Notify Manager, HR and admins of break/lunch start.
   try {
@@ -1335,7 +1360,7 @@ const startPause = async ({ userId, employeeId, organizationId, latitude, longit
   return { success: true, message: `${config.label} started at ${formatLocalTime(eventTime, timezone)}`, event, attendance };
 };
 
-const endPause = async ({ userId, employeeId, organizationId, latitude, longitude, timestamp, actorRole = null, pauseType = "BREAK" }) => {
+const endPause = async ({ userId, employeeId, organizationId, latitude, longitude, accuracy, timestamp, actorRole = null, pauseType = "BREAK" }) => {
   const config = pauseTypes[pauseType] || pauseTypes.BREAK;
   const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
   const timezone = await getOrgTimezone(organizationId);
@@ -1345,11 +1370,12 @@ const endPause = async ({ userId, employeeId, organizationId, latitude, longitud
   const lastStart = attendance.events.find((e) => e.type === config.start);
   const lastEnd = attendance.events.find((e) => e.type === config.end);
   if (!lastStart || (lastEnd && new Date(lastEnd.timestamp) >= new Date(lastStart.timestamp))) { const error = new Error(`No active ${config.label.toLowerCase()} to end`); error.statusCode = 400; throw error; }
+  const location = await assertPauseGeofence({ organizationId, employee, attendance, latitude, longitude, accuracy, label: config.label, userId, actorRole });
   const durationSeconds = Math.max(0, Math.floor((eventTime.getTime() - new Date(lastStart.timestamp).getTime()) / 1000));
   const durationMinutes = Math.max(0, Math.floor(durationSeconds / 60));
   const updatedAttendance = await prisma.$transaction(async (tx) => {
     const record = await tx.attendance.update({ where: { id: attendance.id }, data: { [config.field]: (attendance[config.field] || 0) + durationMinutes } });
-    const event = await tx.attendanceEvent.create({ data: { attendanceId: attendance.id, type: config.end, timestamp: eventTime, latitude: latitude ? String(latitude) : null, longitude: longitude ? String(longitude) : null, isBypassed: false } });
+    const event = await tx.attendanceEvent.create({ data: { attendanceId: attendance.id, type: config.end, timestamp: eventTime, latitude: latitude ? String(latitude) : null, longitude: longitude ? String(longitude) : null, isBypassed: location.isBypassed, bypassReason: location.bypassReason } });
     return { ...record, event };
   });
 
@@ -1801,9 +1827,15 @@ const getLiveToday = async (organizationId) => {
         checkIn: true,
         checkOut: true,
         status: true,
+        breakMinutes: true,
+        lunchMinutes: true,
         checkInLocation: true,
         checkOutLocation: true,
         wfhNote: true,
+        events: {
+          orderBy: { timestamp: "desc" },
+          select: { type: true, timestamp: true },
+        },
         branch: { select: { name: true } },
       },
     }),
@@ -1814,6 +1846,16 @@ const getLiveToday = async (organizationId) => {
     const attendance = byEmployee.get(employee.id);
     const name = `${employee.firstName || ""} ${employee.lastName || ""}`.trim() || "Team member";
     const clockedIn = Boolean(attendance?.checkIn && !attendance?.checkOut);
+    const latestEvent = attendance?.events?.[0];
+    const activePauseType = clockedIn && latestEvent?.type === "BREAK_START"
+      ? "BREAK"
+      : clockedIn && latestEvent?.type === "LUNCH_START"
+        ? "LUNCH"
+        : null;
+    const activePauseMinutes = activePauseType && latestEvent?.timestamp
+      ? Math.max(0, Math.floor((Date.now() - new Date(latestEvent.timestamp).getTime()) / 60000))
+      : 0;
+    const completedPauseCount = attendance?.events?.filter((event) => event.type === "BREAK_END" || event.type === "LUNCH_END").length || 0;
     const location = attendance
       ? attendance.checkInLocation || attendance.branch?.name || employee.branch?.name || "Location not shared"
       : null;
@@ -1831,8 +1873,26 @@ const getLiveToday = async (organizationId) => {
       checkOutLocation: attendance?.checkOutLocation || null,
       location,
       clockedIn,
+      isOnBreak: Boolean(activePauseType),
+      activePauseType,
+      activePauseStartedAt: activePauseType ? latestEvent.timestamp : null,
+      activePauseMinutes,
+      breakMinutes: attendance?.breakMinutes || 0,
+      lunchMinutes: attendance?.lunchMinutes || 0,
+      completedPauseCount,
     };
   });
+
+  const activePauses = people.filter((person) => person.isOnBreak);
+  const pauseAnalytics = {
+    activeCount: activePauses.length,
+    activeBreakCount: activePauses.filter((person) => person.activePauseType === "BREAK").length,
+    activeLunchCount: activePauses.filter((person) => person.activePauseType === "LUNCH").length,
+    totalBreakMinutes: people.reduce((sum, person) => sum + Number(person.breakMinutes || 0) + (person.activePauseType === "BREAK" ? Number(person.activePauseMinutes || 0) : 0), 0),
+    totalLunchMinutes: people.reduce((sum, person) => sum + Number(person.lunchMinutes || 0) + (person.activePauseType === "LUNCH" ? Number(person.activePauseMinutes || 0) : 0), 0),
+    completedPauseCount: people.reduce((sum, person) => sum + Number(person.completedPauseCount || 0), 0),
+    activePeople: activePauses,
+  };
 
   people.sort((a, b) => {
     if (a.clockedIn !== b.clockedIn) return a.clockedIn ? -1 : 1;
@@ -1845,6 +1905,7 @@ const getLiveToday = async (organizationId) => {
     total: people.length,
     clockedIn: people.filter((person) => person.clockedIn).length,
     punched: people.filter((person) => person.checkIn).length,
+    pauseAnalytics,
     people,
   };
 };
@@ -2288,19 +2349,19 @@ const syncOfflinePunches = async (userId, organizationId, punches) => {
           break;
 
         case "BREAK_START":
-          result = await startBreak({ userId, organizationId, latitude, longitude, timestamp });
+          result = await startBreak({ userId, organizationId, latitude, longitude, accuracy, timestamp });
           break;
 
         case "BREAK_END":
-          result = await endBreak({ userId, organizationId, latitude, longitude, timestamp });
+          result = await endBreak({ userId, organizationId, latitude, longitude, accuracy, timestamp });
           break;
 
         case "LUNCH_START":
-          result = await startLunch({ userId, organizationId, latitude, longitude, timestamp });
+          result = await startLunch({ userId, organizationId, latitude, longitude, accuracy, timestamp });
           break;
 
         case "LUNCH_END":
-          result = await endLunch({ userId, organizationId, latitude, longitude, timestamp });
+          result = await endLunch({ userId, organizationId, latitude, longitude, accuracy, timestamp });
           break;
 
         default:
