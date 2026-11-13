@@ -10,12 +10,16 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const TRIAL_GRACE_DAYS = 7;
 /** Reminder buckets, in days before the end. A job that missed a day still sends the right (smaller) bucket. */
 const BUCKETS = [1, 3, 7];
+const MONTHLY_BUCKETS = [1, 3, 7, 10];
 
 const dayLabel = (days) => (days === 1 ? "1 day" : `${days} days`);
 const dateLabel = (date) => date.toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Kolkata" });
 
 const daysUntil = (end, now) => Math.ceil((end.getTime() - now.getTime()) / DAY_MS);
-const bucketFor = (days) => BUCKETS.find((bucket) => days <= bucket) ?? null;
+const bucketFor = (days, billingCycle) => {
+  const buckets = String(billingCycle || "MONTHLY").toUpperCase() === "MONTHLY" ? MONTHLY_BUCKETS : BUCKETS;
+  return buckets.find((bucket) => days <= bucket) ?? null;
+};
 
 const planName = (plan) => {
   const text = String(plan || "").toLowerCase();
@@ -23,7 +27,7 @@ const planName = (plan) => {
 };
 
 /**
- * @param {{status?: string, plan?: string, expiresAt?: Date|string|null, trialEndsAt?: Date|string|null}} org
+ * @param {{status?: string, plan?: string, billingCycle?: string, expiresAt?: Date|string|null, trialEndsAt?: Date|string|null}} org
  * @returns {{key: string, title: string, message: string, urgent: boolean} | null}
  */
 const reminderFor = (org, now = new Date()) => {
@@ -66,7 +70,7 @@ const reminderFor = (org, now = new Date()) => {
   if (status === "ACTIVE" || status === "CANCELED") {
     const canceled = status === "CANCELED";
     if (days > 0) {
-      const bucket = bucketFor(days);
+      const bucket = bucketFor(days, org.billingCycle);
       if (!bucket) return null;
       return {
         key: `${canceled ? "canceled" : "renew"}-${bucket}`,

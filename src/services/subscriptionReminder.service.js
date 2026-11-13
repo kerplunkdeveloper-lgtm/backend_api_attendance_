@@ -4,7 +4,7 @@ const emailService = require("./email.service");
 const { reminderFor, DAY_MS } = require("../utils/subscriptionReminders");
 
 const LOOK_BACK_DAYS = 14;
-const LOOK_AHEAD_DAYS = 8;
+const LOOK_AHEAD_DAYS = 11;
 const MAX_ORGS = 500;
 
 /**
@@ -26,7 +26,7 @@ async function sendSubscriptionReminders(now = new Date()) {
       subscriptionStatus: true,
       subscriptionExpiresAt: true,
       trialEndsAt: true,
-      subscription: { select: { status: true, plan: true, currentPeriodEnd: true } },
+      subscription: { select: { status: true, plan: true, billingCycle: true, currentPeriodEnd: true } },
     },
     take: MAX_ORGS,
   });
@@ -38,6 +38,7 @@ async function sendSubscriptionReminders(now = new Date()) {
       {
         status: org.subscription?.status || org.subscriptionStatus,
         plan: org.subscription?.plan || org.subscriptionPlan,
+        billingCycle: org.subscription?.billingCycle || "MONTHLY",
         expiresAt: org.subscription?.currentPeriodEnd || org.subscriptionExpiresAt,
         trialEndsAt: org.trialEndsAt,
       },

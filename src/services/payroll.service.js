@@ -9,6 +9,7 @@ const whatsappService = require("./whatsapp.service");
 const money = require("../utils/money");
 const statutoryService = require("./statutory.service");
 const { normalizeSplit, buildSalaryBreakdown } = require("../utils/salarySplit");
+const { getScheduledDurationMinutes } = require("../utils/shiftCalculator");
 
 /** Mask a bank account so only the last 4 digits are shown on payslips. */
 const maskAccount = (value) => {
@@ -33,8 +34,19 @@ const STATUS_TRANSITIONS = {
 /** Normalise a Date to a YYYY-MM-DD key for set membership tests. */
 const toDateKey = (date) => new Date(date).toISOString().slice(0, 10);
 
+const productiveMinutesForShift = (shift) => {
+  if (!shift) return 480;
+  const configuredTotal = Number(shift.totalWorkingMinutes);
+  const scheduledMinutes = Number.isFinite(configuredTotal) && configuredTotal > 0
+    ? configuredTotal
+    : getScheduledDurationMinutes(shift.startTime, shift.endTime);
+  const breakMinutes = shift.breakIncluded === false ? 0 : Math.max(0, Number(shift.breakMinutes) || 0);
+  const lunchMinutes = shift.lunchIncluded === false ? 0 : Math.max(0, Number(shift.lunchMinutes) || 0);
+  return Math.max(1, scheduledMinutes - breakMinutes - lunchMinutes);
+};
+
 /** A tenant-visible, auditable day ledger used by payroll preview and payslips. */
-const buildDailyPayrollLedger = ({ period, asOf, workingDays, holidayKeys, attendanceByKey, approvedOvertimeByKey, unpaidLeaveKeys, companyLeaveByKey, todayKey, dailyRate, hourlyRate, overtimeMultiplier, lateComingRules, maxLatesBeforeDeduction, lateDeductionPercent }) => {
+const buildDailyPayrollLedger = ({ period, asOf, workingDays, holidayKeys, attendanceByKey, approvedOvertimeByKey, permissionMinutesByKey = new Map(), unpaidLeaveKeys, halfDayLeaveByKey = new Map(), companyLeaveByKey, todayKey, dailyRate, hourlyRate, requiredProductiveMinutes = 480, overtimeMultiplier, lateComingRules, maxLatesBeforeDeduction, lateDeductionPercent }) => {
   const rows = [];
   let lateCount = 0;
   const lateRules = (lateComingRules || []).filter((rule) => rule.isActive && Number(rule.lateDays) > 0 && Number(rule.lopDays) > 0);
@@ -52,7 +64,11 @@ const buildDailyPayrollLedger = ({ period, asOf, workingDays, holidayKeys, atten
 
     if (holiday) { category = "HOLIDAY"; lopDays = 0; note = "Paid company holiday"; }
     else if (weekOff) { category = "WEEK_OFF"; lopDays = 0; note = "Weekly off"; }
-    else if (attendance?.status === "PRESENT" || attendance?.status === "WORK_FROM_HOME") { category = attendance.status; note = "Present"; }
+    else if (halfDayLeaveByKey.has(dateKey)) {
+      if (halfDayLeaveByKey.get(dateKey)) { category = "PAID_HALF_DAY_LEAVE"; note = "Approved paid half-day leave"; }
+      else { category = "UNPAID_HALF_DAY_LEAVE"; lopDays = 0.5; note = "Approved unpaid half-day leave"; }
+    }
+    else if (attendance?.status === "PRESENT" || attendance?.status === "WORK_FROM_HOME" || attendance?.status === "SHORT_HOURS") { category = attendance.status; note = attendance.status === "SHORT_HOURS" ? "Short working hours" : "Present"; }
     else if (attendance?.status === "LATE") { category = "LATE"; note = `${Number(attendance.lateMinutes || 0)} late minutes`; }
     else if (attendance?.status === "HALF_DAY") { category = "HALF_DAY"; lopDays = 0.5; note = "Half day attendance"; }
     else if (attendance?.status === "ON_LEAVE") {
@@ -89,13 +105,29 @@ const buildDailyPayrollLedger = ({ period, asOf, workingDays, holidayKeys, atten
     const approvedSessionMinutes = Number(approvedOvertimeByKey?.get(dateKey) || 0);
     const overtimeMinutes = Number(attendance?.overtimeMinutes || 0) + approvedSessionMinutes;
     const overtimePay = round2((overtimeMinutes / 60) * Number(hourlyRate || 0) * Number(overtimeMultiplier || 1.5));
+    const isWorkedDay = ["PRESENT", "LATE", "WORK_FROM_HOME", "SHORT_HOURS"].includes(attendance?.status);
+    const workingMinutes = Number(attendance?.workingMinutes || 0);
+    // Approved permission is an authorised absence during the shift, so it
+    // reduces the productive minutes expected for that day. This prevents an
+    // approved evening permission from becoming a salary shortfall.
+    const approvedPermissionMinutes = Math.min(requiredProductiveMinutes, Number(permissionMinutesByKey.get(dateKey) || 0));
+    const adjustedRequiredProductiveMinutes = Math.max(0, requiredProductiveMinutes - approvedPermissionMinutes);
+    const shortfallMinutes = isWorkedDay
+      ? Math.max(0, adjustedRequiredProductiveMinutes - workingMinutes)
+      : 0;
+    const hoursShortfallDeduction = round2((shortfallMinutes / requiredProductiveMinutes) * Number(dailyRate || 0));
     rows.push({
       date: dateKey,
       status: category,
       note,
       punchIn: attendance?.checkIn || null,
       punchOut: attendance?.checkOut || null,
-      workingMinutes: Number(attendance?.workingMinutes || 0),
+      workingMinutes,
+      requiredProductiveMinutes: adjustedRequiredProductiveMinutes,
+      scheduledProductiveMinutes: requiredProductiveMinutes,
+      approvedPermissionMinutes,
+      shortfallMinutes,
+      hoursShortfallDeduction,
       overtimeMinutes,
       overtimePay,
       lateMinutes: Number(attendance?.lateMinutes || 0),
@@ -104,7 +136,7 @@ const buildDailyPayrollLedger = ({ period, asOf, workingDays, holidayKeys, atten
       lopDeduction: round2(lopDeduction),
       lateDeductionDays,
       lateDeduction: round2(lateDeduction),
-      earnedSalary: round2(Math.max(0, dailyRate - lopDeduction - lateDeduction + overtimePay)),
+      earnedSalary: round2(Math.max(0, dailyRate - lopDeduction - lateDeduction - hoursShortfallDeduction + overtimePay)),
     });
   }
   return rows;
@@ -125,7 +157,7 @@ class PayrollService {
         startDate: { lte: endDate },
         endDate: { gte: startDate },
       },
-      select: { startDate: true, endDate: true },
+      select: { startDate: true, endDate: true, halfDayPeriod: true },
     });
 
     const dates = new Set();
@@ -135,11 +167,30 @@ class PayrollService {
       );
       const last = new Date(Math.min(new Date(req.endDate).getTime(), endDate.getTime()));
       while (cursor <= last) {
-        dates.add(toDateKey(cursor));
+        if (!req.halfDayPeriod) dates.add(toDateKey(cursor));
         cursor.setUTCDate(cursor.getUTCDate() + 1);
       }
     }
     return dates;
+  }
+
+  async _getHalfDayLeaveDays(organizationId, employeeId, startDate, endDate) {
+    const requests = await prisma.leaveRequest.findMany({
+      where: {
+        organizationId,
+        employeeId,
+        status: "APPROVED",
+        totalDays: 0.5,
+        startDate: { lte: endDate },
+        endDate: { gte: startDate },
+      },
+      select: { startDate: true, halfDayPeriod: true, leaveType: { select: { isPaid: true } } },
+    });
+    const days = new Map();
+    for (const request of requests) {
+      if (request.halfDayPeriod) days.set(toDateKey(request.startDate), Boolean(request.leaveType?.isPaid));
+    }
+    return days;
   }
 
   /**
@@ -321,7 +372,7 @@ class PayrollService {
       where: { id: employeeId, organizationId },
       include: {
         salaryStructure: true,
-        shift: { select: { workingDays: true } },
+        shift: { select: { workingDays: true, startTime: true, endTime: true, breakMinutes: true, lunchMinutes: true, breakIncluded: true, lunchIncluded: true, totalWorkingMinutes: true } },
         user: { select: { email: true } },
       },
     });
@@ -392,6 +443,7 @@ class PayrollService {
     // lives on LeaveType.isPaid. Without this lookup, loss-of-pay leave would be
     // counted as paid leave and the employee would be paid in full.
     const unpaidLeaveKeys = await this._getUnpaidLeaveDates(organizationId, employeeId, period.start, period.end);
+    const halfDayLeaveByKey = await this._getHalfDayLeaveDays(organizationId, employeeId, period.start, period.end);
 
     // Company-wide holidays plus holidays for this employee's branch
     const holidays = await prisma.holiday.findMany({
@@ -416,6 +468,25 @@ class PayrollService {
     });
     const companyLeaveByKey = buildCompanyLeaveMap(companyLeaves, period);
 
+    // Keep the approved permission minutes per day so authorised time away is
+    // removed from that day's productive-hours target.
+    const approvedPermissions = prisma.permissionRequest?.findMany
+      ? await prisma.permissionRequest.findMany({
+        where: { organizationId, employeeId, status: "APPROVED", date: { gte: period.start, lte: period.end } },
+        select: { date: true, hours: true, startTime: true, endTime: true, startedAt: true, endedAt: true },
+      })
+      : [];
+    const permissionMinutesByKey = new Map();
+    approvedPermissions.forEach((row) => {
+      const minutes = row.startedAt && row.endedAt
+        ? Math.max(0, Math.round((new Date(row.endedAt).getTime() - new Date(row.startedAt).getTime()) / 60000))
+        : row.startTime && row.endTime
+          ? Math.max(0, (Number(row.endTime.split(":")[0]) * 60 + Number(row.endTime.split(":")[1])) - (Number(row.startTime.split(":")[0]) * 60 + Number(row.startTime.split(":")[1])))
+          : Math.round(Number(row.hours || 0) * 60);
+      const key = toIsoKey(row.date);
+      permissionMinutesByKey.set(key, Number(permissionMinutesByKey.get(key) || 0) + minutes);
+    });
+
     const dayCounts = classifyPayrollDays({
       period,
       asOf: todayDate,
@@ -423,6 +494,7 @@ class PayrollService {
       holidayKeys,
       attendanceStatusByKey,
       unpaidLeaveKeys,
+      halfDayLeaveByKey,
       companyLeaveByKey,
       todayKey,
     });
@@ -434,11 +506,14 @@ class PayrollService {
       holidayKeys,
       attendanceByKey,
       approvedOvertimeByKey,
+      permissionMinutesByKey,
       unpaidLeaveKeys,
+      halfDayLeaveByKey,
       companyLeaveByKey,
       todayKey,
       dailyRate,
       hourlyRate,
+      requiredProductiveMinutes: productiveMinutesForShift(employee.shift),
       overtimeMultiplier,
       lateComingRules,
       maxLatesBeforeDeduction,
@@ -493,10 +568,10 @@ class PayrollService {
     // as entitlements; only the chosen cash remainder is payable here.
     const overtimeAllocation = await prisma.overtimeAllocation.findUnique({
       where: { employeeId_month_year: { employeeId, month: m, year: y } },
-      select: { id: true, status: true, approvedMinutes: true, permissionMinutes: true, leaveMinutes: true, compOffMinutes: true, cashMinutes: true },
+      select: { id: true, status: true, approvedMinutes: true, permissionMinutes: true, leaveMinutes: true, compOffMinutes: true, cashMinutes: true, settledPermissionMinutes: true, settledLeaveMinutes: true, settledCompOffMinutes: true, settledCashMinutes: true },
     });
-    if (overtimeAllocation?.status === "APPROVED") {
-      totalOvertimeMinutes = Math.max(0, Number(overtimeAllocation.cashMinutes || 0) - exactTravelOtMinutes);
+    if (overtimeAllocation && (overtimeAllocation.status === "APPROVED" || overtimeAllocation.settledCashMinutes != null)) {
+      totalOvertimeMinutes = Math.max(0, Number(overtimeAllocation.settledCashMinutes ?? overtimeAllocation.cashMinutes ?? 0) - exactTravelOtMinutes);
     }
 
     const overtimeHours = Math.round((totalOvertimeMinutes / 60) * 10) / 10;
@@ -507,15 +582,6 @@ class PayrollService {
 
     // Permission hours approved in this cycle. The monthly allowance covers the first hours in
     // each cycle; hours beyond it are charged at the hourly rate.
-    const approvedPermissions = await prisma.permissionRequest.findMany({
-      where: {
-        organizationId,
-        employeeId,
-        status: "APPROVED",
-        date: { gte: period.start, lte: period.end },
-      },
-      select: { hours: true, startedAt: true, endedAt: true },
-    });
     const approvedPermissionHours = approvedPermissions.reduce((sum, row) => {
       // New permission sessions are charged by the GPS-verified time captured
       // by the employee. Keep the requested hours for older records that do
@@ -527,7 +593,7 @@ class PayrollService {
     }, 0);
     const permission = computePermissionDeduction({
       approvedHours: approvedPermissionHours,
-      allowanceHours: Number(policy.monthlyPermissionHours || 0) + (overtimeAllocation?.status === "APPROVED" ? Number(overtimeAllocation.permissionMinutes || 0) / 60 : 0),
+      allowanceHours: Number(policy.monthlyPermissionHours || 0) + (overtimeAllocation && (overtimeAllocation.status === "APPROVED" || overtimeAllocation.settledPermissionMinutes != null) ? Number(overtimeAllocation.settledPermissionMinutes ?? overtimeAllocation.permissionMinutes ?? 0) / 60 : 0),
       dailyRate,
     });
 
@@ -535,9 +601,11 @@ class PayrollService {
     const unpaidLeaveDeduction = money.multiply(dailyRate, unpaidLeaveDays);
     const lateCount = dayCounts.lateCount;
     const lateDeduction = money.round(dailyPayroll.reduce((sum, row) => sum + Number(row.lateDeduction || 0), 0));
+    const hoursShortfallDeduction = money.round(dailyPayroll.reduce((sum, row) => sum + Number(row.hoursShortfallDeduction || 0), 0));
     const statutoryDeductions = money.sum(pf, esi, professionalTax);
     const deductionsTotal = money.sum(
       unpaidLeaveDeduction,
+      hoursShortfallDeduction,
       lateDeduction,
       permission.deduction,
       statutoryDeductions
@@ -617,10 +685,10 @@ class PayrollService {
           id: overtimeAllocation.id,
           status: overtimeAllocation.status,
           approvedMinutes: Number(overtimeAllocation.approvedMinutes || 0),
-          permissionMinutes: Number(overtimeAllocation.permissionMinutes || 0),
-          leaveMinutes: Number(overtimeAllocation.leaveMinutes || 0),
-          compOffMinutes: Number(overtimeAllocation.compOffMinutes || 0),
-          cashMinutes: Number(overtimeAllocation.cashMinutes || 0),
+          permissionMinutes: Number(overtimeAllocation.settledPermissionMinutes ?? overtimeAllocation.permissionMinutes ?? 0),
+          leaveMinutes: Number(overtimeAllocation.settledLeaveMinutes ?? overtimeAllocation.leaveMinutes ?? 0),
+          compOffMinutes: Number(overtimeAllocation.settledCompOffMinutes ?? overtimeAllocation.compOffMinutes ?? 0),
+          cashMinutes: Number(overtimeAllocation.settledCashMinutes ?? overtimeAllocation.cashMinutes ?? 0),
         } : null,
       },
       dailyPayroll,
@@ -640,6 +708,7 @@ class PayrollService {
       },
       deductions: {
         unpaidLeaveDeduction,
+        hoursShortfallDeduction,
         lateDeduction,
         permissionDeduction: permission.deduction,
         pfDeduction: pf,
@@ -854,6 +923,7 @@ class PayrollService {
         overtimePay: payroll.salaryBreakdown.overtimePay,
         grossSalary: payroll.salaryBreakdown.grossSalary,
         unpaidLeaveDeduction: payroll.deductions.unpaidLeaveDeduction || 0,
+        hoursShortfallDeduction: payroll.deductions.hoursShortfallDeduction || 0,
         lateDeduction: payroll.deductions.lateDeduction || 0,
         pfDeduction: payroll.deductions.pfDeduction || 0,
         esiDeduction: payroll.deductions.esiDeduction || 0,
@@ -1314,6 +1384,12 @@ class PayrollService {
         category: "ATTENDANCE_LATE",
         explanation: "Deduction for late arrival(s) exceeding grace policy",
       }] : []),
+      ...(Number(payslip.hoursShortfallDeduction || 0) > 0 ? [{
+        label: "Short Working Hours Deduction",
+        amount: Number(payslip.hoursShortfallDeduction),
+        category: "ATTENDANCE_HOURS",
+        explanation: "Productive hours below the assigned shift target were deducted proportionally.",
+      }] : []),
       ...(Number(payslip.permissionDeduction || 0) > 0 ? [{
         label: "Permission / Excess Hours Deduction",
         amount: Number(payslip.permissionDeduction),
@@ -1390,6 +1466,7 @@ class PayrollService {
         paidLeaveDays: Number(payslip.paidLeaveDays),
         unpaidLeaveDays: Number(payslip.unpaidLeaveDays),
         lopDeduction: Number(payslip.unpaidLeaveDeduction || 0),
+        hoursShortfallDeduction: Number(payslip.hoursShortfallDeduction || 0),
         overtimeHours: Number(payslip.overtimeHours),
         overtimeMinutes: Math.round(Number(payslip.overtimeHours || 0) * 60),
         overtimePay: Number(payslip.overtimePay || 0),
@@ -1719,3 +1796,5 @@ class PayrollService {
 }
 
 module.exports = new PayrollService();
+module.exports.buildDailyPayrollLedger = buildDailyPayrollLedger;
+module.exports.productiveMinutesForShift = productiveMinutesForShift;

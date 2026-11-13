@@ -13,6 +13,7 @@
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:verify:attendance": "node scripts/verify-attendance-schema.js",
+    "admin:create-platform-owner": "node scripts/create-platform-owner.js",
     "seed:workforce": "node scripts/seed-realistic-workforce.js",
     "db:local:deploy": "prisma db push",
     "db:local:push": "prisma db push",

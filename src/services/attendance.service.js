@@ -51,6 +51,32 @@ const getLateGraceMinutes = async (organizationId, fallback = 10) => {
   }
 };
 
+// An approved, timed permission can move the effective start of the day.
+// Permission is not a late mark: only time after the approved end is late.
+const getApprovedPermissionForDate = (organizationId, employeeId, date) => {
+  // Some older deployments/tests do not expose the additive permission model.
+  if (!prisma.permissionRequest?.findFirst) return Promise.resolve(null);
+  return prisma.permissionRequest.findFirst({
+    where: { organizationId, employeeId, date, status: "APPROVED" },
+    select: { id: true, startTime: true, endTime: true, hours: true },
+  });
+};
+
+const calculateLateMinutesWithPermission = ({ shift, graceMinutes, checkInTime, permission, timeZone }) => {
+  const normalLate = calculateLateMinutes(shift.startTime, graceMinutes, checkInTime, timeZone);
+  if (!permission?.startTime || !permission?.endTime) return normalLate;
+
+  const permissionStart = parseTimeToMinutes(permission.startTime, timeZone);
+  const permissionEnd = parseTimeToMinutes(permission.endTime, timeZone);
+  const actual = parseTimeToMinutes(checkInTime, timeZone);
+
+  // Evening permission must not waive a morning late mark. A permission can
+  // affect lateness only once the punch has reached its own start time.
+  if (actual < permissionStart) return normalLate;
+  if (actual <= permissionEnd) return 0;
+  return Math.max(0, actual - permissionEnd);
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -331,12 +357,45 @@ const assertTrustedDevice = async (employee, organizationId, policy, deviceId) =
 const isOnBehalf = (employee, userId) => Boolean(userId && employee?.userId && employee.userId !== userId);
 
 const assertPersonalLeaveDoesNotBlockAdmin = ({ approvedLeave, employee, userId, actorRole }) => {
-  if (!approvedLeave || (isOnBehalf(employee, userId) && ADMIN_ROLES.includes(actorRole))) return;
+  if (!approvedLeave || approvedLeave.halfDayPeriod || (isOnBehalf(employee, userId) && ADMIN_ROLES.includes(actorRole))) return;
   const leaveName = approvedLeave.leaveType?.name || "approved leave";
   const error = new Error(`Punch-in is disabled today because your ${leaveName} was approved. If you need to work, ask HR or an admin to cancel the leave first.`);
   error.statusCode = 403;
   error.code = "APPROVED_LEAVE_BLOCKED";
   error.leave = { title: leaveName };
+  throw error;
+};
+
+/**
+ * A half-day leave is the half of the employee's assigned company shift. The
+ * midpoint is calculated from the configured shift clock, so 09:00-18:00
+ * opens the afternoon punch at 13:30 and closes an afternoon leave checkout
+ * at 13:30. Administrators recording attendance for someone else are not
+ * constrained by this self-service window.
+ */
+const assertHalfDayPunchWindow = ({ approvedLeave, shift, at, timezone, action, employee, userId, actorRole }) => {
+  if (!approvedLeave?.halfDayPeriod || (isOnBehalf(employee, userId) && ADMIN_ROLES.includes(actorRole))) return;
+  const start = parseTimeToMinutes(shift?.startTime);
+  const end = parseTimeToMinutes(shift?.endTime);
+  if (start === null || end === null || start === end) return;
+
+  const endOnTimeline = end <= start ? end + 1440 : end;
+  const midpoint = (start + (endOnTimeline - start) / 2) % 1440;
+  const current = getLocalMinutesOfDay(at, timezone);
+  const afterMidpoint = start <= end ? current >= midpoint : current >= start || current < midpoint;
+  const beforeMidpoint = start <= end ? current <= midpoint : current >= start || current <= midpoint;
+  const allowed = approvedLeave.halfDayPeriod === "MORNING" ? action === "CHECK_IN" ? afterMidpoint : true : action === "CHECK_OUT" ? beforeMidpoint : current <= midpoint;
+  if (allowed) return;
+
+  const boundary = `${String(Math.floor(midpoint / 60)).padStart(2, "0")}:${String(Math.round(midpoint % 60)).padStart(2, "0")}`;
+  const error = new Error(
+    approvedLeave.halfDayPeriod === "MORNING"
+      ? `Morning half-day leave is active. You can punch in from ${boundary}, after the first half of your company hours.`
+      : `Afternoon half-day leave is active. You must complete your punch before ${boundary}, the end of the first half of your company hours.`
+  );
+  error.statusCode = 403;
+  error.code = "HALF_DAY_PUNCH_WINDOW";
+  error.leave = { period: approvedLeave.halfDayPeriod, boundary };
   throw error;
 };
 
@@ -354,6 +413,33 @@ const assertLocationCaptured = ({ latitude, longitude, action, skip }) => {
     error.code = "LOCATION_REQUIRED";
     throw error;
   }
+};
+
+// Breaks and lunch follow the same office boundary as an office check-in.
+// Away-from-office sessions (WFH, travel, client visit and shoot) are exempt.
+const assertPauseGeofence = async ({ organizationId, employee, attendance, latitude, longitude, accuracy, label, userId, actorRole }) => {
+  const isAdminOnBehalf = isOnBehalf(employee, userId) && ADMIN_ROLES.includes(actorRole);
+  const isAwaySession = attendance?.status === "WORK_FROM_HOME" || /^(WORK_FROM_HOME|CLIENT_VISIT|TRAVEL|SHOOT):/i.test(String(attendance?.wfhNote || ""));
+  const isAnyTimeShift = Boolean(employee?.flexiblePunching || attendance?.shift?.flexiblePunching);
+  if (isAdminOnBehalf || isAwaySession || isAnyTimeShift) {
+    return {
+      isBypassed: true,
+      bypassReason: isAwaySession ? "AWAY_SESSION" : isAnyTimeShift ? "ANY_TIME_SHIFT" : "ADMIN",
+    };
+  }
+  assertLocationCaptured({ latitude, longitude, action: `take ${label.toLowerCase()}`, skip: false });
+  const branches = await prisma.branch.findMany({ where: { organizationId } });
+  const branchesWithCoords = branches.filter(hasCoordinatePair);
+  if (!branchesWithCoords.length) return { isBypassed: true, bypassReason: "NO_BRANCH_GPS_CONFIGURED" };
+  const rejection = officeOnlyRejection({ latitude, longitude, accuracy, branches: branchesWithCoords });
+  if (rejection) {
+    const error = new Error(rejection.code === "LOCATION_IMPRECISE" ? rejection.message : `You're outside the office geofence. ${label} can only be started or ended within ${rejection.details.allowedRadiusMeters} m of ${rejection.details.branchName || "your office"}.`);
+    error.statusCode = 403;
+    error.code = rejection.code;
+    error.details = rejection.details;
+    throw error;
+  }
+  return { isBypassed: false, bypassReason: null };
 };
 
 // Employees may punch in at any time before the assigned shift ends. Once the
@@ -404,7 +490,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
   const shift = await resolveShift(employee, organizationId, checkInTime);
   const isOffDay = shift ? !isWorkingDay(shift, checkInTime, timezone) : false;
 
-  const [holidayRow, approvedLeave, companyLeave] = await Promise.all([
+  const [holidayRow, approvedLeave, companyLeave, approvedPermission] = await Promise.all([
     prisma.holiday.findFirst({
       where: {
         organizationId,
@@ -431,15 +517,18 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
       },
       select: { title: true, reason: true, isPaid: true },
     }),
+    getApprovedPermissionForDate(organizationId, employee.id, today),
   ]);
   // Company leave (for example Diwali) is a day off for everyone it covers, like a holiday.
   const holiday = holidayRow || (companyLeave ? { name: companyLeave.title } : null);
 
   const isHoliday = Boolean(holiday);
   const isOnLeave = Boolean(approvedLeave);
-  const isOvertimeShift = isOffDay || isHoliday || isOnLeave;
+  const isFullDayLeave = isOnLeave && !approvedLeave.halfDayPeriod;
+  const isOvertimeShift = isOffDay || isHoliday || isFullDayLeave;
 
   assertPersonalLeaveDoesNotBlockAdmin({ approvedLeave, employee, userId, actorRole });
+  assertHalfDayPunchWindow({ approvedLeave, shift, at: checkInTime, timezone, action: "CHECK_IN", employee, userId, actorRole });
 
   // Weekly off, holiday and company leave are closed for punching unless HR or an admin approved work today.
   await assertDayOffWorkApproved({
@@ -542,8 +631,9 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
   // inside a branch radius. Previously a punch without coordinates slipped
   // through as a bypass, so denying location permission defeated the rule.
   const isSpecialWorkMode = SPECIAL_WORK_MODES.includes(workMode);
-  const officeModeRequiresGeofence = workMode === "OFFICE" && branchesWithCoords.length > 0;
-  if ((policy.geofenceStrict || officeModeRequiresGeofence) && !skipGeofence && !isSpecialWorkMode) {
+  const isAnyTimeShift = Boolean(employee.flexiblePunching || shift?.flexiblePunching);
+  const officeModeRequiresGeofence = workMode === "OFFICE" && branchesWithCoords.length > 0 && !isAnyTimeShift;
+  if ((policy.geofenceStrict || officeModeRequiresGeofence) && !skipGeofence && !isSpecialWorkMode && !isAnyTimeShift) {
     const rejection = officeOnlyRejection({ latitude, longitude, accuracy, branches: branchesWithCoords, allowWfh: policy.allowWfh });
     if (rejection) {
       const error = new Error(rejection.message);
@@ -572,8 +662,14 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
   let status = workMode === "WORK_FROM_HOME" ? "WORK_FROM_HOME" : "PRESENT";
 
   // If working on rest day/leave/holiday, late does not penalize the employee
-  if (!isOvertimeShift && shift) {
-    lateMinutes = calculateLateMinutes(shift.startTime, await getLateGraceMinutes(organizationId, shift.graceMinutes), checkInTime);
+  if (!isOvertimeShift && approvedLeave?.halfDayPeriod !== "MORNING" && shift) {
+    lateMinutes = calculateLateMinutesWithPermission({
+      shift,
+      graceMinutes: await getLateGraceMinutes(organizationId, shift.graceMinutes),
+      checkInTime,
+      permission: approvedPermission,
+      timeZone: timezone,
+    });
     if (lateMinutes > 0 && status !== "WORK_FROM_HOME") status = "LATE";
   }
 
@@ -589,6 +685,27 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
     error.statusCode = 400;
     error.attendance = existingAttendance;
     throw error;
+  }
+
+  // Do not start a second session on the next calendar day while a flexible
+  // or overnight session is still open. The normal UI already shows the open
+  // session as "Punch out", but this guard also protects direct/API callers.
+  const carriedOpenAttendance = await findOpenAttendance(employee.id, organizationId, checkInTime, { shift: true });
+  if (carriedOpenAttendance?.checkIn && !carriedOpenAttendance.checkOut && carriedOpenAttendance.date < today) {
+    const elapsedHours = (checkInTime.getTime() - new Date(carriedOpenAttendance.checkIn).getTime()) / 3_600_000;
+    const belongsToFlexibleSession = Boolean(employee.flexiblePunching || carriedOpenAttendance.shift?.flexiblePunching);
+    if (
+      (belongsToFlexibleSession || isOvernightShift(carriedOpenAttendance.shift)) &&
+      elapsedHours > 0 &&
+      elapsedHours <= 20
+    ) {
+      const timeStr = formatLocalTime(carriedOpenAttendance.checkIn, timezone);
+      const error = new Error(`You are already punched in from ${timeStr}. Punch out that shift before punching in again.`);
+      error.statusCode = 400;
+      error.code = "OPEN_ATTENDANCE_EXISTS";
+      error.attendance = carriedOpenAttendance;
+      throw error;
+    }
   }
 
   // Keep the selected work mode alongside the optional note. The attendance
@@ -718,7 +835,7 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
   const shift = await resolveShift(employee, organizationId, checkInTime);
   const isOffDay = shift ? !isWorkingDay(shift, checkInTime, timezone) : false;
 
-  const [holidayRow, approvedLeave, companyLeave] = await Promise.all([
+  const [holidayRow, approvedLeave, companyLeave, approvedPermission] = await Promise.all([
     prisma.holiday.findFirst({
       where: {
         organizationId,
@@ -745,15 +862,18 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
       },
       select: { title: true, reason: true, isPaid: true },
     }),
+    getApprovedPermissionForDate(organizationId, employee.id, today),
   ]);
   // Company leave (for example Diwali) is a day off for everyone it covers, like a holiday.
   const holiday = holidayRow || (companyLeave ? { name: companyLeave.title } : null);
 
   const isHoliday = Boolean(holiday);
   const isOnLeave = Boolean(approvedLeave);
-  const isOvertimeShift = isOffDay || isHoliday || isOnLeave;
+  const isFullDayLeave = isOnLeave && !approvedLeave.halfDayPeriod;
+  const isOvertimeShift = isOffDay || isHoliday || isFullDayLeave;
 
   assertPersonalLeaveDoesNotBlockAdmin({ approvedLeave, employee, userId, actorRole });
+  assertHalfDayPunchWindow({ approvedLeave, shift, at: checkInTime, timezone, action: "CHECK_IN", employee, userId, actorRole });
 
   await assertDayOffWorkApproved({
     employee,
@@ -784,8 +904,14 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
   }
 
   let lateMinutes = 0;
-  if (!isOvertimeShift && shift) {
-    lateMinutes = calculateLateMinutes(shift.startTime, await getLateGraceMinutes(organizationId, shift.graceMinutes), checkInTime);
+  if (!isOvertimeShift && approvedLeave?.halfDayPeriod !== "MORNING" && shift) {
+    lateMinutes = calculateLateMinutesWithPermission({
+      shift,
+      graceMinutes: await getLateGraceMinutes(organizationId, shift.graceMinutes),
+      checkInTime,
+      permission: approvedPermission,
+      timeZone: timezone,
+    });
   }
 
   const checkInLocation = await resolvePunchLocation({
@@ -891,13 +1017,20 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
       orderBy: { date: "desc" },
     });
 
-    // Only adopt it when the open punch genuinely belongs to an overnight shift
-    // and is still within a plausible window, so a forgotten checkout from days
-    // ago is not silently closed against today's punch.
+    // Adopt an open punch from the previous local date for both overnight and
+    // flexible ("Any time") shifts. A flexible shift has no reliable wall-clock
+    // end time, so the punch-in record is the source of truth for its attendance
+    // date. Keep the elapsed-time guard so a forgotten punch is not silently
+    // closed against a later day's checkout.
     if (openShift) {
       const elapsedHours =
         (checkOutTime.getTime() - new Date(openShift.checkIn).getTime()) / 3_600_000;
-      if ((openShift.workMode === "SHOOT" || isOvernightShift(openShift.shift)) && elapsedHours > 0 && elapsedHours <= 20) {
+      const belongsToFlexibleShift = Boolean(employee.flexiblePunching || openShift.shift?.flexiblePunching);
+      if (
+        (openShift.workMode === "SHOOT" || isOvernightShift(openShift.shift) || belongsToFlexibleShift) &&
+        elapsedHours > 0 &&
+        elapsedHours <= 20
+      ) {
         attendance = openShift;
       }
     }
@@ -925,7 +1058,7 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
   let shift = attendance.shift || (await resolveShift(employee, organizationId, attendanceDate));
   const isOffDay = shift ? !isWorkingDay(shift, attendanceDate, timezone) : false;
 
-  const [holidayRow, approvedLeave, companyLeave] = await Promise.all([
+  const [holidayRow, approvedLeave, companyLeave, approvedPermission] = await Promise.all([
     prisma.holiday.findFirst({
       where: {
         organizationId,
@@ -951,10 +1084,13 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
       },
       select: { title: true, reason: true, isPaid: true },
     }),
+    getApprovedPermissionForDate(organizationId, employee.id, attendanceDate),
   ]);
   const holiday = holidayRow || (companyLeave ? { name: companyLeave.title } : null);
 
-  const isNonWorkingDay = isOffDay || Boolean(holiday) || Boolean(approvedLeave);
+  const isFullDayLeave = Boolean(approvedLeave && !approvedLeave.halfDayPeriod);
+  const isNonWorkingDay = isOffDay || Boolean(holiday) || isFullDayLeave;
+  assertHalfDayPunchWindow({ approvedLeave, shift, at: checkOutTime, timezone, action: "CHECK_OUT", employee, userId, actorRole });
 
   // Auto-close either kind of pause at checkout and keep break/lunch totals separate.
   const activePauseStart = attendance.events?.[0];
@@ -1023,6 +1159,48 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
     };
   }
 
+  // Half-day leave is an approved schedule adjustment, not a late arrival or
+  // early departure. Keep the attendance record clean for dashboards and
+  // payroll; the leave request itself supplies the paid/unpaid half-day.
+  if (approvedLeave?.halfDayPeriod) {
+    metrics.lateMinutes = 0;
+    metrics.originalLateMinutes = 0;
+    metrics.lateFormatted = formatMinutes(0);
+    if (metrics.status === "LATE") metrics.status = "PRESENT";
+    if (approvedLeave.halfDayPeriod === "AFTERNOON") {
+      metrics.earlyMinutes = 0;
+      metrics.earlyFormatted = formatMinutes(0);
+    }
+  }
+
+  // The shift calculator sees the raw punch-in time. Re-apply the approved
+  // permission window so only time after permission ends is treated as late.
+  if (!isNonWorkingDay && shift && !shift.flexiblePunching && !approvedLeave?.halfDayPeriod) {
+    metrics.lateMinutes = calculateLateMinutesWithPermission({
+      shift,
+      graceMinutes: await getLateGraceMinutes(organizationId, shift.graceMinutes),
+      checkInTime: attendance.checkIn,
+      permission: approvedPermission,
+      timeZone: timezone,
+    });
+    metrics.lateFormatted = formatMinutes(metrics.lateMinutes);
+    if (metrics.lateMinutes === 0 && metrics.status === "LATE") metrics.status = "PRESENT";
+    if (metrics.lateMinutes > 0 && metrics.status === "PRESENT") metrics.status = "LATE";
+  }
+
+  // An approved permission that contains the checkout time also waives the
+  // early-departure mark (for example, 4:00–5:00 PM permission on a 6:00 PM
+  // shift). The permission itself remains available for payroll accounting.
+  if (!isNonWorkingDay && shift && !shift.flexiblePunching && approvedPermission?.startTime && approvedPermission?.endTime) {
+    const permissionStart = parseTimeToMinutes(approvedPermission.startTime, timezone);
+    const permissionEnd = parseTimeToMinutes(approvedPermission.endTime, timezone);
+    const actualCheckout = parseTimeToMinutes(checkOutTime, timezone);
+    if (actualCheckout >= permissionStart && actualCheckout <= permissionEnd && metrics.earlyMinutes > 0) {
+      metrics.earlyMinutes = 0;
+      metrics.earlyFormatted = formatMinutes(0);
+    }
+  }
+
   // Shoot overtime is approved through Shoot Settlement, so retain the raw
   // value for that flow. Other overtime sources still use the normal approval
   // gate and are not paid until approved.
@@ -1052,6 +1230,10 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
 
   // Preserve the mode selected at punch-in when punching out. Shoot is stored in wfhNote.
   const effectiveWorkMode = attendance.wfhNote?.startsWith("SHOOT:") ? "SHOOT" : (workMode || "OFFICE");
+  const isAnyTimeShift = Boolean(employee.flexiblePunching || shift?.flexiblePunching);
+  const checkoutGeofence = skipGeofence || source === "BIOMETRIC" || isAnyTimeShift
+    ? { isBypassed: true, bypassReason: source === "BIOMETRIC" ? "BIOMETRIC_DEVICE" : isAnyTimeShift ? "ANY_TIME_SHIFT" : "DEVICE" }
+    : await assertPauseGeofence({ organizationId, employee, attendance, latitude, longitude, accuracy, label: "Punch-out", userId, actorRole });
   const checkOutLocation = await resolvePunchLocation({
     locationLabel,
     latitude,
@@ -1166,8 +1348,8 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
         latitude: latitude ? String(latitude) : null,
         longitude: longitude ? String(longitude) : null,
         accuracy: accuracy ? String(accuracy) : null,
-        isBypassed: true,
-        bypassReason: effectiveWorkMode || "GEOFENCE_FLEXIBLE",
+        isBypassed: checkoutGeofence.isBypassed,
+        bypassReason: checkoutGeofence.bypassReason || effectiveWorkMode || "GEOFENCE_FLEXIBLE",
         ...(durableClientEventId(organizationId, employee.userId || userId, clientEventId)
           ? { clientEventId: durableClientEventId(organizationId, employee.userId || userId, clientEventId) }
           : {}),
@@ -1226,7 +1408,7 @@ const pauseTypes = {
   LUNCH: { start: "LUNCH_START", end: "LUNCH_END", field: "lunchMinutes", label: "Lunch" },
 };
 
-const startPause = async ({ userId, employeeId, organizationId, latitude, longitude, timestamp, actorRole = null, pauseType = "BREAK" }) => {
+const startPause = async ({ userId, employeeId, organizationId, latitude, longitude, accuracy, timestamp, actorRole = null, pauseType = "BREAK" }) => {
   const config = pauseTypes[pauseType] || pauseTypes.BREAK;
   const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
   const timezone = await getOrgTimezone(organizationId);
@@ -1236,7 +1418,8 @@ const startPause = async ({ userId, employeeId, organizationId, latitude, longit
   if (attendance.checkOut) { const error = new Error(`Cannot take ${config.label.toLowerCase()} after punching out`); error.statusCode = 400; throw error; }
   const lastEvent = attendance.events[0];
   if (lastEvent && (lastEvent.type === "BREAK_START" || lastEvent.type === "LUNCH_START")) { const error = new Error(`You are already on ${lastEvent.type === "LUNCH_START" ? "lunch" : "a break"}`); error.statusCode = 400; throw error; }
-  const event = await prisma.attendanceEvent.create({ data: { attendanceId: attendance.id, type: config.start, timestamp: eventTime, latitude: latitude ? String(latitude) : null, longitude: longitude ? String(longitude) : null, isBypassed: false } });
+  const location = await assertPauseGeofence({ organizationId, employee, attendance, latitude, longitude, accuracy, label: config.label, userId, actorRole });
+  const event = await prisma.attendanceEvent.create({ data: { attendanceId: attendance.id, type: config.start, timestamp: eventTime, latitude: latitude ? String(latitude) : null, longitude: longitude ? String(longitude) : null, isBypassed: location.isBypassed, bypassReason: location.bypassReason } });
   
   // Notify Manager, HR and admins of break/lunch start.
   try {
@@ -1254,7 +1437,7 @@ const startPause = async ({ userId, employeeId, organizationId, latitude, longit
   return { success: true, message: `${config.label} started at ${formatLocalTime(eventTime, timezone)}`, event, attendance };
 };
 
-const endPause = async ({ userId, employeeId, organizationId, latitude, longitude, timestamp, actorRole = null, pauseType = "BREAK" }) => {
+const endPause = async ({ userId, employeeId, organizationId, latitude, longitude, accuracy, timestamp, actorRole = null, pauseType = "BREAK" }) => {
   const config = pauseTypes[pauseType] || pauseTypes.BREAK;
   const employee = await resolveEmployee(userId, employeeId, organizationId, actorRole);
   const timezone = await getOrgTimezone(organizationId);
@@ -1264,11 +1447,12 @@ const endPause = async ({ userId, employeeId, organizationId, latitude, longitud
   const lastStart = attendance.events.find((e) => e.type === config.start);
   const lastEnd = attendance.events.find((e) => e.type === config.end);
   if (!lastStart || (lastEnd && new Date(lastEnd.timestamp) >= new Date(lastStart.timestamp))) { const error = new Error(`No active ${config.label.toLowerCase()} to end`); error.statusCode = 400; throw error; }
+  const location = await assertPauseGeofence({ organizationId, employee, attendance, latitude, longitude, accuracy, label: config.label, userId, actorRole });
   const durationSeconds = Math.max(0, Math.floor((eventTime.getTime() - new Date(lastStart.timestamp).getTime()) / 1000));
   const durationMinutes = Math.max(0, Math.floor(durationSeconds / 60));
   const updatedAttendance = await prisma.$transaction(async (tx) => {
     const record = await tx.attendance.update({ where: { id: attendance.id }, data: { [config.field]: (attendance[config.field] || 0) + durationMinutes } });
-    const event = await tx.attendanceEvent.create({ data: { attendanceId: attendance.id, type: config.end, timestamp: eventTime, latitude: latitude ? String(latitude) : null, longitude: longitude ? String(longitude) : null, isBypassed: false } });
+    const event = await tx.attendanceEvent.create({ data: { attendanceId: attendance.id, type: config.end, timestamp: eventTime, latitude: latitude ? String(latitude) : null, longitude: longitude ? String(longitude) : null, isBypassed: location.isBypassed, bypassReason: location.bypassReason } });
     return { ...record, event };
   });
 
@@ -1342,7 +1526,7 @@ const getBreakDetails = async ({ userId, employeeId, organizationId, attendanceI
  * the correction request flow.
  */
 const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, date, status, checkIn, checkOut, reason }) => {
-  const validStatuses = ["PRESENT", "ABSENT", "LATE", "HALF_DAY", "ON_LEAVE", "HOLIDAY", "WEEK_OFF", "WORK_FROM_HOME"];
+  const validStatuses = ["PRESENT", "ABSENT", "LATE", "HALF_DAY", "SHORT_HOURS", "ON_LEAVE", "HOLIDAY", "WEEK_OFF", "WORK_FROM_HOME"];
   if (!validStatuses.includes(status)) {
     const error = new Error(`Invalid status. Allowed: ${validStatuses.join(", ")}`);
     error.statusCode = 400;
@@ -1364,16 +1548,32 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
   const timezone = await getOrgTimezone(organizationId);
   const policy = await getPolicy(organizationId);
 
+  // Admin corrections enter wall-clock times for the attendance date. For a
+  // flexible or overnight shift, an out time earlier than the in time means
+  // the checkout happened after midnight on the following calendar date.
+  let normalizedCheckIn = checkIn ? new Date(checkIn) : null;
+  let normalizedCheckOut = checkOut ? new Date(checkOut) : null;
+  if (normalizedCheckIn && normalizedCheckOut && normalizedCheckOut <= normalizedCheckIn) {
+    if (shift?.flexiblePunching || isOvernightShift(shift)) {
+      normalizedCheckOut = new Date(normalizedCheckOut.getTime() + 24 * 60 * 60 * 1000);
+    } else {
+      const error = new Error("Punch-out time must be after punch-in time");
+      error.statusCode = 400;
+      throw error;
+    }
+  }
+
   let workingMinutes = 0;
   let lateMinutes = 0;
   let earlyMinutes = 0;
   let overtimeMinutes = 0;
+  let attendanceStatus = status;
 
-  if (checkIn && checkOut && shift) {
+  if (normalizedCheckIn && normalizedCheckOut && shift) {
     const metrics = evaluateAttendanceAgainstShift(
       shift,
-      new Date(checkIn),
-      new Date(checkOut),
+      normalizedCheckIn,
+      normalizedCheckOut,
       0,
       { timeZone: timezone, halfDayThresholdMinutes: policy.halfDayThresholdMinutes }
     );
@@ -1381,6 +1581,11 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
     lateMinutes = metrics.lateMinutes;
     earlyMinutes = metrics.earlyMinutes;
     overtimeMinutes = metrics.overtimeMinutes;
+    // A completed pair of punches owns the duration status. Preserve explicit
+    // non-work modes such as leave, holiday, week-off, or WFH.
+    if (["PRESENT", "LATE", "HALF_DAY", "SHORT_HOURS"].includes(status)) {
+      attendanceStatus = metrics.status;
+    }
   }
 
   // The attendance row and its audit trail must land together, otherwise a
@@ -1389,9 +1594,9 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
     const record = await tx.attendance.upsert({
       where: { employeeId_date: { employeeId, date: targetDate } },
       update: {
-        status,
-        checkIn: checkIn ? new Date(checkIn) : undefined,
-        checkOut: checkOut ? new Date(checkOut) : undefined,
+        status: attendanceStatus,
+        checkIn: normalizedCheckIn || undefined,
+        checkOut: normalizedCheckOut || undefined,
         workingMinutes,
         lateMinutes,
         earlyMinutes,
@@ -1403,9 +1608,9 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
         branchId: employee.branchId || null,
         shiftId: shift?.id || null,
         date: targetDate,
-        checkIn: checkIn ? new Date(checkIn) : null,
-        checkOut: checkOut ? new Date(checkOut) : null,
-        status,
+        checkIn: normalizedCheckIn,
+        checkOut: normalizedCheckOut,
+        status: attendanceStatus,
         workingMinutes,
         lateMinutes,
         earlyMinutes,
@@ -1456,7 +1661,7 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
         action: "UPDATE",
         entity: "ATTENDANCE",
         entityId: record.id,
-        details: `Admin manually marked attendance as ${status} for employee ${employeeId} on ${date}. Reason: ${reason || "N/A"}`,
+        details: `Admin manually marked attendance as ${attendanceStatus} for employee ${employeeId} on ${date}. Reason: ${reason || "N/A"}`,
       },
     });
 
@@ -1465,7 +1670,7 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
 
   return {
     success: true,
-    message: `Attendance marked as ${status} for ${employee.firstName} ${employee.lastName || ""}`.trim(),
+    message: `Attendance marked as ${attendanceStatus} for ${employee.firstName} ${employee.lastName || ""}`.trim(),
     attendance,
     markedBy: adminUserId,
   };
@@ -1590,15 +1795,27 @@ const getTodayStatus = async (userId, organizationId, role = "EMPLOYEE") => {
     }),
     prisma.leaveRequest.findFirst({
       where: { employeeId: employee.id, status: "APPROVED", startDate: { lte: todayDate }, endDate: { gte: todayDate } },
-      select: { leaveType: { select: { name: true, isPaid: true } } },
+      select: {
+        halfDayPeriod: true,
+        leaveType: { select: { name: true, isPaid: true } },
+      },
     }),
   ]);
   // Someone already punched in (an approved day of work, or an admin marked them) is never locked out of punching out.
   const personalLeaveDay = approvedLeaveToday
-    ? { kind: "PERSONAL_LEAVE", title: approvedLeaveToday.leaveType?.name || "Approved leave", reason: null, isPaid: approvedLeaveToday.leaveType?.isPaid ?? true }
+    ? {
+        kind: "PERSONAL_LEAVE",
+        title: approvedLeaveToday.leaveType?.name || "Approved leave",
+        reason: null,
+        isPaid: approvedLeaveToday.leaveType?.isPaid ?? true,
+        halfDayPeriod: approvedLeaveToday.halfDayPeriod || null,
+        // Half-day leave still permits one punch window; the service enforces
+        // the exact midpoint when the punch is submitted.
+        canPunch: Boolean(approvedLeaveToday.halfDayPeriod),
+      }
     : null;
   const dayOff = personalLeaveDay
-    ? { ...personalLeaveDay, workRequest: null, canPunch: false }
+    ? { ...personalLeaveDay, workRequest: null }
     : dayOffBase
     ? { kind: dayOffBase.kind, title: dayOffBase.title, reason: dayOffBase.reason, isPaid: dayOffBase.isPaid, workRequest: dayOffBase.kind === "PERSONAL_LEAVE" ? null : workRequest || null, canPunch: dayOffBase.kind !== "PERSONAL_LEAVE" && workRequest?.status === "APPROVED" }
     : null;
@@ -1687,9 +1904,15 @@ const getLiveToday = async (organizationId) => {
         checkIn: true,
         checkOut: true,
         status: true,
+        breakMinutes: true,
+        lunchMinutes: true,
         checkInLocation: true,
         checkOutLocation: true,
         wfhNote: true,
+        events: {
+          orderBy: { timestamp: "desc" },
+          select: { type: true, timestamp: true },
+        },
         branch: { select: { name: true } },
       },
     }),
@@ -1700,6 +1923,16 @@ const getLiveToday = async (organizationId) => {
     const attendance = byEmployee.get(employee.id);
     const name = `${employee.firstName || ""} ${employee.lastName || ""}`.trim() || "Team member";
     const clockedIn = Boolean(attendance?.checkIn && !attendance?.checkOut);
+    const latestEvent = attendance?.events?.[0];
+    const activePauseType = clockedIn && latestEvent?.type === "BREAK_START"
+      ? "BREAK"
+      : clockedIn && latestEvent?.type === "LUNCH_START"
+        ? "LUNCH"
+        : null;
+    const activePauseMinutes = activePauseType && latestEvent?.timestamp
+      ? Math.max(0, Math.floor((Date.now() - new Date(latestEvent.timestamp).getTime()) / 60000))
+      : 0;
+    const completedPauseCount = attendance?.events?.filter((event) => event.type === "BREAK_END" || event.type === "LUNCH_END").length || 0;
     const location = attendance
       ? attendance.checkInLocation || attendance.branch?.name || employee.branch?.name || "Location not shared"
       : null;
@@ -1717,8 +1950,26 @@ const getLiveToday = async (organizationId) => {
       checkOutLocation: attendance?.checkOutLocation || null,
       location,
       clockedIn,
+      isOnBreak: Boolean(activePauseType),
+      activePauseType,
+      activePauseStartedAt: activePauseType ? latestEvent.timestamp : null,
+      activePauseMinutes,
+      breakMinutes: attendance?.breakMinutes || 0,
+      lunchMinutes: attendance?.lunchMinutes || 0,
+      completedPauseCount,
     };
   });
+
+  const activePauses = people.filter((person) => person.isOnBreak);
+  const pauseAnalytics = {
+    activeCount: activePauses.length,
+    activeBreakCount: activePauses.filter((person) => person.activePauseType === "BREAK").length,
+    activeLunchCount: activePauses.filter((person) => person.activePauseType === "LUNCH").length,
+    totalBreakMinutes: people.reduce((sum, person) => sum + Number(person.breakMinutes || 0) + (person.activePauseType === "BREAK" ? Number(person.activePauseMinutes || 0) : 0), 0),
+    totalLunchMinutes: people.reduce((sum, person) => sum + Number(person.lunchMinutes || 0) + (person.activePauseType === "LUNCH" ? Number(person.activePauseMinutes || 0) : 0), 0),
+    completedPauseCount: people.reduce((sum, person) => sum + Number(person.completedPauseCount || 0), 0),
+    activePeople: activePauses,
+  };
 
   people.sort((a, b) => {
     if (a.clockedIn !== b.clockedIn) return a.clockedIn ? -1 : 1;
@@ -1731,6 +1982,7 @@ const getLiveToday = async (organizationId) => {
     total: people.length,
     clockedIn: people.filter((person) => person.clockedIn).length,
     punched: people.filter((person) => person.checkIn).length,
+    pauseAnalytics,
     people,
   };
 };
@@ -1854,7 +2106,7 @@ const getAttendanceSummary = async (organizationId, targetDate, branchId = null)
     prisma.holiday.findFirst({ where: holidayWhere }),
   ]);
 
-  let present = 0, late = 0, halfDay = 0, onLeave = 0, holidayCount = 0, wfh = 0, weekOff = 0, currentlyClockedIn = 0;
+  let present = 0, late = 0, halfDay = 0, shortHours = 0, onLeave = 0, holidayCount = 0, wfh = 0, weekOff = 0, currentlyClockedIn = 0;
   // Clock-ins by local hour of day (index 0-23), for the "when does the team
   // start" chart. Counted here so the dashboard never has to download rows.
   const hourlyCheckIns = new Array(24).fill(0);
@@ -1868,6 +2120,7 @@ const getAttendanceSummary = async (organizationId, targetDate, branchId = null)
     if (att.status === "PRESENT") present++;
     if (att.status === "LATE") late++;
     if (att.status === "HALF_DAY") halfDay++;
+    if (att.status === "SHORT_HOURS") shortHours++;
     if (att.status === "ON_LEAVE") onLeave++;
     if (att.status === "HOLIDAY") holidayCount++;
     if (att.status === "WORK_FROM_HOME") wfh++;
@@ -1879,7 +2132,7 @@ const getAttendanceSummary = async (organizationId, targetDate, branchId = null)
   const totalMarked = todayAttendances.length;
   const absent = isTodayHoliday ? 0 : Math.max(0, totalEmployees - totalMarked);
   if (isTodayHoliday && holidayCount === 0) {
-    holidayCount = Math.max(0, totalEmployees - (present + late + halfDay + onLeave + wfh + weekOff));
+    holidayCount = Math.max(0, totalEmployees - (present + late + halfDay + shortHours + onLeave + wfh + weekOff));
   }
 
   return {
@@ -1888,6 +2141,7 @@ const getAttendanceSummary = async (organizationId, targetDate, branchId = null)
     present,
     late,
     halfDay,
+    shortHours,
     onLeave,
     wfh,
     weekOff,
@@ -1899,7 +2153,7 @@ const getAttendanceSummary = async (organizationId, targetDate, branchId = null)
     totalPunches,
     hourlyCheckIns,
     timezone,
-    attendanceRate: totalEmployees > 0 ? Math.round(((present + late + wfh) / totalEmployees) * 100) : 0,
+    attendanceRate: totalEmployees > 0 ? Math.round(((present + late + shortHours + wfh) / totalEmployees) * 100) : 0,
   };
 };
 
@@ -1947,7 +2201,7 @@ const getBranchSummary = async (organizationId) => {
     const attendance = attendances.find((a) => a.employeeId === emp.id);
     const status = attendance?.checkIn && attendance.status === "ABSENT" ? "PRESENT" : statusOf.get(emp.id);
     if (status) {
-      if (["PRESENT", "LATE", "HALF_DAY", "WORK_FROM_HOME"].includes(status)) {
+      if (["PRESENT", "LATE", "HALF_DAY", "SHORT_HOURS", "WORK_FROM_HOME"].includes(status)) {
         row.present += 1;
         if (status === "LATE") row.late += 1;
         if (status === "WORK_FROM_HOME") row.wfh += 1;
@@ -1974,7 +2228,7 @@ const getBranchSummary = async (organizationId) => {
   return { success: true, date: date.toISOString().split("T")[0], timezone, branches: list, totals };
 };
 
-const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, from, to, status, page = 1, limit = 20 }) => {
+const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, branchId, from, to, status, page = 1, limit = 20 }) => {
   const where = { organizationId, employee: { user: workforceUserFilter } };
   const teamRoles = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"];
   const canSeeTeam = teamRoles.includes(role);
@@ -1987,6 +2241,12 @@ const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, 
     where.employeeId = employee.id;
   } else if (employeeId) {
     where.employeeId = employeeId;
+  }
+
+  // Branch view follows the employee's assigned branch. This keeps records visible
+  // even when a punch was matched to a different branch geofence.
+  if (canSeeTeam && branchId && branchId !== "ALL") {
+    where.employee = { ...where.employee, branchId: String(branchId) };
   }
 
   if (from || to) {
@@ -2037,7 +2297,14 @@ const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, 
   if (canSeeTeam && exactToday && (!status || status === "ALL" || status === "ABSENT")) {
     const [employees, todayAttendances, approvedLeaves, holidays, companyLeaves] = await Promise.all([
       prisma.employee.findMany({
-        where: { organizationId, deletedAt: null, status: { in: WORKING_STATUSES }, user: workforceUserFilter, ...(employeeId ? { id: employeeId } : {}) },
+        where: {
+          organizationId,
+          deletedAt: null,
+          status: { in: WORKING_STATUSES },
+          user: workforceUserFilter,
+          ...(employeeId ? { id: employeeId } : {}),
+          ...(branchId && branchId !== "ALL" ? { branchId: String(branchId) } : {}),
+        },
         select: {
           id: true, firstName: true, lastName: true, employeeCode: true, designation: true, avatarUrl: true, branchId: true,
           department: { select: { id: true, name: true } },
@@ -2159,19 +2426,19 @@ const syncOfflinePunches = async (userId, organizationId, punches) => {
           break;
 
         case "BREAK_START":
-          result = await startBreak({ userId, organizationId, latitude, longitude, timestamp });
+          result = await startBreak({ userId, organizationId, latitude, longitude, accuracy, timestamp });
           break;
 
         case "BREAK_END":
-          result = await endBreak({ userId, organizationId, latitude, longitude, timestamp });
+          result = await endBreak({ userId, organizationId, latitude, longitude, accuracy, timestamp });
           break;
 
         case "LUNCH_START":
-          result = await startLunch({ userId, organizationId, latitude, longitude, timestamp });
+          result = await startLunch({ userId, organizationId, latitude, longitude, accuracy, timestamp });
           break;
 
         case "LUNCH_END":
-          result = await endLunch({ userId, organizationId, latitude, longitude, timestamp });
+          result = await endLunch({ userId, organizationId, latitude, longitude, accuracy, timestamp });
           break;
 
         default:

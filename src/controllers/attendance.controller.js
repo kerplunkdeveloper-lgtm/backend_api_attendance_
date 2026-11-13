@@ -83,13 +83,14 @@ class AttendanceController {
    */
   async startBreak(req, res) {
     try {
-      const { latitude, longitude, timestamp } = req.body;
+      const { latitude, longitude, accuracy, timestamp } = req.body;
       const result = await attendanceService.startBreak({
         userId: req.user.id,
         employeeId: req.user.employee?.id,
         organizationId: req.user.organizationId,
         latitude,
         longitude,
+        accuracy,
         timestamp,
       });
       return res.status(200).json(result);
@@ -101,13 +102,14 @@ class AttendanceController {
    */
   async endBreak(req, res) {
     try {
-      const { latitude, longitude, timestamp } = req.body;
+      const { latitude, longitude, accuracy, timestamp } = req.body;
       const result = await attendanceService.endBreak({
         userId: req.user.id,
         employeeId: req.user.employee?.id,
         organizationId: req.user.organizationId,
         latitude,
         longitude,
+        accuracy,
         timestamp,
       });
       return res.status(200).json(result);
@@ -119,16 +121,16 @@ class AttendanceController {
    */
   async startLunch(req, res) {
     try {
-      const { latitude, longitude, timestamp } = req.body;
-      const result = await attendanceService.startLunch({ userId: req.user.id, employeeId: req.user.employee?.id, organizationId: req.user.organizationId, latitude, longitude, timestamp });
+      const { latitude, longitude, accuracy, timestamp } = req.body;
+      const result = await attendanceService.startLunch({ userId: req.user.id, employeeId: req.user.employee?.id, organizationId: req.user.organizationId, latitude, longitude, accuracy, timestamp });
       return res.status(200).json(result);
     } catch (error) { return fail(res, error); }
   }
 
   async endLunch(req, res) {
     try {
-      const { latitude, longitude, timestamp } = req.body;
-      const result = await attendanceService.endLunch({ userId: req.user.id, employeeId: req.user.employee?.id, organizationId: req.user.organizationId, latitude, longitude, timestamp });
+      const { latitude, longitude, accuracy, timestamp } = req.body;
+      const result = await attendanceService.endLunch({ userId: req.user.id, employeeId: req.user.employee?.id, organizationId: req.user.organizationId, latitude, longitude, accuracy, timestamp });
       return res.status(200).json(result);
     } catch (error) { return fail(res, error); }
   }
@@ -224,6 +226,7 @@ class AttendanceController {
         organizationId: req.user.organizationId,
         role: req.user.role,
         employeeId: req.query.employeeId,
+        branchId: req.query.branchId,
         from: req.query.from || req.query.date,
         to: req.query.to || req.query.date,
         status: req.query.status,

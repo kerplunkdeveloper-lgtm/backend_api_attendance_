@@ -3,7 +3,7 @@ const prisma = require("../config/database");
 const { parsePagination } = require("../utils/pagination");
 const { evaluateAttendanceAgainstShift, calculateLateMinutes } = require("../utils/shiftCalculator");
 const { getOrgDateOnly, getOrgTimezone, resolveShift } = require("./attendance.service");
-const { DEFAULT_TIMEZONE } = require("../utils/datetime");
+const { DEFAULT_TIMEZONE, isOvernightShift } = require("../utils/datetime");
 const notificationService = require("./notification.service");
 
 const parseRequestedTimestamp = (value, fieldName) => {
@@ -73,7 +73,7 @@ class CorrectionService {
     }
 
     const checkIn = parseRequestedTimestamp(requestedCheckIn, "requestedCheckIn");
-    const checkOut = parseRequestedTimestamp(requestedCheckOut, "requestedCheckOut");
+    let checkOut = parseRequestedTimestamp(requestedCheckOut, "requestedCheckOut");
 
     const employee = await prisma.employee.findFirst({
       where: { userId, organizationId },
@@ -89,6 +89,19 @@ class CorrectionService {
     // instant into the tenant's timezone would move it to the previous day for any zone behind UTC.
     const dayPrefix = typeof date === "string" ? date.match(/^(\d{4}-\d{2}-\d{2})/)?.[1] : null;
     const targetDate = dayPrefix ? new Date(`${dayPrefix}T00:00:00.000Z`) : await getOrgDateOnly(organizationId, submittedDate);
+
+    // A time-only correction form cannot carry the next calendar date. For a
+    // flexible or overnight shift, an out time earlier than the in time is
+    // therefore normalized to the following day.
+    if (checkIn && checkOut && checkOut.getTime() <= checkIn.getTime()) {
+      let shift = employee.shift || null;
+      if (!shift && prisma.shiftOverride?.findUnique && prisma.shift?.findFirst) {
+        shift = await resolveShift(employee, organizationId, targetDate);
+      }
+      if (shift?.flexiblePunching || isOvernightShift(shift)) {
+        checkOut = new Date(checkOut.getTime() + 24 * 60 * 60 * 1000);
+      }
+    }
 
     // Corrections opened from the employee dashboard must target the employee's
     // own completed attendance record. This prevents an unfinished Shoot Out or
