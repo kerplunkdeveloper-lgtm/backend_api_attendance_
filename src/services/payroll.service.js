@@ -46,7 +46,7 @@ const productiveMinutesForShift = (shift) => {
 };
 
 /** A tenant-visible, auditable day ledger used by payroll preview and payslips. */
-const buildDailyPayrollLedger = ({ period, asOf, workingDays, holidayKeys, attendanceByKey, approvedOvertimeByKey, unpaidLeaveKeys, halfDayLeaveByKey = new Map(), companyLeaveByKey, todayKey, dailyRate, hourlyRate, requiredProductiveMinutes = 480, overtimeMultiplier, lateComingRules, maxLatesBeforeDeduction, lateDeductionPercent }) => {
+const buildDailyPayrollLedger = ({ period, asOf, workingDays, holidayKeys, attendanceByKey, approvedOvertimeByKey, permissionMinutesByKey = new Map(), unpaidLeaveKeys, halfDayLeaveByKey = new Map(), companyLeaveByKey, todayKey, dailyRate, hourlyRate, requiredProductiveMinutes = 480, overtimeMultiplier, lateComingRules, maxLatesBeforeDeduction, lateDeductionPercent }) => {
   const rows = [];
   let lateCount = 0;
   const lateRules = (lateComingRules || []).filter((rule) => rule.isActive && Number(rule.lateDays) > 0 && Number(rule.lopDays) > 0);
@@ -107,8 +107,13 @@ const buildDailyPayrollLedger = ({ period, asOf, workingDays, holidayKeys, atten
     const overtimePay = round2((overtimeMinutes / 60) * Number(hourlyRate || 0) * Number(overtimeMultiplier || 1.5));
     const isWorkedDay = ["PRESENT", "LATE", "WORK_FROM_HOME", "SHORT_HOURS"].includes(attendance?.status);
     const workingMinutes = Number(attendance?.workingMinutes || 0);
+    // Approved permission is an authorised absence during the shift, so it
+    // reduces the productive minutes expected for that day. This prevents an
+    // approved evening permission from becoming a salary shortfall.
+    const approvedPermissionMinutes = Math.min(requiredProductiveMinutes, Number(permissionMinutesByKey.get(dateKey) || 0));
+    const adjustedRequiredProductiveMinutes = Math.max(0, requiredProductiveMinutes - approvedPermissionMinutes);
     const shortfallMinutes = isWorkedDay
-      ? Math.max(0, requiredProductiveMinutes - workingMinutes)
+      ? Math.max(0, adjustedRequiredProductiveMinutes - workingMinutes)
       : 0;
     const hoursShortfallDeduction = round2((shortfallMinutes / requiredProductiveMinutes) * Number(dailyRate || 0));
     rows.push({
@@ -118,7 +123,9 @@ const buildDailyPayrollLedger = ({ period, asOf, workingDays, holidayKeys, atten
       punchIn: attendance?.checkIn || null,
       punchOut: attendance?.checkOut || null,
       workingMinutes,
-      requiredProductiveMinutes,
+      requiredProductiveMinutes: adjustedRequiredProductiveMinutes,
+      scheduledProductiveMinutes: requiredProductiveMinutes,
+      approvedPermissionMinutes,
       shortfallMinutes,
       hoursShortfallDeduction,
       overtimeMinutes,
@@ -461,6 +468,25 @@ class PayrollService {
     });
     const companyLeaveByKey = buildCompanyLeaveMap(companyLeaves, period);
 
+    // Keep the approved permission minutes per day so authorised time away is
+    // removed from that day's productive-hours target.
+    const approvedPermissions = prisma.permissionRequest?.findMany
+      ? await prisma.permissionRequest.findMany({
+        where: { organizationId, employeeId, status: "APPROVED", date: { gte: period.start, lte: period.end } },
+        select: { date: true, hours: true, startTime: true, endTime: true, startedAt: true, endedAt: true },
+      })
+      : [];
+    const permissionMinutesByKey = new Map();
+    approvedPermissions.forEach((row) => {
+      const minutes = row.startedAt && row.endedAt
+        ? Math.max(0, Math.round((new Date(row.endedAt).getTime() - new Date(row.startedAt).getTime()) / 60000))
+        : row.startTime && row.endTime
+          ? Math.max(0, (Number(row.endTime.split(":")[0]) * 60 + Number(row.endTime.split(":")[1])) - (Number(row.startTime.split(":")[0]) * 60 + Number(row.startTime.split(":")[1])))
+          : Math.round(Number(row.hours || 0) * 60);
+      const key = toIsoKey(row.date);
+      permissionMinutesByKey.set(key, Number(permissionMinutesByKey.get(key) || 0) + minutes);
+    });
+
     const dayCounts = classifyPayrollDays({
       period,
       asOf: todayDate,
@@ -480,6 +506,7 @@ class PayrollService {
       holidayKeys,
       attendanceByKey,
       approvedOvertimeByKey,
+      permissionMinutesByKey,
       unpaidLeaveKeys,
       halfDayLeaveByKey,
       companyLeaveByKey,
@@ -555,15 +582,6 @@ class PayrollService {
 
     // Permission hours approved in this cycle. The monthly allowance covers the first hours in
     // each cycle; hours beyond it are charged at the hourly rate.
-    const approvedPermissions = await prisma.permissionRequest.findMany({
-      where: {
-        organizationId,
-        employeeId,
-        status: "APPROVED",
-        date: { gte: period.start, lte: period.end },
-      },
-      select: { hours: true, startedAt: true, endedAt: true },
-    });
     const approvedPermissionHours = approvedPermissions.reduce((sum, row) => {
       // New permission sessions are charged by the GPS-verified time captured
       // by the employee. Keep the requested hours for older records that do

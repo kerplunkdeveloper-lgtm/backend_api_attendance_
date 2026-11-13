@@ -51,6 +51,32 @@ const getLateGraceMinutes = async (organizationId, fallback = 10) => {
   }
 };
 
+// An approved, timed permission can move the effective start of the day.
+// Permission is not a late mark: only time after the approved end is late.
+const getApprovedPermissionForDate = (organizationId, employeeId, date) => {
+  // Some older deployments/tests do not expose the additive permission model.
+  if (!prisma.permissionRequest?.findFirst) return Promise.resolve(null);
+  return prisma.permissionRequest.findFirst({
+    where: { organizationId, employeeId, date, status: "APPROVED" },
+    select: { id: true, startTime: true, endTime: true, hours: true },
+  });
+};
+
+const calculateLateMinutesWithPermission = ({ shift, graceMinutes, checkInTime, permission, timeZone }) => {
+  const normalLate = calculateLateMinutes(shift.startTime, graceMinutes, checkInTime, timeZone);
+  if (!permission?.startTime || !permission?.endTime) return normalLate;
+
+  const permissionStart = parseTimeToMinutes(permission.startTime, timeZone);
+  const permissionEnd = parseTimeToMinutes(permission.endTime, timeZone);
+  const actual = parseTimeToMinutes(checkInTime, timeZone);
+
+  // Evening permission must not waive a morning late mark. A permission can
+  // affect lateness only once the punch has reached its own start time.
+  if (actual < permissionStart) return normalLate;
+  if (actual <= permissionEnd) return 0;
+  return Math.max(0, actual - permissionEnd);
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -394,7 +420,13 @@ const assertLocationCaptured = ({ latitude, longitude, action, skip }) => {
 const assertPauseGeofence = async ({ organizationId, employee, attendance, latitude, longitude, accuracy, label, userId, actorRole }) => {
   const isAdminOnBehalf = isOnBehalf(employee, userId) && ADMIN_ROLES.includes(actorRole);
   const isAwaySession = attendance?.status === "WORK_FROM_HOME" || /^(WORK_FROM_HOME|CLIENT_VISIT|TRAVEL|SHOOT):/i.test(String(attendance?.wfhNote || ""));
-  if (isAdminOnBehalf || isAwaySession) return { isBypassed: true, bypassReason: isAwaySession ? "AWAY_SESSION" : "ADMIN" };
+  const isAnyTimeShift = Boolean(employee?.flexiblePunching || attendance?.shift?.flexiblePunching);
+  if (isAdminOnBehalf || isAwaySession || isAnyTimeShift) {
+    return {
+      isBypassed: true,
+      bypassReason: isAwaySession ? "AWAY_SESSION" : isAnyTimeShift ? "ANY_TIME_SHIFT" : "ADMIN",
+    };
+  }
   assertLocationCaptured({ latitude, longitude, action: `take ${label.toLowerCase()}`, skip: false });
   const branches = await prisma.branch.findMany({ where: { organizationId } });
   const branchesWithCoords = branches.filter(hasCoordinatePair);
@@ -458,7 +490,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
   const shift = await resolveShift(employee, organizationId, checkInTime);
   const isOffDay = shift ? !isWorkingDay(shift, checkInTime, timezone) : false;
 
-  const [holidayRow, approvedLeave, companyLeave] = await Promise.all([
+  const [holidayRow, approvedLeave, companyLeave, approvedPermission] = await Promise.all([
     prisma.holiday.findFirst({
       where: {
         organizationId,
@@ -485,6 +517,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
       },
       select: { title: true, reason: true, isPaid: true },
     }),
+    getApprovedPermissionForDate(organizationId, employee.id, today),
   ]);
   // Company leave (for example Diwali) is a day off for everyone it covers, like a holiday.
   const holiday = holidayRow || (companyLeave ? { name: companyLeave.title } : null);
@@ -598,8 +631,9 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
   // inside a branch radius. Previously a punch without coordinates slipped
   // through as a bypass, so denying location permission defeated the rule.
   const isSpecialWorkMode = SPECIAL_WORK_MODES.includes(workMode);
-  const officeModeRequiresGeofence = workMode === "OFFICE" && branchesWithCoords.length > 0;
-  if ((policy.geofenceStrict || officeModeRequiresGeofence) && !skipGeofence && !isSpecialWorkMode) {
+  const isAnyTimeShift = Boolean(employee.flexiblePunching || shift?.flexiblePunching);
+  const officeModeRequiresGeofence = workMode === "OFFICE" && branchesWithCoords.length > 0 && !isAnyTimeShift;
+  if ((policy.geofenceStrict || officeModeRequiresGeofence) && !skipGeofence && !isSpecialWorkMode && !isAnyTimeShift) {
     const rejection = officeOnlyRejection({ latitude, longitude, accuracy, branches: branchesWithCoords, allowWfh: policy.allowWfh });
     if (rejection) {
       const error = new Error(rejection.message);
@@ -629,7 +663,13 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
 
   // If working on rest day/leave/holiday, late does not penalize the employee
   if (!isOvertimeShift && approvedLeave?.halfDayPeriod !== "MORNING" && shift) {
-    lateMinutes = calculateLateMinutes(shift.startTime, await getLateGraceMinutes(organizationId, shift.graceMinutes), checkInTime);
+    lateMinutes = calculateLateMinutesWithPermission({
+      shift,
+      graceMinutes: await getLateGraceMinutes(organizationId, shift.graceMinutes),
+      checkInTime,
+      permission: approvedPermission,
+      timeZone: timezone,
+    });
     if (lateMinutes > 0 && status !== "WORK_FROM_HOME") status = "LATE";
   }
 
@@ -795,7 +835,7 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
   const shift = await resolveShift(employee, organizationId, checkInTime);
   const isOffDay = shift ? !isWorkingDay(shift, checkInTime, timezone) : false;
 
-  const [holidayRow, approvedLeave, companyLeave] = await Promise.all([
+  const [holidayRow, approvedLeave, companyLeave, approvedPermission] = await Promise.all([
     prisma.holiday.findFirst({
       where: {
         organizationId,
@@ -822,6 +862,7 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
       },
       select: { title: true, reason: true, isPaid: true },
     }),
+    getApprovedPermissionForDate(organizationId, employee.id, today),
   ]);
   // Company leave (for example Diwali) is a day off for everyone it covers, like a holiday.
   const holiday = holidayRow || (companyLeave ? { name: companyLeave.title } : null);
@@ -864,7 +905,13 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
 
   let lateMinutes = 0;
   if (!isOvertimeShift && approvedLeave?.halfDayPeriod !== "MORNING" && shift) {
-    lateMinutes = calculateLateMinutes(shift.startTime, await getLateGraceMinutes(organizationId, shift.graceMinutes), checkInTime);
+    lateMinutes = calculateLateMinutesWithPermission({
+      shift,
+      graceMinutes: await getLateGraceMinutes(organizationId, shift.graceMinutes),
+      checkInTime,
+      permission: approvedPermission,
+      timeZone: timezone,
+    });
   }
 
   const checkInLocation = await resolvePunchLocation({
@@ -1011,7 +1058,7 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
   let shift = attendance.shift || (await resolveShift(employee, organizationId, attendanceDate));
   const isOffDay = shift ? !isWorkingDay(shift, attendanceDate, timezone) : false;
 
-  const [holidayRow, approvedLeave, companyLeave] = await Promise.all([
+  const [holidayRow, approvedLeave, companyLeave, approvedPermission] = await Promise.all([
     prisma.holiday.findFirst({
       where: {
         organizationId,
@@ -1037,6 +1084,7 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
       },
       select: { title: true, reason: true, isPaid: true },
     }),
+    getApprovedPermissionForDate(organizationId, employee.id, attendanceDate),
   ]);
   const holiday = holidayRow || (companyLeave ? { name: companyLeave.title } : null);
 
@@ -1125,6 +1173,34 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
     }
   }
 
+  // The shift calculator sees the raw punch-in time. Re-apply the approved
+  // permission window so only time after permission ends is treated as late.
+  if (!isNonWorkingDay && shift && !shift.flexiblePunching && !approvedLeave?.halfDayPeriod) {
+    metrics.lateMinutes = calculateLateMinutesWithPermission({
+      shift,
+      graceMinutes: await getLateGraceMinutes(organizationId, shift.graceMinutes),
+      checkInTime: attendance.checkIn,
+      permission: approvedPermission,
+      timeZone: timezone,
+    });
+    metrics.lateFormatted = formatMinutes(metrics.lateMinutes);
+    if (metrics.lateMinutes === 0 && metrics.status === "LATE") metrics.status = "PRESENT";
+    if (metrics.lateMinutes > 0 && metrics.status === "PRESENT") metrics.status = "LATE";
+  }
+
+  // An approved permission that contains the checkout time also waives the
+  // early-departure mark (for example, 4:00–5:00 PM permission on a 6:00 PM
+  // shift). The permission itself remains available for payroll accounting.
+  if (!isNonWorkingDay && shift && !shift.flexiblePunching && approvedPermission?.startTime && approvedPermission?.endTime) {
+    const permissionStart = parseTimeToMinutes(approvedPermission.startTime, timezone);
+    const permissionEnd = parseTimeToMinutes(approvedPermission.endTime, timezone);
+    const actualCheckout = parseTimeToMinutes(checkOutTime, timezone);
+    if (actualCheckout >= permissionStart && actualCheckout <= permissionEnd && metrics.earlyMinutes > 0) {
+      metrics.earlyMinutes = 0;
+      metrics.earlyFormatted = formatMinutes(0);
+    }
+  }
+
   // Shoot overtime is approved through Shoot Settlement, so retain the raw
   // value for that flow. Other overtime sources still use the normal approval
   // gate and are not paid until approved.
@@ -1154,8 +1230,9 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
 
   // Preserve the mode selected at punch-in when punching out. Shoot is stored in wfhNote.
   const effectiveWorkMode = attendance.wfhNote?.startsWith("SHOOT:") ? "SHOOT" : (workMode || "OFFICE");
-  const checkoutGeofence = skipGeofence || source === "BIOMETRIC"
-    ? { isBypassed: true, bypassReason: source === "BIOMETRIC" ? "BIOMETRIC_DEVICE" : "DEVICE" }
+  const isAnyTimeShift = Boolean(employee.flexiblePunching || shift?.flexiblePunching);
+  const checkoutGeofence = skipGeofence || source === "BIOMETRIC" || isAnyTimeShift
+    ? { isBypassed: true, bypassReason: source === "BIOMETRIC" ? "BIOMETRIC_DEVICE" : isAnyTimeShift ? "ANY_TIME_SHIFT" : "DEVICE" }
     : await assertPauseGeofence({ organizationId, employee, attendance, latitude, longitude, accuracy, label: "Punch-out", userId, actorRole });
   const checkOutLocation = await resolvePunchLocation({
     locationLabel,
