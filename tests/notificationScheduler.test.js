@@ -335,6 +335,20 @@ describe("sendMorningCheckInReminders (batched)", () => {
     assert.equal(calls["attendance.findMany"], undefined);
     assert.equal(calls["notification.findMany"], undefined);
   });
+
+  it("does not treat an Any-time shift as a 09:00 punch-in reminder", async () => {
+    db.employees = [employee({
+      id: "any-time",
+      userId: "u-any-time",
+      shift: { name: "Cinematograph", flexiblePunching: true, workingDays: "0,1,2,3,4,5,6" },
+    })];
+
+    const result = await notificationService.sendMorningCheckInReminders(null, true);
+
+    assert.equal(result.sentCount, 0);
+    assert.equal(calls["attendance.findMany"], undefined);
+    assert.equal(calls["notification.findMany"], undefined);
+  });
 });
 
 describe("sendEveningCheckOutReminders (batched)", () => {
@@ -362,6 +376,22 @@ describe("sendEveningCheckOutReminders (batched)", () => {
     assert.deepEqual(result.sentUsers, ["Employee (u-1)"]);
     assert.equal(calls["attendance.findMany"], 1);
     assert.equal(calls["notification.findMany"], 1);
+  });
+
+  it("does not send a fixed end-of-shift reminder for an Any-time shift", async () => {
+    const startOfToday = getLocalDateOnly(new Date(), "Asia/Kolkata");
+    db.employees = [employee({
+      id: "any-time",
+      userId: "u-any-time",
+      shift: { name: "Cinematograph", flexiblePunching: true, workingDays: "0,1,2,3,4,5,6" },
+    })];
+    db.attendance = [{ employeeId: "any-time", date: startOfToday, checkIn: new Date(), checkOut: null }];
+
+    const result = await notificationService.sendEveningCheckOutReminders(null, true);
+
+    assert.equal(result.sentCount, 0);
+    assert.equal(calls["attendance.findMany"], undefined);
+    assert.equal(calls["notification.findMany"], undefined);
   });
 });
 
