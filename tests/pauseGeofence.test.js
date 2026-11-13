@@ -68,3 +68,24 @@ test("break and lunch start/end work inside the office geofence", async () => {
 
   assert.deepEqual(createdEvents.map((event) => event.type), ["BREAK_START", "BREAK_END", "LUNCH_START", "LUNCH_END"]);
 });
+
+test("an any-time shift can use break controls outside the office", async () => {
+  employee.flexiblePunching = false;
+  attendance = {
+    id: "att-1",
+    status: "PRESENT",
+    checkIn: new Date(Date.now() - 60_000),
+    checkOut: null,
+    breakMinutes: 0,
+    lunchMinutes: 0,
+    events: [],
+    shift: { flexiblePunching: true },
+  };
+  createdEvents = [];
+
+  await startBreak({ userId: "user-1", organizationId: "org-1", latitude: 12.1, longitude: 79.8, timestamp: now() });
+
+  assert.equal(createdEvents[0].type, "BREAK_START");
+  assert.equal(createdEvents[0].isBypassed, true);
+  assert.equal(createdEvents[0].bypassReason, "ANY_TIME_SHIFT");
+});

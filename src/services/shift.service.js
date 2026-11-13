@@ -3,6 +3,14 @@ const { getScheduledDurationMinutes } = require("../utils/shiftCalculator");
 const { assertTime, normalizeWorkingDays } = require("../utils/shiftValidation");
 const { workingDaysFromWeeklyOff } = require("../utils/policyValidation");
 
+// A shift card represents the current workforce, not historical/deleted staff.
+// Keep this identical to the employee list's WORKING filter.
+const WORKING_EMPLOYEE_STATUSES = ["ACTIVE", "PROBATION", "NOTICE_PERIOD"];
+const currentEmployeeWhere = {
+  deletedAt: null,
+  status: { in: WORKING_EMPLOYEE_STATUSES },
+};
+
 /** Working days for a new shift: the company's weekly off decides, Sunday off unless the policy says otherwise. */
 const companyWorkingDays = async (organizationId) => {
   const policy = await prisma.attendancePolicy.findUnique({ where: { organizationId }, select: { weeklyOffDays: true } });
@@ -78,7 +86,14 @@ const createShift = async (organizationId, data) => {
 const getShifts = async (organizationId) => {
   const shifts = await prisma.shift.findMany({
     where: { organizationId },
-    include: { _count: { select: { employees: true, attendances: true } } },
+    include: {
+      _count: {
+        select: {
+          employees: { where: currentEmployeeWhere },
+          attendances: true,
+        },
+      },
+    },
     orderBy: { createdAt: "asc" },
   });
   return shifts.map((shift) => ({ ...shift, ...buildShiftMetrics(shift) }));
@@ -89,12 +104,18 @@ const getShiftById = async (organizationId, shiftId) => {
     where: { id: shiftId, organizationId },
     include: {
       employees: {
+        where: currentEmployeeWhere,
         select: {
           id: true, firstName: true, lastName: true, employeeCode: true, status: true,
           department: { select: { name: true } }, branch: { select: { name: true } },
         },
       },
-      _count: { select: { employees: true, attendances: true } },
+      _count: {
+        select: {
+          employees: { where: currentEmployeeWhere },
+          attendances: true,
+        },
+      },
     },
   });
   if (!shift) throw new Error("Shift not found in this organization");
