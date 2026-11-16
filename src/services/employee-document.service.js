@@ -147,7 +147,7 @@ class EmployeeDocumentService {
   /**
    * Fetch a document through the authenticated API instead of exposing a
    * private Cloudinary URL to the browser. This is required for PDF iframe
-   * previews because the browser cannot attach the WorkPulse bearer token to
+   * previews because the browser cannot attach the Clocked bearer token to
    * a direct Cloudinary navigation.
    */
   async getDocumentContent(organizationId, employeeId, documentId) {

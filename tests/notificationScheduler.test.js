@@ -159,7 +159,7 @@ describe("markAbsentEmployees (batched)", () => {
       employee({ id: "absent-1", organizationId: "org-1" }),
       employee({ id: "absent-2", organizationId: "org-1", shiftId: "shift-2" }),
     ];
-    db.attendance = [{ employeeId: "present", date: TODAY, checkIn: new Date() }];
+    db.attendance = [{ employeeId: "present", date: TODAY, checkIn: new Date(), checkOut: new Date(), status: "PRESENT" }];
     db.holidays = [
       { organizationId: "org-2", branchId: null, date: TODAY, isOptional: false }, // org-wide
       { organizationId: "org-1", branchId: "br-1", date: TODAY, isOptional: false }, // branch-only

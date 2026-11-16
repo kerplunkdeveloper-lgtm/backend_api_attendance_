@@ -35,6 +35,13 @@ router.get(
   employeeController.list,
 );
 
+// Preview the next company-wide employee code before the employee is saved.
+router.get(
+  "/next-code",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
+  employeeController.nextCode,
+);
+
 // Must stay above "/:id" or "celebrations" would be treated as an employee id.
 router.get(
   "/celebrations",

@@ -47,7 +47,7 @@ const reminderFor = (org, now = new Date()) => {
         key: `trial-${bucket}`,
         urgent: bucket <= 3,
         title: `Your free trial ends in ${dayLabel(days)}`,
-        message: `Your WorkPulse trial ends on ${on}. Choose a plan before then to keep payroll, attendance and your team's data uninterrupted.`,
+        message: `Your Clocked trial ends on ${on}. Choose a plan before then to keep payroll, attendance and your team's data uninterrupted.`,
       };
     }
     if (days > -TRIAL_GRACE_DAYS) {

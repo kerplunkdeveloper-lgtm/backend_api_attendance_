@@ -61,6 +61,23 @@ test("bulk asset import creates assets and custody assignments for employee code
   assert.deepEqual(createdAssets.map((item) => item.status), ["ASSIGNED", "ASSIGNED"]);
 });
 
+test("bulk asset import allows valid inventory rows without an employee code", async () => {
+  createdAssets.length = 0;
+  assignments.length = 0;
+
+  const result = await assetService.bulkCreateAssets("org-1", [{
+    assetCode: "MON-01004",
+    name: "Dell Monitor",
+    category: "MONITOR",
+    condition: "NEW",
+  }], { email: "hr@example.com" });
+
+  assert.equal(result.count, 1);
+  assert.equal(createdAssets[0].status, "AVAILABLE");
+  assert.equal(createdAssets[0].assignedToId, null);
+  assert.equal(assignments.length, 0);
+});
+
 test("bulk asset import rejects an unknown employee code before creating anything", async () => {
   const originalEmployeeFindMany = prisma.employee.findMany;
   prisma.employee.findMany = async () => [];

@@ -33,7 +33,7 @@ const sendToUser = async ({ userId, title, message, notificationId, type }) => {
 
   const response = await messaging.sendEachForMulticast({
     tokens: rows.map((row) => row.token),
-    notification: { title: title || "WorkPluse notification", body: message || "You have a new notification." },
+    notification: { title: title || "Clocked notification", body: message || "You have a new notification." },
     data: { notificationId: String(notificationId || ""), type: String(type || "SYSTEM"), url: "/dashboard" },
     webpush: {
       fcmOptions: {

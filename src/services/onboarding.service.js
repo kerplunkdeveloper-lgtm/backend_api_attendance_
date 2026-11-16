@@ -189,14 +189,23 @@ class OnboardingService {
         expiresAt: new Date(Date.now() + PORTAL_TTL_MS),
       },
       include: {
+        organization: { select: { id: true, name: true, logoUrl: true } },
         branch: { select: { id: true, name: true } },
         department: { select: { id: true, name: true } },
       },
     });
 
+    const onboardingUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/onboarding/portal/${candidate.token}`;
+    const inviteDelivery = await emailService.sendOnboardingInviteEmail(
+      candidate.email,
+      `${candidate.firstName} ${candidate.lastName || ""}`.trim(),
+      { designation: candidate.designation, expectedJoinDate: candidate.expectedJoinDate, onboardingUrl, companyName: candidate.organization?.name, companyLogoUrl: candidate.organization?.logoUrl },
+    ).catch((error) => ({ success: false, error: error.message }));
+
     return {
       candidate,
-      onboardingUrl: `/onboarding/portal/${token}`,
+      onboardingUrl,
+      inviteDelivery,
     };
   }
 
@@ -650,6 +659,7 @@ class OnboardingService {
       referenceNo: offerLetterRef,
       issuedDate: new Date().toISOString().split("T")[0],
       candidateName: `${candidate.firstName} ${candidate.lastName || ""}`.trim(),
+      employeeCode: finalEmployeeCode,
       email: candidate.email,
       phone: candidate.phone,
       currentAddress: candidate.currentAddress || "Not specified",
@@ -783,12 +793,12 @@ class OnboardingService {
     const candEmail = candidate.email;
     const candPhone = candidate.phone;
     const candName = `${candidate.firstName} ${candidate.lastName || ""}`.trim();
-    const offerUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/onboarding/portal/${candidate.portalToken}`;
+    const offerUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/onboarding/portal/${candidate.token}`;
 
     if (candEmail && result.temporaryPassword) {
       emailService
         .sendEmployeeWelcomeEmail(candEmail, candName, {
-          organizationName: candidate.organization?.name || "WorkPluse",
+          organizationName: candidate.organization?.name || "Clocked",
           companyLogoUrl: candidate.organization?.logoUrl,
           tempPassword: result.temporaryPassword,
           loginUrl: `${process.env.FRONTEND_URL || "http://localhost:3000"}/login`,
@@ -864,6 +874,7 @@ class OnboardingService {
       referenceNo: offerLetterRef,
       issuedDate: new Date().toISOString().split("T")[0],
       candidateName: `${candidate.firstName} ${candidate.lastName || ""}`.trim(),
+      employeeCode: candidate.employeeCode || candidate.employee?.employeeCode || "",
       email: candidate.email,
       phone: candidate.phone,
       currentAddress: candidate.currentAddress || "Not specified",
@@ -920,6 +931,12 @@ class OnboardingService {
       throw error;
     }
 
+    if (!["HR_VERIFIED", "ADMIN_APPROVED", "OFFER_GENERATED"].includes(candidate.status)) {
+      const error = new Error("Candidate must be HR verified before an offer can be generated");
+      error.statusCode = 400;
+      throw error;
+    }
+
     const { adminNotes } = approvalData;
 
     // Generate Offer Letter
@@ -933,6 +950,7 @@ class OnboardingService {
       referenceNo: offerLetterRef,
       issuedDate: new Date().toISOString().split("T")[0],
       candidateName: `${candidate.firstName} ${candidate.lastName || ""}`.trim(),
+      employeeCode: candidate.employeeCode || candidate.employee?.employeeCode || "",
       email: candidate.email,
       phone: candidate.phone,
       currentAddress: candidate.currentAddress || "Not specified",
@@ -983,6 +1001,7 @@ class OnboardingService {
   async hrReviewAndSendOffer(organizationId, candidateId, hrUserId, sendData = {}) {
     const candidate = await prisma.onboardingCandidate.findFirst({
       where: { id: candidateId, organizationId },
+      include: { organization: true, branch: true, department: true },
     });
 
     if (!candidate) {
@@ -997,9 +1016,15 @@ class OnboardingService {
       throw error;
     }
 
+    if (!["OFFER_GENERATED", "ADMIN_APPROVED"].includes(candidate.status)) {
+      const error = new Error("Candidate is not ready for offer dispatch");
+      error.statusCode = 400;
+      throw error;
+    }
+
     const { hrReviewNotes } = sendData;
 
-    return await prisma.onboardingCandidate.update({
+    const updated = await prisma.onboardingCandidate.update({
       where: { id: candidate.id },
       data: {
         status: "OFFER_SENT",
@@ -1012,6 +1037,26 @@ class OnboardingService {
         documents: true,
       },
     });
+
+    const offerUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/onboarding/portal/${candidate.token}`;
+    const candidateName = `${candidate.firstName} ${candidate.lastName || ""}`.trim();
+    const [emailDelivery, whatsappDelivery] = await Promise.all([
+      emailService.sendOfferLetterEmail(candidate.email, candidateName, {
+        designation: candidate.designation,
+        department: candidate.department?.name,
+        expectedJoinDate: candidate.expectedJoinDate,
+        salary: candidate.proposedSalary,
+        offerUrl,
+        offerLetterData: candidate.offerLetterData,
+        companyName: candidate.organization?.name,
+        companyLogoUrl: candidate.organization?.logoUrl,
+      }).catch((error) => ({ success: false, error: error.message })),
+      candidate.phone
+        ? whatsappService.sendOfferLetterWhatsApp(candidate.phone, candidateName, { designation: candidate.designation, offerUrl }).catch((error) => ({ success: false, error: error.message }))
+        : Promise.resolve({ success: false, error: "Candidate phone is missing" }),
+    ]);
+
+    return { ...updated, emailDelivery, whatsappDelivery };
   }
 
   /**
@@ -1159,7 +1204,7 @@ class OnboardingService {
 
       emailService
         .sendEmployeeWelcomeEmail(candidate.email, `${candidate.firstName} ${candidate.lastName || ""}`.trim(), {
-          organizationName: candidate.organization?.name || "WorkPluse",
+          organizationName: candidate.organization?.name || "Clocked",
           companyLogoUrl: candidate.organization?.logoUrl,
           tempPassword,
           loginUrl: `${process.env.FRONTEND_URL || "http://localhost:3000"}/login`,

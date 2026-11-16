@@ -17,6 +17,8 @@ router.use(authenticate);
 router.get("/", orgController.get);
 router.get("/offer-letter-template", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"), orgController.getOfferLetterTemplate);
 router.put("/offer-letter-template", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"), orgController.updateOfferLetterTemplate);
+router.get("/exit-document-templates", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"), orgController.getExitDocumentTemplates);
+router.put("/exit-document-templates", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"), orgController.updateExitDocumentTemplates);
 router.put(
   "/",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),

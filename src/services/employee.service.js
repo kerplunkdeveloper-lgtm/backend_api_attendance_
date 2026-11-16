@@ -310,7 +310,7 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
     cleanEmail,
     profile.firstName,
     {
-      organizationName: org?.name || "WorkPluse",
+      organizationName: org?.name || "Clocked",
       companyLogoUrl: org?.logoUrl,
       tempPassword,
       loginUrl,
@@ -379,7 +379,15 @@ const getEmployees = async (organizationId, query = {}, actorRole = "EMPLOYEE") 
         // Route is limited to admins and managers, so the salary column is safe here.
         salaryStructure: { select: { annualCtc: true, monthlyCtc: true } },
       },
-      orderBy: { createdAt: "desc" },
+      // Employee directory is code-first. Use only the SortOrder form here;
+      // this project’s Prisma client does not support the newer `{ sort, nulls }`
+      // orderBy form. Stable name/id tie-breakers keep pagination consistent.
+      orderBy: [
+        { employeeCode: "asc" },
+        { firstName: "asc" },
+        { lastName: "asc" },
+        { id: "asc" },
+      ],
       take,
       skip,
     }),
@@ -1509,7 +1517,7 @@ const bulkImportEmployees = async (organizationId, employeesList, actorRole = "C
     for (const r of toInsert) {
       try {
         await emailService.sendEmployeeWelcomeEmail(r.email, r.firstName, {
-          organizationName: org?.name || "WorkPluse",
+          organizationName: org?.name || "Clocked",
           companyLogoUrl: org?.logoUrl,
           tempPassword: r.tempPassword,
           loginUrl,

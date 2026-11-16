@@ -77,3 +77,15 @@ test("marks a workday short-hours when it is above half day but below the produc
   assert.equal(result.scheduledWorkMinutes, 485);
   assert.equal(result.status, "SHORT_HOURS");
 });
+
+test("flexible punching does not mark late arrival or early checkout", () => {
+  const result = evaluateAttendanceAgainstShift(
+    { startTime: "09:00", endTime: "18:00", graceMinutes: 0, flexiblePunching: true },
+    "2026-11-05T05:00:00.000Z",
+    "2026-11-05T12:00:00.000Z",
+    0,
+    { timeZone: "Asia/Calcutta" }
+  );
+  assert.equal(result.lateMinutes, 0);
+  assert.equal(result.earlyMinutes, 0);
+});

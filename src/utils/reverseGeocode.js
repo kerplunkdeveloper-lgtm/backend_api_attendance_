@@ -45,7 +45,7 @@ const lookupPlaceName = async (latitude, longitude) => {
     const response = await fetch(url, {
       headers: {
         Accept: "application/json",
-        "User-Agent": "WorkPluse/1.0 (attendance punch locations)",
+        "User-Agent": "Clocked/1.0 (attendance punch locations)",
       },
       // Punching waits on this lookup when the app sent no place name, so keep it short.
       signal: AbortSignal.timeout(2500),

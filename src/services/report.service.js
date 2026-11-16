@@ -57,7 +57,7 @@ class ReportService {
       }),
       prisma.organization.findUnique({
         where: { id: organizationId },
-        select: { name: true },
+        select: { name: true, logoUrl: true },
       }),
       prisma.holiday.findMany({
         where: { organizationId, date: dateOnly, isOptional: false },
@@ -188,7 +188,8 @@ class ReportService {
 
     return {
       success: true,
-      organizationName: org?.name || "WorkPluse Workforce",
+      organizationName: org?.name || "Clocked Workforce",
+      organizationLogoUrl: org?.logoUrl || null,
       date: dateOnly.toISOString().split("T")[0],
       summary: {
         totalEmployees,
@@ -245,7 +246,7 @@ class ReportService {
       }),
       prisma.organization.findUnique({
         where: { id: organizationId },
-        select: { name: true },
+        select: { name: true, logoUrl: true },
       }),
     ]);
 
@@ -307,7 +308,8 @@ class ReportService {
 
     return {
       success: true,
-      organizationName: org?.name || "WorkPluse Workforce",
+      organizationName: org?.name || "Clocked Workforce",
+      organizationLogoUrl: org?.logoUrl || null,
       month: m,
       year: y,
       totalEmployees: employees.length,

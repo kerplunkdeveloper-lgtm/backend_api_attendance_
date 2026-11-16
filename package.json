@@ -1,5 +1,5 @@
 {
-  "name": "workpulse_backend",
+  "name": "clocked_backend",
   "version": "2.0.0",
   "description": "",
   "main": "server.js",

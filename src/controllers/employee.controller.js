@@ -1,4 +1,6 @@
 const employeeService = require("../services/employee.service");
+const { getNextEmployeeCode } = require("../utils/employeeCode");
+const prisma = require("../config/database");
 const { sendControllerError } = require("../utils/controllerError");
 const auditService = require("../services/audit.service");
 
@@ -36,6 +38,25 @@ const list = async (req, res) => {
       limit: result.limit,
       totalPages: result.totalPages,
     });
+  } catch (error) { return sendControllerError(res, error); }
+};
+
+const nextCode = async (req, res) => {
+  try {
+    const organization = await prisma.organization.findUnique({
+      where: { id: req.user.organizationId },
+      select: { name: true },
+    });
+    if (!organization) return res.status(404).json({ success: false, message: "Organization not found" });
+    const role = String(req.query.role || "EMPLOYEE").toUpperCase();
+    const code = await getNextEmployeeCode(
+      req.user.organizationId,
+      prisma,
+      role,
+      organization.name,
+      req.query.dateOfJoining || null,
+    );
+    return res.json({ success: true, data: { employeeCode: code } });
   } catch (error) { return sendControllerError(res, error); }
 };
 
@@ -256,6 +277,7 @@ module.exports = {
   bulkImport,
   bulkSetAccess,
   create,
+  nextCode,
   list,
   getById,
   update,

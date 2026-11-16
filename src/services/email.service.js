@@ -31,12 +31,12 @@ class EmailService {
   }
 
   /**
-   * Generates modern, responsive WorkPluse HTML email template
+   * Generates modern, responsive Clocked HTML email template
    */
   async buildHtmlTemplate({ title, badge, badgeColor = "#2563eb", contentHtml, ctaText, ctaUrl, companyName, companyLogoUrl }) {
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
     const actionUrl = ctaUrl || frontendUrl;
-    const displayCompanyName = escapeHtml(companyName || "WorkPluse");
+    const displayCompanyName = escapeHtml(companyName || "Clocked");
     // Use a verified HTTPS image URL. Data-URI images are blocked by many
     // inboxes, including transactional email clients, so they do not render
     // reliably in OTP, offer, welcome, or billing messages.
@@ -88,8 +88,8 @@ class EmailService {
   <div class="container" style="max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0;">
     <div class="header" style="background: #1e3a8a; padding: 32px 28px; text-align: center; color: #ffffff;">
       ${brandMark}
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin: 0 auto 14px;"><tr><td style="padding: 5px 9px; border: 1px solid #93c5fd; border-radius: 999px; color: #dbeafe; font-size: 11px; white-space: nowrap;">&#128100; Secure account</td><td style="width: 6px;"></td><td style="padding: 5px 9px; border: 1px solid #93c5fd; border-radius: 999px; color: #dbeafe; font-size: 11px; white-space: nowrap;">&#9632; WorkPluse platform</td></tr></table>
-      <p class="header-sub" style="font-size: 13px; color: #bfdbfe; margin: 0; font-weight: 500;">${displayCompanyName} · Powered by WorkPluse</p>
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin: 0 auto 14px;"><tr><td style="padding: 5px 9px; border: 1px solid #93c5fd; border-radius: 999px; color: #dbeafe; font-size: 11px; white-space: nowrap;">&#128100; Secure account</td><td style="width: 6px;"></td><td style="padding: 5px 9px; border: 1px solid #93c5fd; border-radius: 999px; color: #dbeafe; font-size: 11px; white-space: nowrap;">&#9632; Clocked platform</td></tr></table>
+      <p class="header-sub" style="font-size: 13px; color: #bfdbfe; margin: 0; font-weight: 500;">${displayCompanyName} · Powered by Clocked</p>
     </div>
     <div class="body" style="padding: 32px 28px;">
       ${badge ? `<div class="badge" style="display: inline-block; padding: 6px 14px; border-radius: 9999px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 20px; background-color: ${badgeColor}15; color: ${badgeColor}; border: 1px solid ${badgeColor}30;">${badge}</div>` : ""}
@@ -98,8 +98,8 @@ class EmailService {
       ${ctaText ? `<div style="text-align: center; margin-top: 28px;"><a href="${actionUrl}" class="btn">${ctaText} &rarr;</a></div>` : ""}
     </div>
     <div class="footer" style="padding: 24px; background: #f8fafc; border-top: 1px solid #e2e8f0; text-align: center; font-size: 12px; color: #94a3b8; line-height: 1.5;">
-      This is an automated notification from WorkPluse Workforce Systems.<br>
-      © ${new Date().getFullYear()} WorkPluse Inc. All rights reserved.
+      This is an automated notification from Clocked Workforce Systems.<br>
+      © ${new Date().getFullYear()} Clocked Inc. All rights reserved.
     </div>
   </div>
 </body>
@@ -201,9 +201,9 @@ class EmailService {
     });
     return this.sendEmail({
       to,
-      subject: "Action required: WorkPluse payment failed",
+      subject: "Action required: Clocked payment failed",
       html,
-      text: `The latest WorkPluse payment for ${companyName || "your workspace"} failed. Update billing at ${billingUrl}.`,
+      text: `The latest Clocked payment for ${companyName || "your workspace"} failed. Update billing at ${billingUrl}.`,
     });
   }
 
@@ -211,7 +211,7 @@ class EmailService {
   async sendSubscriptionReminderEmail(to, { companyName, companyLogoUrl, title, message, urgent = false } = {}) {
     const billingUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/settings?billing=1`;
     const html = await this.buildHtmlTemplate({
-      title: title || "About your WorkPluse plan",
+      title: title || "About your Clocked plan",
       badge: urgent ? "Action needed" : "Plan reminder",
       badgeColor: urgent ? "#dc2626" : "#2563eb",
       companyName,
@@ -225,7 +225,7 @@ class EmailService {
     });
     return this.sendEmail({
       to,
-      subject: `${urgent ? "Action required: " : ""}${title || "About your WorkPluse plan"}`,
+      subject: `${urgent ? "Action required: " : ""}${title || "About your Clocked plan"}`,
       html,
       text: `${message || ""} Manage your plan at ${billingUrl}.`,
     });
@@ -276,7 +276,7 @@ class EmailService {
 
     return await this.sendEmail({
       to,
-      subject: `[WorkPluse] Leave Request ${statusText} (${startStr} - ${endStr})`,
+      subject: `[Clocked] Leave Request ${statusText} (${startStr} - ${endStr})`,
       html,
     });
   }
@@ -322,7 +322,7 @@ class EmailService {
 
     return await this.sendEmail({
       to,
-      subject: `[WorkPluse] Salary Payslip Disbursed for ${monthName} ${year}`,
+      subject: `[Clocked] Salary Payslip Disbursed for ${monthName} ${year}`,
       html,
     });
   }
@@ -361,7 +361,7 @@ class EmailService {
 
     return await this.sendEmail({
       to,
-      subject: `[WorkPluse] Reminder: Your shift starts at ${shiftTime || "09:00 AM"}`,
+      subject: `[Clocked] Reminder: Your shift starts at ${shiftTime || "09:00 AM"}`,
       html,
     });
   }
@@ -397,7 +397,7 @@ class EmailService {
 
     return await this.sendEmail({
       to,
-      subject: `[WorkPluse] Reminder: Please punch out, your shift ended at ${shiftEndTime || "06:00 PM"}`,
+      subject: `[Clocked] Reminder: Please punch out, your shift ended at ${shiftEndTime || "06:00 PM"}`,
       html,
     });
   }
@@ -481,13 +481,30 @@ class EmailService {
 
     return await this.sendEmail({
       to,
-      subject: `[WorkPluse] Job Offer: ${rawDesignation} at WorkPluse`,
+      subject: `[Clocked] Job Offer: ${rawDesignation} at Clocked`,
       html,
       attachments: [{
         content: pdf.toString("base64"),
         name: `Offer_Letter_${String(candidateName).replace(/[^a-z0-9]+/gi, "_")}.pdf`,
       }],
     });
+  }
+
+  /** Candidate onboarding invitation with the secure portal link. */
+  async sendOnboardingInviteEmail(to, candidateName, { designation, expectedJoinDate, onboardingUrl, companyName, companyLogoUrl } = {}) {
+    const safeCandidateName = escapeHtml(candidateName || "there");
+    const safeDesignation = escapeHtml(designation || "your new role");
+    const joinDate = expectedJoinDate
+      ? new Date(expectedJoinDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
+      : "To be confirmed";
+    const contentHtml = `
+      <p class="text">Hello <strong>${safeCandidateName}</strong>,</p>
+      <p class="text">You have been invited to complete your onboarding for the role of <strong>${safeDesignation}</strong>.</p>
+      <div class="info-card"><div class="info-row"><span class="info-label">Role:</span><span class="info-value">${safeDesignation}</span></div><div class="info-row"><span class="info-label">Expected joining:</span><span class="info-value">${escapeHtml(joinDate)}</span></div></div>
+      <p class="text">Use the secure portal to submit your profile and required documents. Your hiring team will share the official offer after review.</p>
+    `;
+    const html = await this.buildHtmlTemplate({ title: "Complete your onboarding", badge: "Onboarding invitation", contentHtml, ctaText: "Open onboarding portal", ctaUrl: onboardingUrl, companyName, companyLogoUrl });
+    return this.sendEmail({ to, subject: `[Clocked] Complete your onboarding at ${companyName || "Clocked"}`, html });
   }
 
   /**
@@ -500,7 +517,7 @@ class EmailService {
     const contentHtml = `
       <p class="text">Hello <strong>${adminName || "Admin"}</strong>,</p>
       <p class="text">
-        Welcome to <strong>WorkPluse</strong>! Your organization <strong>${organizationName}</strong> has been registered successfully.
+        Welcome to <strong>Clocked</strong>! Your organization <strong>${organizationName}</strong> has been registered successfully.
         To activate your <strong>${plan || "FREE_TRIAL"}</strong> plan and unlock your full dashboard, please enter the activation code below.
       </p>
       <div class="info-card" style="text-align: center; padding: 28px;">
@@ -524,7 +541,7 @@ class EmailService {
     `;
 
     const html = await this.buildHtmlTemplate({
-      title: "Your WorkPluse Plan Unlock Code",
+      title: "Your Clocked Plan Unlock Code",
       badge: "Plan Activation Required",
       badgeColor: "#2563eb",
       contentHtml,
@@ -536,7 +553,7 @@ class EmailService {
 
     return await this.sendEmail({
       to,
-      subject: `[WorkPluse] Your Plan Unlock Code — ${unlockCode}`,
+      subject: `[Clocked] Your Plan Unlock Code — ${unlockCode}`,
       html,
     });
   }
@@ -554,7 +571,7 @@ class EmailService {
     const contentHtml = `
       <p class="text">Hello <strong>${firstName}</strong>,</p>
       <p class="text">
-        You have been added to <strong>${organizationName}</strong>'s WorkPluse attendance management system
+        You have been added to <strong>${organizationName}</strong>'s Clocked attendance management system
         as a <strong>${role || "Employee"}</strong>.
         Your login credentials are ready — please sign in and change your password on first login.
       </p>
@@ -574,16 +591,16 @@ class EmailService {
         ⚠️ You will be prompted to set a new password when you first log in. Your temporary password will expire after first use.
       </p>
       <p class="text" style="font-size: 13px; color: #64748b;">
-        Use the WorkPluse app or web portal to mark your daily attendance, view payslips, apply for leaves, and more.
+        Use the Clocked app or web portal to mark your daily attendance, view payslips, apply for leaves, and more.
       </p>
     `;
 
     const html = await this.buildHtmlTemplate({
-      title: `Welcome to ${organizationName} on WorkPluse!`,
+      title: `Welcome to ${organizationName} on Clocked!`,
       badge: "Account Created",
       badgeColor: "#10b981",
       contentHtml,
-      ctaText: "Login to WorkPluse",
+      ctaText: "Login to Clocked",
       ctaUrl: loginUrl || `${process.env.FRONTEND_URL || "http://localhost:3000"}/login`,
       companyName: rawOrganizationName,
       companyLogoUrl,
@@ -591,7 +608,7 @@ class EmailService {
 
     return await this.sendEmail({
       to,
-      subject: `[WorkPluse] Your login credentials for ${rawOrganizationName}`,
+      subject: `[Clocked] Your login credentials for ${rawOrganizationName}`,
       html,
     });
   }
@@ -602,9 +619,9 @@ class EmailService {
   async sendPasswordResetEmail(to, userName, { resetUrl, expiresIn = "60 minutes", companyName, companyLogoUrl }) {
     userName = escapeHtml(userName);
     const contentHtml = `
-      <p class="text" style="font-size: 15px; line-height: 1.6; color: #475569; margin: 0 0 20px 0;">Hello <strong>${userName || "WorkPluse User"}</strong>,</p>
+      <p class="text" style="font-size: 15px; line-height: 1.6; color: #475569; margin: 0 0 20px 0;">Hello <strong>${userName || "Clocked User"}</strong>,</p>
       <p class="text" style="font-size: 15px; line-height: 1.6; color: #475569; margin: 0 0 20px 0;">
-        We received a request to reset the password for your WorkPluse enterprise account. If you made this request, click the button below to choose a new password:
+        We received a request to reset the password for your Clocked enterprise account. If you made this request, click the button below to choose a new password:
       </p>
       <div style="text-align: center; margin: 28px 0;">
         <a href="${resetUrl}" class="btn" style="background: #4f46e5; color: #ffffff !important; font-weight: 700; padding: 14px 32px; border-radius: 12px; text-decoration: none; display: inline-block;">Reset Password &rarr;</a>
@@ -624,7 +641,7 @@ class EmailService {
     `;
 
     const html = await this.buildHtmlTemplate({
-      title: "Reset Your WorkPluse Password",
+      title: "Reset Your Clocked Password",
       badge: "Password Reset",
       badgeColor: "#4f46e5",
       contentHtml,
@@ -638,7 +655,7 @@ class EmailService {
 
     return await this.sendEmail({
       to,
-      subject: `[WorkPluse] Password Reset Request`,
+      subject: `[Clocked] Password Reset Request`,
       html,
     });
   }
@@ -671,7 +688,7 @@ class EmailService {
     const contentHtml = `
       <p class="text">Hello <strong>${userName || "there"}</strong>,</p>
       <p class="text">
-        Thanks for signing up for <strong>WorkPluse</strong>! Enter the verification code below to confirm your email address and activate your account.
+        Thanks for signing up for <strong>Clocked</strong>! Enter the verification code below to confirm your email address and activate your account.
       </p>
       <div class="info-card" style="text-align: center; padding: 28px;">
         <p style="margin: 0 0 8px; font-size: 13px; color: #64748b; font-weight: 500; text-transform: uppercase; letter-spacing: 1px;">Your Verification Code</p>
@@ -681,7 +698,7 @@ class EmailService {
         <p style="margin: 12px 0 0; font-size: 12px; color: #94a3b8;">This code expires in ${expiresIn}.</p>
       </div>
       <p class="text" style="font-size: 13px; color: #64748b;">
-        If you did not create a WorkPluse account, you can safely ignore this email.
+        If you did not create a Clocked account, you can safely ignore this email.
       </p>
     `;
 
@@ -696,7 +713,7 @@ class EmailService {
 
     return await this.sendEmail({
       to,
-      subject: `[WorkPluse] Your verification code is ${code}`,
+      subject: `[Clocked] Your verification code is ${code}`,
       html,
     });
   }

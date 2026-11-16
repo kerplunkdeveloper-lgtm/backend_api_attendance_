@@ -77,6 +77,10 @@ const calculateLateMinutesWithPermission = ({ shift, graceMinutes, checkInTime, 
   return Math.max(0, actual - permissionEnd);
 };
 
+// Flexibility can be granted to the whole shift or to one employee assigned to
+// a normal shift. Keep both sources in one place so all punch flows agree.
+const isFlexiblePunching = (employee, shift) => Boolean(employee?.flexiblePunching || shift?.flexiblePunching);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -488,6 +492,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
 
   // ── Week-Off / Holiday / Leave Detection ──────────────────────────────────
   const shift = await resolveShift(employee, organizationId, checkInTime);
+  const flexiblePunching = isFlexiblePunching(employee, shift);
   const isOffDay = shift ? !isWorkingDay(shift, checkInTime, timezone) : false;
 
   const [holidayRow, approvedLeave, companyLeave, approvedPermission] = await Promise.all([
@@ -551,8 +556,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
 
   if (
     shift &&
-    !employee.flexiblePunching &&
-    !shift.flexiblePunching &&
+    !flexiblePunching &&
     workMode !== "SHOOT" &&
     !isOnBehalf(employee, userId) &&
     source !== "BIOMETRIC" &&
@@ -631,7 +635,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
   // inside a branch radius. Previously a punch without coordinates slipped
   // through as a bypass, so denying location permission defeated the rule.
   const isSpecialWorkMode = SPECIAL_WORK_MODES.includes(workMode);
-  const isAnyTimeShift = Boolean(employee.flexiblePunching || shift?.flexiblePunching);
+  const isAnyTimeShift = flexiblePunching;
   const officeModeRequiresGeofence = workMode === "OFFICE" && branchesWithCoords.length > 0 && !isAnyTimeShift;
   if ((policy.geofenceStrict || officeModeRequiresGeofence) && !skipGeofence && !isSpecialWorkMode && !isAnyTimeShift) {
     const rejection = officeOnlyRejection({ latitude, longitude, accuracy, branches: branchesWithCoords, allowWfh: policy.allowWfh });
@@ -662,7 +666,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
   let status = workMode === "WORK_FROM_HOME" ? "WORK_FROM_HOME" : "PRESENT";
 
   // If working on rest day/leave/holiday, late does not penalize the employee
-  if (!isOvertimeShift && approvedLeave?.halfDayPeriod !== "MORNING" && shift) {
+  if (!isOvertimeShift && approvedLeave?.halfDayPeriod !== "MORNING" && shift && !flexiblePunching) {
     lateMinutes = calculateLateMinutesWithPermission({
       shift,
       graceMinutes: await getLateGraceMinutes(organizationId, shift.graceMinutes),
@@ -833,6 +837,7 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
   }
 
   const shift = await resolveShift(employee, organizationId, checkInTime);
+  const flexiblePunching = isFlexiblePunching(employee, shift);
   const isOffDay = shift ? !isWorkingDay(shift, checkInTime, timezone) : false;
 
   const [holidayRow, approvedLeave, companyLeave, approvedPermission] = await Promise.all([
@@ -904,7 +909,7 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
   }
 
   let lateMinutes = 0;
-  if (!isOvertimeShift && approvedLeave?.halfDayPeriod !== "MORNING" && shift) {
+  if (!isOvertimeShift && approvedLeave?.halfDayPeriod !== "MORNING" && shift && !flexiblePunching) {
     lateMinutes = calculateLateMinutesWithPermission({
       shift,
       graceMinutes: await getLateGraceMinutes(organizationId, shift.graceMinutes),
@@ -1056,6 +1061,7 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
 
   // Resolve shift with override support
   let shift = attendance.shift || (await resolveShift(employee, organizationId, attendanceDate));
+  const flexiblePunching = isFlexiblePunching(employee, shift);
   const isOffDay = shift ? !isWorkingDay(shift, attendanceDate, timezone) : false;
 
   const [holidayRow, approvedLeave, companyLeave, approvedPermission] = await Promise.all([
@@ -1130,7 +1136,7 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
       isNonWorkingDay: true,
     };
   } else if (shift) {
-    metrics = evaluateAttendanceAgainstShift({ ...shift, graceMinutes: await getLateGraceMinutes(organizationId, shift.graceMinutes) }, attendance.checkIn, checkOutTime, totalBreakMinutes, {
+    metrics = evaluateAttendanceAgainstShift({ ...shift, flexiblePunching, graceMinutes: await getLateGraceMinutes(organizationId, shift.graceMinutes) }, attendance.checkIn, checkOutTime, totalBreakMinutes, {
       timeZone: timezone,
       lunchMinutes: totalLunchMinutes,
       halfDayThresholdMinutes: policy.halfDayThresholdMinutes,
@@ -1175,7 +1181,7 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
 
   // The shift calculator sees the raw punch-in time. Re-apply the approved
   // permission window so only time after permission ends is treated as late.
-  if (!isNonWorkingDay && shift && !shift.flexiblePunching && !approvedLeave?.halfDayPeriod) {
+  if (!isNonWorkingDay && shift && !flexiblePunching && !approvedLeave?.halfDayPeriod) {
     metrics.lateMinutes = calculateLateMinutesWithPermission({
       shift,
       graceMinutes: await getLateGraceMinutes(organizationId, shift.graceMinutes),
@@ -1191,7 +1197,7 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
   // An approved permission that contains the checkout time also waives the
   // early-departure mark (for example, 4:00–5:00 PM permission on a 6:00 PM
   // shift). The permission itself remains available for payroll accounting.
-  if (!isNonWorkingDay && shift && !shift.flexiblePunching && approvedPermission?.startTime && approvedPermission?.endTime) {
+  if (!isNonWorkingDay && shift && !flexiblePunching && approvedPermission?.startTime && approvedPermission?.endTime) {
     const permissionStart = parseTimeToMinutes(approvedPermission.startTime, timezone);
     const permissionEnd = parseTimeToMinutes(approvedPermission.endTime, timezone);
     const actualCheckout = parseTimeToMinutes(checkOutTime, timezone);
@@ -1230,7 +1236,7 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
 
   // Preserve the mode selected at punch-in when punching out. Shoot is stored in wfhNote.
   const effectiveWorkMode = attendance.wfhNote?.startsWith("SHOOT:") ? "SHOOT" : (workMode || "OFFICE");
-  const isAnyTimeShift = Boolean(employee.flexiblePunching || shift?.flexiblePunching);
+  const isAnyTimeShift = flexiblePunching;
   const checkoutGeofence = skipGeofence || source === "BIOMETRIC" || isAnyTimeShift
     ? { isBypassed: true, bypassReason: source === "BIOMETRIC" ? "BIOMETRIC_DEVICE" : isAnyTimeShift ? "ANY_TIME_SHIFT" : "DEVICE" }
     : await assertPauseGeofence({ organizationId, employee, attendance, latitude, longitude, accuracy, label: "Punch-out", userId, actorRole });
@@ -1554,7 +1560,7 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
   let normalizedCheckIn = checkIn ? new Date(checkIn) : null;
   let normalizedCheckOut = checkOut ? new Date(checkOut) : null;
   if (normalizedCheckIn && normalizedCheckOut && normalizedCheckOut <= normalizedCheckIn) {
-    if (shift?.flexiblePunching || isOvernightShift(shift)) {
+    if (isFlexiblePunching(employee, shift) || isOvernightShift(shift)) {
       normalizedCheckOut = new Date(normalizedCheckOut.getTime() + 24 * 60 * 60 * 1000);
     } else {
       const error = new Error("Punch-out time must be after punch-in time");
@@ -1571,7 +1577,7 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
 
   if (normalizedCheckIn && normalizedCheckOut && shift) {
     const metrics = evaluateAttendanceAgainstShift(
-      shift,
+      { ...shift, flexiblePunching: isFlexiblePunching(employee, shift) },
       normalizedCheckIn,
       normalizedCheckOut,
       0,
@@ -2258,6 +2264,11 @@ const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, 
   if (status && status !== "ALL") where.status = status;
 
   const { limit: take, skip, page: curPage } = parsePagination({ page, limit }, { defaultLimit: 20 });
+  // Today + team views may append derived ABSENT rows below. In that case we
+  // need the complete filtered set before applying the final in-memory page.
+  // For every other query the database page is already the final page.
+  const mayAddVirtualAbsence = canSeeTeam && from && to && from === to &&
+    (!status || status === "ALL" || status === "ABSENT");
 
   const [records, total] = await Promise.all([
     prisma.attendance.findMany({
@@ -2280,8 +2291,7 @@ const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, 
         },
       },
       orderBy: { date: "desc" },
-      take,
-      skip,
+      ...(mayAddVirtualAbsence ? {} : { take, skip }),
     }),
     prisma.attendance.count({ where }),
   ]);
@@ -2348,7 +2358,7 @@ const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, 
 
   const combined = status === "ABSENT" || status === "ALL" ? [...records, ...virtualAbsent] : records;
   combined.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  const paged = combined.slice(skip, skip + take);
+  const paged = mayAddVirtualAbsence ? combined.slice(skip, skip + take) : combined;
   const combinedTotal = total + virtualAbsent.length;
   return {
     success: true,

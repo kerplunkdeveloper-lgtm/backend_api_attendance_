@@ -324,14 +324,15 @@ class CorrectionService {
         let overtimeMinutes = 0;
         let attendanceStatus = "PRESENT";
 
+        const flexiblePunching = Boolean(employee?.flexiblePunching || shift?.flexiblePunching);
         if (shift && checkIn && checkOut) {
-          const metrics = evaluateAttendanceAgainstShift(shift, checkIn, checkOut);
+          const metrics = evaluateAttendanceAgainstShift({ ...shift, flexiblePunching }, checkIn, checkOut);
           workingMinutes = metrics.workingMinutes;
           lateMinutes = metrics.lateMinutes;
           earlyMinutes = metrics.earlyMinutes;
           overtimeMinutes = metrics.overtimeMinutes;
           attendanceStatus = metrics.status;
-        } else if (shift && checkIn) {
+        } else if (shift && checkIn && !flexiblePunching) {
           lateMinutes = calculateLateMinutes(shift.startTime, shift.graceMinutes, checkIn);
           attendanceStatus = lateMinutes > 0 ? "LATE" : "PRESENT";
         }

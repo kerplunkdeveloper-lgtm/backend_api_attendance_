@@ -1,4 +1,5 @@
 const prisma = require("../config/database");
+const { normalizeExitDocumentTemplates } = require("../utils/exitDocumentTemplate");
 const { proRataFinalSalary, encashableLeaveDays } = require("../utils/finalSettlementMath");
 const notificationService = require("./notification.service");
 const { getPolicy, getOrgDateOnly } = require("./attendance.service");
@@ -959,6 +960,18 @@ class OffboardingService {
    * 9. Generate Exit Documentation Data (Full & Final, Relieving Letter, Experience Letter, Clearance Certificate)
    */
   async getExitDocumentData(organizationId, exitId, docType) {
+    const allowedDocumentTypes = new Set([
+      "FF_STATEMENT",
+      "CLEARANCE_CERTIFICATE",
+      "RELIEVING_LETTER",
+      "EXPERIENCE_LETTER",
+    ]);
+    if (!allowedDocumentTypes.has(docType)) {
+      const error = new Error("Unsupported exit document type");
+      error.statusCode = 400;
+      throw error;
+    }
+
     const exit = await prisma.employeeExit.findFirst({
       where: { id: exitId, organizationId },
       include: {
@@ -983,7 +996,9 @@ class OffboardingService {
     }
 
     const { employee, organization, clearances, finalSettlement } = exit;
-    const joiningDate = employee.createdAt ? new Date(employee.createdAt) : new Date();
+    // The employment start date belongs to the employee profile. `createdAt`
+    // can be the date an HR user imported or recreated the record.
+    const joiningDate = employee.dateOfJoining || employee.createdAt || new Date();
     const exitDate = exit.approvedLastWorkingDate || exit.preferredLastWorkingDate || new Date();
 
     const formatDateStr = (d) =>
@@ -997,15 +1012,17 @@ class OffboardingService {
         name: organization.name,
         email: organization.email || "hr@workpulse.io",
         phone: organization.phone || "+91 80 4000 0000",
-        address: "Corporate Towers, High-Tech City, Bengaluru, KA 560100",
+        address: organization.address || "Corporate Towers, High-Tech City, Bengaluru, KA 560100",
+        logoUrl: organization.logoUrl || null,
       },
+      template: normalizeExitDocumentTemplates(organization.hrAccess?.EXIT_DOCUMENT_TEMPLATES),
       employee: {
         id: employee.id,
         code: employee.employeeCode,
         name: `${employee.firstName} ${employee.lastName || ""}`.trim(),
         email: employee.user?.email || null,
         phone: employee.phone || null,
-        designation: employee.user?.role === "MANAGER" ? "Senior Lead / Manager" : "Software Engineer",
+        designation: employee.designation || "Employee",
         department: employee.department?.name || "Operations",
         branch: employee.branch?.name || "Main HQ",
         joiningDate: formatDateStr(joiningDate),

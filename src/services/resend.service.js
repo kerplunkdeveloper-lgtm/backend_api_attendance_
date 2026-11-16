@@ -16,7 +16,7 @@ class ResendEmailService {
     const parsedFrom = configuredFrom.match(/^(.+?)\s*<([^<>\s]+@[^<>\s]+)>$/);
     this.fromEmail = String(parsedFrom?.[2] || configuredFrom).trim();
     this.fromName = String(
-      process.env.RESEND_FROM_NAME || parsedFrom?.[1] || "WorkPluse",
+      process.env.RESEND_FROM_NAME || parsedFrom?.[1] || "Clocked",
     ).trim();
     this.client = this.apiKey ? new Resend(this.apiKey) : null;
   }
@@ -45,8 +45,8 @@ class ResendEmailService {
     const payload = {
       from: this.fromName ? `${this.fromName} <${this.fromEmail}>` : this.fromEmail,
       to: recipients,
-      subject: subject || "WorkPluse Notification",
-      html: html || (text ? `<p>${text}</p>` : "<p>WorkPluse Notification</p>"),
+      subject: subject || "Clocked Notification",
+      html: html || (text ? `<p>${text}</p>` : "<p>Clocked Notification</p>"),
       ...(text ? { text } : {}),
       ...(attachments.length ? { attachments } : {}),
     };

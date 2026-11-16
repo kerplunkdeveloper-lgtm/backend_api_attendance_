@@ -11,6 +11,39 @@ const statutoryService = require("./statutory.service");
 const { normalizeSplit, buildSalaryBreakdown } = require("../utils/salarySplit");
 const { getScheduledDurationMinutes } = require("../utils/shiftCalculator");
 
+// Payroll preview must remain usable while an additive payroll migration is
+// being rolled out. Prisma reports both a missing table and a missing column
+// as schema errors; those optional features should contribute zero rather than
+// turning the whole organization's preview into HTTP 500.
+const isMissingSchemaObject = (error) =>
+  error?.code === "P2021" || error?.code === "P2022";
+
+const safeOptionalFindMany = async (model, args, fallbackArgs = null) => {
+  if (!model?.findMany) return [];
+  try {
+    return await model.findMany(args);
+  } catch (error) {
+    if (!isMissingSchemaObject(error)) throw error;
+    if (!fallbackArgs) return [];
+    try {
+      return await model.findMany(fallbackArgs);
+    } catch (fallbackError) {
+      if (!isMissingSchemaObject(fallbackError)) throw fallbackError;
+      return [];
+    }
+  }
+};
+
+const safeOptionalFindUnique = async (model, args) => {
+  if (!model?.findUnique) return null;
+  try {
+    return await model.findUnique(args);
+  } catch (error) {
+    if (isMissingSchemaObject(error)) return null;
+    throw error;
+  }
+};
+
 /** Mask a bank account so only the last 4 digits are shown on payslips. */
 const maskAccount = (value) => {
   const digits = String(value).replace(/\s+/g, "");
@@ -470,12 +503,13 @@ class PayrollService {
 
     // Keep the approved permission minutes per day so authorised time away is
     // removed from that day's productive-hours target.
-    const approvedPermissions = prisma.permissionRequest?.findMany
-      ? await prisma.permissionRequest.findMany({
+    const approvedPermissions = await safeOptionalFindMany(prisma.permissionRequest, {
         where: { organizationId, employeeId, status: "APPROVED", date: { gte: period.start, lte: period.end } },
         select: { date: true, hours: true, startTime: true, endTime: true, startedAt: true, endedAt: true },
-      })
-      : [];
+      }, {
+        where: { organizationId, employeeId, status: "APPROVED", date: { gte: period.start, lte: period.end } },
+        select: { date: true, hours: true, startTime: true, endTime: true },
+      });
     const permissionMinutesByKey = new Map();
     approvedPermissions.forEach((row) => {
       const minutes = row.startedAt && row.endedAt
@@ -566,7 +600,7 @@ class PayrollService {
     // A reviewed monthly allocation is the source of truth for how approved OT
     // is settled. Permission, leave and comp-off portions are already credited
     // as entitlements; only the chosen cash remainder is payable here.
-    const overtimeAllocation = await prisma.overtimeAllocation.findUnique({
+    const overtimeAllocation = await safeOptionalFindUnique(prisma.overtimeAllocation, {
       where: { employeeId_month_year: { employeeId, month: m, year: y } },
       select: { id: true, status: true, approvedMinutes: true, permissionMinutes: true, leaveMinutes: true, compOffMinutes: true, cashMinutes: true, settledPermissionMinutes: true, settledLeaveMinutes: true, settledCompOffMinutes: true, settledCashMinutes: true },
     });
@@ -1351,7 +1385,7 @@ class PayrollService {
       where: { organizationId },
     });
 
-    const companyDisplayName = template?.companyName || payslip.organization.name || "WorkPluse Enterprise";
+    const companyDisplayName = template?.companyName || payslip.organization.name || "Clocked Enterprise";
     const companyDisplayAddress = template?.addressLine1
       ? `${template.addressLine1}${template.addressLine2 ? ", " + template.addressLine2 : ""}`
       : (payslip.employee.branch?.address || "Corporate Headquarters, Cyber City, Phase II");
