@@ -37,6 +37,11 @@ const calendarMonthsInclusive = (from, to) => {
   return Math.max(0, (end.getUTCFullYear() - start.getUTCFullYear()) * 12 + end.getUTCMonth() - start.getUTCMonth() + 1);
 };
 
+const laterDate = (...dates) => dates
+  .filter(Boolean)
+  .map((date) => new Date(date))
+  .reduce((latest, date) => (!latest || date > latest ? date : latest), null);
+
 /**
  * Parses a Shift.workingDays CSV ("1,2,3,4,5" where 0=Sunday) into a Set.
  * Falls back to Mon–Sat when the employee has no shift configured.
@@ -83,18 +88,21 @@ const classifyRangeDays = (start, end, holidayDateKeys, workingDaySet) => {
 };
 
 class LeaveService {
-  async getMonthlyPaidLeaveStatus({ db = prisma, employee, organizationId, eligibleFrom, leaveDate, excludeRequestId = null, policy }) {
+  async getMonthlyPaidLeaveStatus({ db = prisma, employee, organizationId, eligibleFrom, leaveDate, excludeRequestId = null, policy, eligibilityActive = true }) {
     const currentLeaveDate = leaveDate || new Date();
     const currentPolicy = policy || await policyService.getPolicy(organizationId);
     const monthlyPaidLeaveDays = Math.max(0, Number(currentPolicy.monthlyPaidLeaveDays ?? 1));
     const carryForward = currentPolicy.paidLeaveCarryForward !== false;
     const eligibleDate = eligibleFrom ? new Date(eligibleFrom) : null;
-    if (eligibleDate && currentLeaveDate < eligibleDate) {
+    if (eligibilityActive && eligibleDate && currentLeaveDate < eligibleDate) {
       return { monthlyAllowance: monthlyPaidLeaveDays, carryForward, accruedDays: 0, usedDays: 0, remainingDays: 0 };
     }
-    const accrualStart = carryForward
-      ? monthStartUtc(eligibleFrom || employee.dateOfJoining || employee.createdAt || currentLeaveDate)
-      : monthStartUtc(currentLeaveDate);
+    // Paid leave starts when the employee is brought into WorkPulse, not from
+    // the employee's historical joining date. This prevents leave imported
+    // from another HR tool from reducing the new monthly allowance.
+    const systemStart = employee.paidLeaveStartDate || employee.createdAt || currentLeaveDate;
+    const effectiveStart = eligibilityActive ? laterDate(systemStart, eligibleFrom) : systemStart;
+    const accrualStart = carryForward ? monthStartUtc(effectiveStart) : monthStartUtc(currentLeaveDate);
     const accrualEnd = monthEndUtc(currentLeaveDate);
     const accruedDays = (carryForward ? calendarMonthsInclusive(accrualStart, accrualEnd) : 1) * monthlyPaidLeaveDays;
 
@@ -108,9 +116,10 @@ class LeaveService {
         employeeId: employee.id,
         status: { in: BLOCKING_STATUSES },
         ...(excludeRequestId ? { id: { not: excludeRequestId } } : {}),
-        startDate: { lte: accrualEnd },
-        endDate: { gte: accrualStart },
-        leaveType: { isPaid: true },
+        // Only requests created for a date in the WorkPulse accrual window are
+        // charged. A legacy request that overlaps the boundary is historical.
+        startDate: { gte: accrualStart, lte: accrualEnd },
+        leaveType: { isPaid: true, code: { not: OT_LEAVE_CODE } },
       },
       select: { totalDays: true },
     });
@@ -122,6 +131,7 @@ class LeaveService {
       accruedDays,
       usedDays,
       remainingDays: Math.max(0, accruedDays - usedDays),
+      accrualStart,
     };
   }
 
@@ -133,6 +143,7 @@ class LeaveService {
       eligibleFrom: eligibility.eligibleFrom,
       leaveDate,
       excludeRequestId,
+      eligibilityActive: eligibility.leaveEligibilityActive,
     });
     if (status.remainingDays < requestedDays) {
       const error = new Error(
@@ -276,6 +287,7 @@ class LeaveService {
       organizationId,
       eligibleFrom: eligibility.eligibleFrom,
       leaveDate: new Date(),
+      eligibilityActive: eligibility.leaveEligibilityActive,
     });
 
     const balances = await Promise.all(

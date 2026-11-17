@@ -711,6 +711,10 @@ model Employee {
   // while payroll and reports already referenced designation/dateOfJoining.
   designation           String?
   dateOfJoining         DateTime?
+  // Month from which this employee starts earning paid leave in WorkPulse.
+  // This is deliberately separate from the real-world joining date so leave
+  // imported from a previous HR system is not consumed from the new policy.
+  paidLeaveStartDate    DateTime @default(now())
   dateOfBirth           DateTime?
   gender                String? // MALE, FEMALE
   employmentType        String? // FULL_TIME, PART_TIME, CONTRACT, INTERN
