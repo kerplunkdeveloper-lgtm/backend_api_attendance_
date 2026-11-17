@@ -44,6 +44,14 @@ function validateStorageKey(key, organizationId) {
   }
 }
 
+function assertContentType(contentType, allowed) {
+  if (typeof contentType !== "string" || !allowed.includes(contentType.toLowerCase())) {
+    const error = new Error("Unsupported file type");
+    error.statusCode = 400;
+    throw error;
+  }
+}
+
 async function uploadBuffer(
   buffer,
   {
@@ -167,4 +175,6 @@ module.exports = {
   getFileContent,
   verifyFileExists,
   deleteObject,
+  validateStorageKey,
+  assertContentType,
 };

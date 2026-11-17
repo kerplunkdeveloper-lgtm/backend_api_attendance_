@@ -72,21 +72,23 @@ enum SubscriptionStatus {
 }
 
 model Organization {
-  id        String    @id @default(uuid())
-  name      String
-  email     String?
-  phone     String?
+  id                  String    @id @default(uuid())
+  name                String
+  email               String?
+  phone               String?
   // IANA zone (e.g. "Asia/Kolkata"). Attendance calendar dates, shift start/end
   // comparisons and report boundaries are all resolved in this zone rather than
   // the server's, so the same data reads correctly wherever the API is deployed.
-  timezone  String    @default("Asia/Kolkata")
-  currency  String    @default("INR")
-  address   String?
-  taxId     String?
-  logoUrl   String?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
+  timezone            String    @default("Asia/Kolkata")
+  currency            String    @default("INR")
+  address             String?
+  taxId               String?
+  logoUrl             String?
+  logoStorageProvider String    @default("cloudinary")
+  logoStorageKey      String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  deletedAt           DateTime?
 
   subscriptionPlan      SubscriptionPlan   @default(FREE_TRIAL)
   subscriptionStatus    SubscriptionStatus @default(TRIALING)
@@ -1411,7 +1413,7 @@ model OnboardingDocument {
   candidateId     String
   documentType    DocumentType
   fileName        String
-  fileUrl         String
+  fileUrl         String?
   fileSize        Int?
   mimeType        String?
   status          DocumentVerificationStatus @default(PENDING)
@@ -1420,6 +1422,8 @@ model OnboardingDocument {
   verifiedAt      DateTime?
   createdAt       DateTime                   @default(now())
   updatedAt       DateTime                   @updatedAt
+  storageProvider String                     @default("cloudinary")
+  storageKey      String?
 
   candidate OnboardingCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
 
@@ -1443,23 +1447,25 @@ enum ExpenseStatus {
 }
 
 model ExpenseClaim {
-  id              String          @id @default(uuid())
-  organizationId  String
-  employeeId      String
-  category        ExpenseCategory
-  amount          Decimal         @db.Decimal(10, 2)
-  date            DateTime        @db.Date
-  title           String
-  description     String?
-  receiptUrl      String?
-  receiptPublicId String?
-  status          ExpenseStatus   @default(PENDING)
-  reviewedBy      String?
-  reviewNote      String?
-  reviewedAt      DateTime?
-  payslipId       String?
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  id                     String          @id @default(uuid())
+  organizationId         String
+  employeeId             String
+  category               ExpenseCategory
+  amount                 Decimal         @db.Decimal(10, 2)
+  date                   DateTime        @db.Date
+  title                  String
+  description            String?
+  receiptUrl             String?
+  receiptPublicId        String?
+  receiptStorageProvider String          @default("cloudinary")
+  receiptStorageKey      String?
+  status                 ExpenseStatus   @default(PENDING)
+  reviewedBy             String?
+  reviewNote             String?
+  reviewedAt             DateTime?
+  payslipId              String?
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id])
   employee     Employee     @relation(fields: [employeeId], references: [id])
