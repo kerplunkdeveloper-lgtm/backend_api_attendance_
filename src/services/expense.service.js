@@ -64,7 +64,7 @@ class ExpenseService {
   async presentClaim(claim) {
     if (!claim?.receiptStorageKey) return claim;
     try {
-      return { ...claim, receiptUrl: await getDownloadUrl(claim.receiptStorageKey) };
+      return { ...claim, receiptUrl: await getDownloadUrl(claim.receiptStorageKey, 300, claim.organizationId) };
     } catch (error) {
       console.warn("[S3] Could not sign expense receipt:", error.message);
       return { ...claim, receiptUrl: null };

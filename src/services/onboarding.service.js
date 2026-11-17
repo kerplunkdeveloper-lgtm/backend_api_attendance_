@@ -256,7 +256,7 @@ class OnboardingService {
       ...live,
       documents: await Promise.all((live.documents || []).map(async (doc) => ({
         ...doc,
-        fileUrl: doc.storageKey ? await getDownloadUrl(doc.storageKey) : signedDeliveryUrl(doc.fileUrl, {
+        fileUrl: doc.storageKey ? await getDownloadUrl(doc.storageKey, 300, live.organizationId) : signedDeliveryUrl(doc.fileUrl, {
           ttlSeconds: 300,
           authenticated: isSensitiveDocumentType(doc.documentType),
         }),
@@ -551,7 +551,7 @@ class OnboardingService {
     // Aadhaar, PAN and bank files are stored privately, so their raw URL is refused. Hand out signed ones.
     return {
       ...candidate,
-      documents: await Promise.all((candidate.documents || []).map(async (doc) => ({ ...doc, fileUrl: doc.storageKey ? await getDownloadUrl(doc.storageKey) : signedDeliveryUrl(doc.fileUrl) }))),
+      documents: await Promise.all((candidate.documents || []).map(async (doc) => ({ ...doc, fileUrl: doc.storageKey ? await getDownloadUrl(doc.storageKey, 300, candidate.organizationId) : signedDeliveryUrl(doc.fileUrl) }))),
     };
   }
 
