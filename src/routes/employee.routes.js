@@ -19,6 +19,10 @@ const avatarFields = avatarUpload.fields([
 ]);
 
 router.use(authenticate);
+router.get(
+  "/:id/avatar-file",
+  employeeController.getEmployeeAvatarFile
+);
 
 router.get("/me", employeeController.getMe);
 router.put("/me", employeeController.updateMe);

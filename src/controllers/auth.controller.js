@@ -335,23 +335,39 @@ const updateMe = async (req, res) => {
   } catch (error) { return sendControllerError(res, error); }
 };
 
+
 const uploadAvatar = async (req, res) => {
   try {
     const avatarService = require("../services/avatar.service");
-    const url = await avatarService.uploadAvatarFile(req);
+
+    const uploaded = await avatarService.uploadAvatarFile(req);
+
     const user = await avatarService.setMyAvatar(
       req.user.id,
       req.user.organizationId,
-      url,
+      uploaded
     );
+
+    const url =
+      typeof uploaded === "string" ? uploaded : null;
+
     return res.json({
       success: true,
       message: "Profile photo updated",
-      data: { ...user, url, avatarUrl: url },
+      data: {
+        ...user,
+        url,
+        avatarUrl: url || user.avatarUrl || null,
+      },
       user,
     });
-  } catch (error) { return sendControllerError(res, error, { fallbackMessage: "Failed to upload photo" }); }
+  } catch (error) {
+    return sendControllerError(res, error, {
+      fallbackMessage: "Failed to upload photo",
+    });
+  }
 };
+
 
 const getPlans = async (req, res) => {
   try {
