@@ -4,6 +4,7 @@ const prisma = require("../config/database");
 const { DEFAULT_OFFER_LETTER_TEMPLATE, normalizeOfferLetterTemplate } = require("../utils/offerLetterTemplate");
 const { validateIdentityFields, parsePastDate } = require("../utils/employeeValidation");
 const { uploadImage, uploadBuffer, signedDeliveryUrl, isSensitiveDocumentType } = require("../config/cloudinary");
+const { uploadBuffer: uploadS3Buffer, getDownloadUrl, deleteObject: deleteS3Object } = require("../config/s3");
 const emailService = require("./email.service");
 const whatsappService = require("./whatsapp.service");
 const { generateTempPassword, resolveAssignableRole } = require("../utils/password");
@@ -234,6 +235,8 @@ class OnboardingService {
             status: true,
             rejectionReason: true,
             createdAt: true,
+            storageProvider: true,
+            storageKey: true,
           },
         },
       },
@@ -251,13 +254,13 @@ class OnboardingService {
     const live = assertPortalCandidate(candidate, { allowClosedReadOnly: true });
     return {
       ...live,
-      documents: (live.documents || []).map((doc) => ({
+      documents: await Promise.all((live.documents || []).map(async (doc) => ({
         ...doc,
-        fileUrl: signedDeliveryUrl(doc.fileUrl, {
+        fileUrl: doc.storageKey ? await getDownloadUrl(doc.storageKey) : signedDeliveryUrl(doc.fileUrl, {
           ttlSeconds: 300,
           authenticated: isSensitiveDocumentType(doc.documentType),
         }),
-      })),
+      }))),
     };
   }
 
@@ -372,30 +375,48 @@ class OnboardingService {
       throw error;
     }
 
+    const useS3 = String(process.env.STORAGE_PROVIDER || "").toLowerCase() === "s3";
+    let storageProvider = "cloudinary";
+    let storageKey = null;
+    let uploadedS3Key = null;
     if (file?.buffer) {
       const { assertSniffedType } = require("../middleware/upload.middleware");
       assertSniffedType(file);
-      const uploadRes = await uploadBuffer(file.buffer, {
-        folder: `workpulse/onboarding/${candidate.organizationId}/${candidate.id}`,
-        resource_type: "auto",
-        type: isSensitiveDocumentType(cleanType) ? "authenticated" : "upload",
-      });
-      fileUrl = uploadRes.secure_url;
-      fileName = fileName || file.originalname || "document";
-      fileSize = file.size || uploadRes.bytes;
-      mimeType = file.mimetype || uploadRes.format;
+      if (useS3) {
+        const result = await uploadS3Buffer(file.buffer, { organizationId: candidate.organizationId, folder: "onboarding", contentType: file.mimetype || "application/octet-stream" });
+        storageProvider = "s3";
+        storageKey = uploadedS3Key = result.key;
+        fileUrl = null;
+        fileName = fileName || file.originalname || "document";
+        fileSize = file.size || result.bytes;
+        mimeType = file.mimetype;
+      } else {
+        const uploadRes = await uploadBuffer(file.buffer, { folder: `workpulse/onboarding/${candidate.organizationId}/${candidate.id}`, resource_type: "auto", type: isSensitiveDocumentType(cleanType) ? "authenticated" : "upload" });
+        fileUrl = uploadRes.secure_url;
+        fileName = fileName || file.originalname || "document";
+        fileSize = file.size || uploadRes.bytes;
+        mimeType = file.mimetype || uploadRes.format;
+      }
     }
 
-    if (!documentType || !fileName || !fileUrl) {
+    if (!documentType || !fileName || (!fileUrl && !storageKey)) {
       const error = new Error("documentType and a file (or fileUrl) are required");
       error.statusCode = 400;
       throw error;
     }
 
     // Auto-upload to Cloudinary if base64 / data URI
-    let finalFileUrl = String(fileUrl).trim();
-    if (typeof finalFileUrl === "string" && finalFileUrl.startsWith("data:")) {
+    let finalFileUrl = fileUrl ? String(fileUrl).trim() : null;
+    if (!storageKey && typeof finalFileUrl === "string" && finalFileUrl.startsWith("data:")) {
       try {
+        if (useS3) {
+          const match = finalFileUrl.match(/^data:([^;,]+);base64,(.+)$/i);
+          if (!match) throw new Error("Invalid data URI");
+          const result = await uploadS3Buffer(Buffer.from(match[2], "base64"), { organizationId: candidate.organizationId, folder: "onboarding", contentType: match[1] });
+          storageProvider = "s3";
+          storageKey = uploadedS3Key = result.key;
+          finalFileUrl = null;
+        } else {
         const uploadRes = await uploadImage(finalFileUrl, {
           folder: `workpulse/onboarding/${candidate.id}`,
           resource_type: "auto",
@@ -408,12 +429,13 @@ class OnboardingService {
           error.statusCode = 503;
           throw error;
         }
+        }
       } catch (cloudErr) {
         const error = new Error("Document upload failed. Please retry.");
         error.statusCode = 503;
         throw error;
       }
-    } else if (!file?.buffer) {
+    } else if (!storageKey && !file?.buffer) {
       if (isSensitiveDocumentType(cleanType)) {
         const error = new Error("Sensitive onboarding documents must be uploaded directly.");
         error.statusCode = 400;
@@ -441,8 +463,13 @@ class OnboardingService {
         fileUrl: finalFileUrl,
         fileSize: fileSize ? Number(fileSize) : null,
         mimeType: mimeType ? String(mimeType).trim() : null,
+        storageProvider,
+        storageKey,
         status: "PENDING",
       },
+    }).catch(async (error) => {
+      if (uploadedS3Key) await deleteS3Object(uploadedS3Key, candidate.organizationId).catch(() => {});
+      throw error;
     });
 
     // Advance to HR review only once the profile is in. A document alone must not skip the profile step.
@@ -524,7 +551,7 @@ class OnboardingService {
     // Aadhaar, PAN and bank files are stored privately, so their raw URL is refused. Hand out signed ones.
     return {
       ...candidate,
-      documents: (candidate.documents || []).map((doc) => ({ ...doc, fileUrl: signedDeliveryUrl(doc.fileUrl) })),
+      documents: await Promise.all((candidate.documents || []).map(async (doc) => ({ ...doc, fileUrl: doc.storageKey ? await getDownloadUrl(doc.storageKey) : signedDeliveryUrl(doc.fileUrl) }))),
     };
   }
 
