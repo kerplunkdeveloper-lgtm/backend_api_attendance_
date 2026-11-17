@@ -52,4 +52,16 @@ module.exports = {
       return res.json({ success: true, message: "Offer letter template saved", data });
     } catch (err) { return sendControllerError(res, err); }
   },
+  async getExitDocumentTemplates(req, res) {
+    try {
+      const data = await orgService.getExitDocumentTemplates(req.user.organizationId);
+      return res.json({ success: true, data });
+    } catch (err) { return sendControllerError(res, err); }
+  },
+  async updateExitDocumentTemplates(req, res) {
+    try {
+      const data = await orgService.updateExitDocumentTemplates(req.user.organizationId, req.body);
+      return res.json({ success: true, message: "Exit document templates saved", data });
+    } catch (err) { return sendControllerError(res, err); }
+  },
 };

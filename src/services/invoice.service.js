@@ -18,7 +18,7 @@ function renderInvoicePdf(invoice) {
     const C = { brand: "#4338ca", ink: "#0f172a", body: "#334155", muted: "#64748b", line: "#e2e8f0", soft: "#f8fafc", tint: "#eef2ff", green: "#047857", greenBg: "#d1fae5" };
 
     // Margin 0 keeps pdfkit from adding pages on its own: everything is placed by coordinates.
-    const doc = new PDFDocument({ size: "A4", margin: 0, info: { Title: invoice.invoiceNumber, Author: "WorkPluse" } });
+    const doc = new PDFDocument({ size: "A4", margin: 0, info: { Title: invoice.invoiceNumber, Author: "Clocked" } });
     const chunks = [];
     doc.on("data", (chunk) => chunks.push(chunk));
     doc.on("end", () => resolve(Buffer.concat(chunks)));
@@ -33,7 +33,7 @@ function renderInvoicePdf(invoice) {
     // ── Header band ────────────────────────────────────────────────────────
     doc.rect(0, 0, PAGE_W, 108).fill(C.brand);
     doc.font("Helvetica-Bold").fontSize(22).fillColor("#ffffff");
-    text("WorkPluse", L, 34);
+    text("Clocked", L, 34);
     doc.font("Helvetica").fontSize(9).fillColor("#c7d2fe");
     text("Workforce Systems", L, 62);
     doc.font("Helvetica-Bold").fontSize(20).fillColor("#ffffff");
@@ -53,7 +53,7 @@ function renderInvoicePdf(invoice) {
     doc.font("Helvetica-Bold").fontSize(8).fillColor(C.muted);
     text("BILLED TO", L, y, { characterSpacing: 1 });
     doc.font("Helvetica-Bold").fontSize(13).fillColor(C.ink);
-    const orgName = org.name || "WorkPluse customer";
+    const orgName = org.name || "Clocked customer";
     const nameW = colW - 70; // leaves room for the PAID pill
     doc.text(orgName, L, y + 16, { width: nameW, lineBreak: true, height: 34, ellipsis: true });
     const nameH = Math.min(doc.heightOfString(orgName, { width: nameW }), 34);
@@ -142,7 +142,7 @@ function renderInvoicePdf(invoice) {
     const fy = 842 - 74;
     doc.moveTo(L, fy).lineTo(R, fy).lineWidth(0.7).strokeColor(C.line).stroke();
     doc.font("Helvetica-Bold").fontSize(9).fillColor(C.body);
-    text("Thank you for choosing WorkPluse.", L, fy + 14);
+    text("Thank you for choosing Clocked.", L, fy + 14);
     doc.font("Helvetica").fontSize(8.5).fillColor(C.muted);
     text("This is a computer-generated invoice for a subscription order and needs no signature.", L, fy + 28);
     text(invoice.invoiceNumber, L, fy + 14, { width: W, align: "right" });

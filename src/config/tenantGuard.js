@@ -16,7 +16,7 @@ const TENANT_MODELS = new Set([
   "EmployeeExit", "EmployeeClearance", "ExitInterview", "FinalSettlement",
   "Asset", "AssetAssignment", "AssetMaintenance", "ItDeclaration",
   "Form16Record", "StatutoryExport", "BillingOrder", "ChatThread",
-  "ChatMessage", "BiometricDevice", "LoanAdvance", "LoanRepayment",
+  "ChatMessage", "BiometricDevice", "BiometricCredential", "LoanAdvance", "LoanRepayment",
   "AppraisalCycle", "AppraisalReview", "OrgApiKey", "WebhookEndpoint",
   "WebhookDelivery", "Announcement", "CompanyPolicy",
 ]);

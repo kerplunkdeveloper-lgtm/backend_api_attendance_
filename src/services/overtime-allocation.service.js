@@ -54,13 +54,18 @@ class OvertimeAllocationService {
     const locked = await prisma.payslip.findFirst({ where: { organizationId, employeeId: employee.id, month, year }, select: { id: true, status: true } });
     if (locked) throw fail("Payroll for this month has already been generated and cannot be changed.", 409);
     const existing = await prisma.overtimeAllocation.findUnique({ where: { employeeId_month_year: { employeeId: employee.id, month, year } } });
-    if (existing?.status === "APPROVED") throw fail("This overtime choice is already approved. It cannot be changed after HR approval.", 409);
     const permissionMinutes = int(body.permissionMinutes);
     const leaveMinutes = int(body.leaveMinutes);
     const compOffMinutes = int(body.compOffMinutes);
+    const settledPermissionMinutes = existing?.settledPermissionMinutes ?? (existing?.status === "APPROVED" ? existing.permissionMinutes : 0);
+    const settledLeaveMinutes = existing?.settledLeaveMinutes ?? (existing?.status === "APPROVED" ? existing.leaveMinutes : 0);
+    const settledCompOffMinutes = existing?.settledCompOffMinutes ?? (existing?.status === "APPROVED" ? existing.compOffMinutes : 0);
+    if (permissionMinutes < settledPermissionMinutes || leaveMinutes < settledLeaveMinutes || compOffMinutes < settledCompOffMinutes) {
+      throw fail("Already approved OT claims cannot be reduced. You can submit additional leave or comp-off before payroll.", 409);
+    }
     if (permissionMinutes + leaveMinutes + compOffMinutes > totals.approvedMinutes) throw fail(`Your allocation cannot exceed ${totals.approvedMinutes} approved overtime minutes.`);
     if (leaveMinutes % 240 !== 0 || compOffMinutes % 240 !== 0) throw fail("Leave and comp-off must be selected in half-day (4 hour) steps.");
-    const data = { organizationId, employeeId: employee.id, month, year, approvedMinutes: totals.approvedMinutes, permissionMinutes, leaveMinutes, compOffMinutes, cashMinutes: totals.approvedMinutes - permissionMinutes - leaveMinutes - compOffMinutes, status: "PENDING", employeeNote: String(body.employeeNote || "").trim().slice(0, 500) || null, reviewNote: null, reviewedBy: null, reviewedAt: null, lockedAt: null };
+    const data = { organizationId, employeeId: employee.id, month, year, approvedMinutes: totals.approvedMinutes, permissionMinutes, leaveMinutes, compOffMinutes, cashMinutes: totals.approvedMinutes - permissionMinutes - leaveMinutes - compOffMinutes, status: "PENDING", employeeNote: String(body.employeeNote || "").trim().slice(0, 500) || null, reviewNote: null, reviewedBy: null, reviewedAt: null, lockedAt: null, settledPermissionMinutes: existing?.settledPermissionMinutes ?? (existing?.status === "APPROVED" ? existing.permissionMinutes : null), settledLeaveMinutes: existing?.settledLeaveMinutes ?? (existing?.status === "APPROVED" ? existing.leaveMinutes : null), settledCompOffMinutes: existing?.settledCompOffMinutes ?? (existing?.status === "APPROVED" ? existing.compOffMinutes : null), settledCashMinutes: existing?.settledCashMinutes ?? (existing?.status === "APPROVED" ? existing.cashMinutes : null) };
     return prisma.overtimeAllocation.upsert({ where: { employeeId_month_year: { employeeId: employee.id, month, year } }, update: data, create: data });
   }
 
@@ -82,12 +87,16 @@ class OvertimeAllocationService {
     if (locked) throw fail("Payroll has already been generated for this month.", 409);
     if (body.status === "REJECTED") return prisma.overtimeAllocation.update({ where: { id }, data: { status: "REJECTED", reviewNote: String(body.reviewNote || "").trim().slice(0, 500) || null, reviewedBy: reviewerUserId, reviewedAt: new Date() } });
     return prisma.$transaction(async (tx) => {
-      if (row.compOffMinutes > 0) {
-        const days = row.compOffMinutes / MINUTES_PER_LEAVE_DAY;
+      const previousCompOffMinutes = row.settledCompOffMinutes ?? 0;
+      const previousLeaveMinutes = row.settledLeaveMinutes ?? 0;
+      const compOffDelta = row.compOffMinutes - previousCompOffMinutes;
+      const leaveDelta = row.leaveMinutes - previousLeaveMinutes;
+      if (compOffDelta > 0) {
+        const days = compOffDelta / MINUTES_PER_LEAVE_DAY;
         const balance = await tx.compOffBalance.upsert({ where: { employeeId: row.employeeId }, update: { creditedDays: { increment: days } }, create: { organizationId, employeeId: row.employeeId, creditedDays: days, usedDays: 0 } });
         await tx.compOffTransaction.create({ data: { compOffBalanceId: balance.id, type: "CREDIT", days, reason: `OT conversion ${row.month}/${row.year}`, createdBy: reviewerUserId } });
       }
-      if (row.leaveMinutes > 0) {
+      if (leaveDelta > 0) {
         let leaveType = await tx.leaveType.findFirst({ where: { organizationId, code: OT_LEAVE_CODE } });
         if (leaveType?.isActive === false) {
           leaveType = await tx.leaveType.update({ where: { id: leaveType.id }, data: { isActive: true, isPaid: true, name: "OT Leave" } });
@@ -104,9 +113,9 @@ class OvertimeAllocationService {
             },
           });
         }
-        await tx.leaveBalance.upsert({ where: { employeeId_leaveTypeId_year: { employeeId: row.employeeId, leaveTypeId: leaveType.id, year: row.year } }, update: { allocatedDays: { increment: row.leaveMinutes / MINUTES_PER_LEAVE_DAY } }, create: { organizationId, employeeId: row.employeeId, leaveTypeId: leaveType.id, year: row.year, allocatedDays: row.leaveMinutes / MINUTES_PER_LEAVE_DAY, usedDays: 0 } });
+        await tx.leaveBalance.upsert({ where: { employeeId_leaveTypeId_year: { employeeId: row.employeeId, leaveTypeId: leaveType.id, year: row.year } }, update: { allocatedDays: { increment: leaveDelta / MINUTES_PER_LEAVE_DAY } }, create: { organizationId, employeeId: row.employeeId, leaveTypeId: leaveType.id, year: row.year, allocatedDays: leaveDelta / MINUTES_PER_LEAVE_DAY, usedDays: 0 } });
       }
-      return tx.overtimeAllocation.update({ where: { id }, data: { status: "APPROVED", reviewNote: String(body.reviewNote || "").trim().slice(0, 500) || null, reviewedBy: reviewerUserId, reviewedAt: new Date() } });
+      return tx.overtimeAllocation.update({ where: { id }, data: { status: "APPROVED", settledPermissionMinutes: row.permissionMinutes, settledLeaveMinutes: row.leaveMinutes, settledCompOffMinutes: row.compOffMinutes, settledCashMinutes: row.cashMinutes, reviewNote: String(body.reviewNote || "").trim().slice(0, 500) || null, reviewedBy: reviewerUserId, reviewedAt: new Date() } });
     });
   }
 }

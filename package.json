@@ -1,5 +1,5 @@
 {
-  "name": "workpulse_backend",
+  "name": "clocked_backend",
   "version": "2.0.0",
   "description": "",
   "main": "server.js",
@@ -13,6 +13,7 @@
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:verify:attendance": "node scripts/verify-attendance-schema.js",
+    "admin:create-platform-owner": "node scripts/create-platform-owner.js",
     "seed:workforce": "node scripts/seed-realistic-workforce.js",
     "db:local:deploy": "prisma db push",
     "db:local:push": "prisma db push",
@@ -27,6 +28,8 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1170.0",
+    "@aws-sdk/s3-request-presigner": "^3.1170.0",
     "@neon/config": "^1.3.2",
     "@neon/env": "^1.2.3",
     "@prisma/adapter-pg": "^7.10.0",

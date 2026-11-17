@@ -85,6 +85,24 @@ class AssetController {
     }
   }
 
+  /** POST /api/assets/bulk - validate and create a complete asset sheet */
+  async bulkCreateAssets(req, res, next) {
+    try {
+      const result = await assetService.bulkCreateAssets(
+        req.user.organizationId,
+        req.body.assets,
+        req.user,
+      );
+      return res.status(201).json({
+        success: true,
+        message: `${result.count} asset(s) imported successfully`,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   /**
    * PUT /api/assets/:id
    * Update asset metadata

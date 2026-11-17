@@ -4,6 +4,7 @@ const { assertRealImage } = require("../middleware/upload.middleware");
 const ssoService = require("./sso.service");
 const { isValidTimeZone } = require("../utils/datetime");
 const { DEFAULT_OFFER_LETTER_TEMPLATE, normalizeOfferLetterTemplate } = require("../utils/offerLetterTemplate");
+const { DEFAULT_EXIT_DOCUMENT_TEMPLATES, normalizeExitDocumentTemplates } = require("../utils/exitDocumentTemplate");
 const HR_ACCESS_AREAS = ["DASHBOARD", "ATTENDANCE", "EMPLOYEES", "ROLES", "APPROVALS", "ONBOARDING", "PAYROLL", "REPORTS", "ANNOUNCEMENTS", "BRANCHES", "POLICIES", "SHOOTS"];
 const DEFAULT_HR_ACCESS = Object.fromEntries(HR_ACCESS_AREAS.map((area) => [area, true]));
 const DEFAULT_EMPLOYEE_ACCESS = { DASHBOARD: true, ATTENDANCE: true, EMPLOYEES: false, ROLES: false, APPROVALS: false, ONBOARDING: false, PAYROLL: true, REPORTS: false, ANNOUNCEMENTS: true, BRANCHES: false, POLICIES: false, SHOOTS: true };
@@ -142,4 +143,17 @@ async function updateOfferLetterTemplate(organizationId, payload) {
   return template;
 }
 
-module.exports = { getSettings, updateSettings, uploadLogo, removeLogo, getOfferLetterTemplate, updateOfferLetterTemplate };
+async function getExitDocumentTemplates(organizationId) {
+  const org = await prisma.organization.findUnique({ where: { id: organizationId }, select: { hrAccess: true } });
+  return normalizeExitDocumentTemplates(org?.hrAccess?.EXIT_DOCUMENT_TEMPLATES || DEFAULT_EXIT_DOCUMENT_TEMPLATES);
+}
+
+async function updateExitDocumentTemplates(organizationId, payload) {
+  const org = await prisma.organization.findUnique({ where: { id: organizationId }, select: { hrAccess: true } });
+  const hrAccess = org?.hrAccess && typeof org.hrAccess === "object" ? org.hrAccess : {};
+  const templates = normalizeExitDocumentTemplates(payload || {});
+  await prisma.organization.update({ where: { id: organizationId }, data: { hrAccess: { ...hrAccess, EXIT_DOCUMENT_TEMPLATES: templates } } });
+  return templates;
+}
+
+module.exports = { getSettings, updateSettings, uploadLogo, removeLogo, getOfferLetterTemplate, updateOfferLetterTemplate, getExitDocumentTemplates, updateExitDocumentTemplates };

@@ -72,7 +72,7 @@ async function generatePayslipPdf(details) {
       margin: 0,
       info: {
         Title: `Payslip - ${details.employee?.name || "Employee"} - ${details.period?.periodLabel || ""}`,
-        Author: details.organization?.name || "WorkPluse",
+        Author: details.organization?.name || "Clocked",
         Subject: "Monthly Salary Payslip",
       },
     });
@@ -109,7 +109,7 @@ async function generatePayslipPdf(details) {
       }
     }
 
-    const orgName = details.organization?.name || "WorkPluse Enterprise";
+        const orgName = details.organization?.name || "Clocked Enterprise";
     doc.font("Helvetica-Bold").fontSize(16).fillColor("#ffffff");
     text(orgName, orgX, 22, { width: 300, ellipsis: true });
 
@@ -368,18 +368,19 @@ async function generatePayslipPdf(details) {
 
     const lopDays = details.attendance?.unpaidLeaveDays || 0;
     const lopDed = details.attendance?.lopDeduction ?? details.attendance?.unpaidLeaveDeduction ?? 0;
+    const shortfallDed = details.attendance?.hoursShortfallDeduction || 0;
     const permDed = details.attendance?.permissionDeduction || 0;
     const lateDed = details.attendance?.lateDeduction || 0;
 
     const explLine2 = `• Leave Deduction (Loss of Pay): ${lopDays} unpaid days = ${formatInr(lopDed)}. Hour/Permission Deduction: ${formatInr(permDed)}. Late Marks: ${formatInr(lateDed)}.`;
-    text(explLine2, L + 10, curY + 31, { width: W - 20, ellipsis: true });
+    text(`${explLine2} Short Hours: ${formatInr(shortfallDed)}.`, L + 10, curY + 31, { width: W - 20, ellipsis: true });
 
     curY += explH + 16;
 
     // ── 8. Signatory & Compliance Footer ─────────────────────────────
     const declaration =
       details.template?.declarationText ||
-      "This is an electronically generated and digitally authenticated payslip issued by WorkPluse HRMS. No physical signature is required.";
+      "This is an electronically generated and digitally authenticated payslip issued by Clocked HRMS. No physical signature is required.";
 
     doc.font("Helvetica").fontSize(7).fillColor(C.muted);
     text("COMPLIANCE & AUTHENTICITY NOTICE:", L, curY);

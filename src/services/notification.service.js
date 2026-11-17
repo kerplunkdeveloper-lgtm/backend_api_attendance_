@@ -315,7 +315,7 @@ class NotificationService {
         organizationId: true,
         branchId: true,
         user: { select: { email: true } },
-        shift: { select: { name: true, startTime: true, workingDays: true } },
+        shift: { select: { name: true, startTime: true, workingDays: true, flexiblePunching: true } },
         organization: { select: { timezone: true, name: true, logoUrl: true } },
       },
     });
@@ -334,6 +334,10 @@ class NotificationService {
     for (const emp of activeEmployees) {
       if (!emp.userId) continue;
       const timeZone = zoneOf(emp);
+      // An Any-time shift has no meaningful clock-time reminder window. It
+      // must not fall back to the legacy 09:00 default and send a misleading
+      // morning punch-in reminder.
+      if (respectSchedule && emp.shift?.flexiblePunching) continue;
       const startMinutes = clockMinutes(emp.shift?.startTime || "09:00");
       if (
         respectSchedule &&
@@ -467,7 +471,7 @@ class NotificationService {
         phone: true,
         organizationId: true,
         user: { select: { email: true } },
-        shift: { select: { name: true, endTime: true, workingDays: true } },
+        shift: { select: { name: true, endTime: true, workingDays: true, flexiblePunching: true } },
         organization: { select: { timezone: true, name: true, logoUrl: true } },
       },
     });
@@ -478,6 +482,9 @@ class NotificationService {
     for (const emp of activeEmployees) {
       if (!emp.userId) continue;
       const timeZone = zoneOf(emp);
+      // An Any-time shift has no scheduled end, so do not send the fixed
+      // shift-completion/punch-out reminder at the legacy 18:00 fallback.
+      if (respectSchedule && emp.shift?.flexiblePunching) continue;
       const endMinutes = clockMinutes(emp.shift?.endTime || "18:00");
       if (
         respectSchedule &&
@@ -687,8 +694,24 @@ class NotificationService {
    * The scheduler is leader-locked, and the live announcement lookup makes this safe
    * to retry after a restart without duplicating the same celebration.
    */
-  async sendDailyCelebrationAnnouncements(now = new Date()) {
+  async sendDailyCelebrationAnnouncements(now = new Date(), organizationId = null) {
+    // These announcements are generated for one calendar day only. Expiry is
+    // also enforced by announcement.list(), but remove the rows so the board
+    // does not retain stale generated celebrations for managers/admins.
+    const cleaned = await prisma.announcement.deleteMany({
+      where: {
+        ...(organizationId ? { organizationId } : {}),
+        createdByUserId: null,
+        expiresAt: { lte: now },
+        OR: [
+          { title: { startsWith: "Birthday today:" } },
+          { title: { startsWith: "Work anniversary today:" } },
+        ],
+      },
+    });
+
     const organizations = await prisma.organization.findMany({
+      ...(organizationId ? { where: { id: organizationId } } : {}),
       select: { id: true, name: true, timezone: true },
     });
     let sent = 0;
@@ -768,7 +791,7 @@ class NotificationService {
         }
       }
     }
-    return { success: true, sentCount: sent };
+    return { success: true, sentCount: sent, deletedCount: cleaned.count || 0 };
   }
 
   async evaluateScheduledReminders() {
@@ -797,7 +820,8 @@ class NotificationService {
 
   /**
    * 3. EOD Absent Auto-Marking (23:00+)
-   * Creates ABSENT attendance records for active employees who never punched in today.
+   * Creates ABSENT attendance records for active employees who never punched in today,
+   * and closes incomplete regular-day sessions (punch-in without punch-out) as ABSENT.
    * Skips employees who are on approved leave or holiday.
    */
   async markAbsentEmployees(organizationId = null, { endOfDayOnly = false } = {}) {
@@ -822,9 +846,11 @@ class NotificationService {
         organizationId: true,
         branchId: true,
         shiftId: true,
+        userId: true,
         firstName: true,
         lastName: true,
         organization: { select: { timezone: true } },
+        shift: { select: { flexiblePunching: true, startTime: true, endTime: true } },
       },
     });
 
@@ -874,7 +900,7 @@ class NotificationService {
     const [existingToday, holidaysToday, approvedLeavesToday, shifts, companyLeavesToday] = await Promise.all([
       prisma.attendance.findMany({
         where: { employeeId: { in: employeeIds }, date: today },
-        select: { employeeId: true },
+        select: { id: true, employeeId: true, checkIn: true, checkOut: true, status: true },
       }),
       prisma.holiday.findMany({
         where: { organizationId: { in: orgIds }, date: today, isOptional: false },
@@ -894,6 +920,12 @@ class NotificationService {
     ]);
 
     const hasAttendanceToday = new Set(existingToday.map((a) => a.employeeId));
+    const incompleteRegularSessions = existingToday.filter((attendance) => {
+      const employee = activeEmployees.find((candidate) => candidate.id === attendance.employeeId);
+      const shift = employee?.shift;
+      const overnight = shift?.startTime && shift?.endTime && shift.endTime <= shift.startTime;
+      return attendance.checkIn && !attendance.checkOut && !shift?.flexiblePunching && !overnight;
+    });
     const onLeaveToday = new Set(approvedLeavesToday.map((l) => l.employeeId));
     const shiftById = new Map(shifts.map((s) => [s.id, s]));
     // Mirrors the original OR: a holiday row with no branchId covers the
@@ -912,9 +944,22 @@ class NotificationService {
     const weekOffRecords = [];
     const absentRecords = [];
     const markedEmployees = [];
+    // A regular shift with a check-in but no check-out is not a completed
+    // attendance day. Convert it to ABSENT at EOD so reports, payroll and the
+    // admin attendance table do not incorrectly show PRESENT.
+    if (incompleteRegularSessions.length) {
+      await prisma.attendance.updateMany({
+        where: { id: { in: incompleteRegularSessions.map((attendance) => attendance.id) }, checkIn: { not: null }, checkOut: null },
+        data: { status: "ABSENT", workingMinutes: 0, overtimeMinutes: 0 },
+      });
+      for (const attendance of incompleteRegularSessions) {
+        const employee = activeEmployees.find((candidate) => candidate.id === attendance.employeeId);
+        if (employee) markedEmployees.push(`${employee.firstName} ${employee.lastName || ""}`.trim());
+      }
+    }
 
     for (const emp of activeEmployees) {
-      if (hasAttendanceToday.has(emp.id)) continue; // Already marked (PRESENT, ON_LEAVE, HOLIDAY, etc.)
+      if (hasAttendanceToday.has(emp.id)) continue; // Existing row was handled above or is complete.
       if (isHolidayFor(emp)) continue; // Holiday — skip
       if (onLeaveToday.has(emp.id)) continue; // On leave — skip
 
@@ -963,7 +1008,34 @@ class NotificationService {
         : { count: 0 },
     ]);
 
-    const markedCount = absentResult?.count ?? 0;
+    const markedCount = (absentResult?.count ?? 0) + incompleteRegularSessions.length;
+
+    // Tell each affected employee exactly why the date became absent. The
+    // notification is idempotent for the same date, so scheduler retries do
+    // not spam users.
+    if (incompleteRegularSessions.length) {
+      const alreadyNotified = await prisma.notification.findMany({
+        where: {
+          organizationId: { in: orgIds },
+          userId: { in: incompleteRegularSessions.map((attendance) => activeEmployees.find((employee) => employee.id === attendance.employeeId)?.userId).filter(Boolean) },
+          title: { contains: "Attendance marked absent" },
+          createdAt: { gte: today },
+        },
+        select: { userId: true },
+      });
+      const notified = new Set(alreadyNotified.map((notification) => notification.userId));
+      const data = incompleteRegularSessions
+        .map((attendance) => activeEmployees.find((employee) => employee.id === attendance.employeeId))
+        .filter((employee) => employee?.userId && !notified.has(employee.userId))
+        .map((employee) => ({
+          organizationId: employee.organizationId,
+          userId: employee.userId,
+          title: "Attendance marked absent",
+          message: "You forgot to punch out, so this date has been marked Absent. Submit an attendance correction if this was a mistake.",
+          type: "SYSTEM",
+        }));
+      if (data.length) await notificationDelivery.createMany({ data });
+    }
     console.log(`[AbsentMarker] Marked ${markedCount} employees ABSENT for ${today.toISOString().split("T")[0]}`);
     return { markedCount, markedEmployees };
   }

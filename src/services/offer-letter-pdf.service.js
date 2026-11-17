@@ -28,14 +28,38 @@ const fetchLogo = async (logoUrl) => {
   }
 };
 
+const interpolateTemplate = (text, offer, companyName) => String(text || "")
+  .replaceAll("{{candidateName}}", offer.candidateName || "Candidate")
+  .replaceAll("{{employeeName}}", offer.candidateName || "Candidate")
+  .replaceAll("{{employeeCode}}", offer.employeeCode || "To be confirmed")
+  .replaceAll("{{email}}", offer.email || "To be confirmed")
+  .replaceAll("{{phone}}", offer.phone || "To be confirmed")
+  .replaceAll("{{currentAddress}}", offer.currentAddress || "Not specified")
+  .replaceAll("{{companyName}}", companyName || "Clocked")
+  .replaceAll("{{organizationName}}", offer.organizationName || companyName || "Clocked")
+  .replaceAll("{{companyAddress}}", offer.companyAddress || "Company address not configured")
+  .replaceAll("{{designation}}", offer.designation || "To be confirmed")
+  .replaceAll("{{department}}", offer.department || "General")
+  .replaceAll("{{workLocation}}", offer.branch || "Corporate Headquarters")
+  .replaceAll("{{branch}}", offer.branch || "Corporate Headquarters")
+  .replaceAll("{{joiningDate}}", dateText(offer.expectedJoinDate))
+  .replaceAll("{{annualCtc}}", money(offer.compensation?.ctcAnnual || Number(offer.salary || 0) * 12))
+  .replaceAll("{{monthlyCtc}}", money(offer.compensation?.grossMonthly || offer.salary))
+  .replaceAll("{{basicMonthly}}", money(offer.compensation?.basicMonthly))
+  .replaceAll("{{hraMonthly}}", money(offer.compensation?.hraMonthly))
+  .replaceAll("{{specialAllowanceMonthly}}", money(offer.compensation?.specialAllowanceMonthly))
+  .replaceAll("{{probationMonths}}", String(offer.terms?.probationMonths || 3))
+  .replaceAll("{{noticePeriodDays}}", String(offer.terms?.noticePeriodDays || 30))
+  .replaceAll("{{workingHours}}", offer.terms?.workingHours || "As per company policy")
+  .replaceAll("{{issuedDate}}", dateText(offer.issuedDate))
+  .replaceAll("{{referenceNo}}", offer.referenceNo || "WP-OFFER");
+
 const generateOfferLetterPdf = async ({ offer, companyName, companyLogoUrl }) => {
   const template = normalizeOfferLetterTemplate(offer.template || DEFAULT_OFFER_LETTER_TEMPLATE);
-  const interpolate = (text) => String(text || "")
-    .replaceAll("{{candidateName}}", offer.candidateName || "Candidate")
-    .replaceAll("{{companyName}}", companyName || "WorkPluse");
+  const interpolate = (text) => interpolateTemplate(text, offer, companyName);
   const document = new PDFDocument({ size: "A4", margin: 54, info: {
     Title: `Offer Letter - ${offer.candidateName}`,
-    Author: companyName || "WorkPluse",
+    Author: companyName || "Clocked",
     Subject: "Employment Offer Letter",
   }});
   const chunks = [];
@@ -52,7 +76,7 @@ const generateOfferLetterPdf = async ({ offer, companyName, companyLogoUrl }) =>
     try { document.save().opacity(0.035).image(logo, 205, 285, { fit: [180, 180], align: "center", valign: "center" }).restore(); } catch { /* watermark is optional */ }
   }
 
-  document.font("Helvetica-Bold").fontSize(20).fillColor(template.primaryColor).text(companyName || "WorkPluse", 54, 108);
+  document.font("Helvetica-Bold").fontSize(20).fillColor(template.primaryColor).text(companyName || "Clocked", 54, 108);
   document.font("Helvetica").fontSize(9).fillColor("#64748b").text(offer.companyAddress || "Company address not configured", 54, 132, { width: 487 });
   document.moveTo(54, 152).lineTo(541, 152).strokeColor("#dbe4f0").stroke();
 
@@ -94,7 +118,7 @@ const generateOfferLetterPdf = async ({ offer, companyName, companyLogoUrl }) =>
   y += 68;
   document.moveTo(54, y).lineTo(210, y).strokeColor("#94a3b8").stroke();
   document.fontSize(9).fillColor("#64748b").text(template.signatoryTitle, 54, y + 8);
-  document.font("Helvetica-Bold").fontSize(9).fillColor(template.primaryColor).text(template.signatoryName || companyName || "WorkPluse", 380, y + 8, { width: 160, align: "right" });
+  document.font("Helvetica-Bold").fontSize(9).fillColor(template.primaryColor).text(template.signatoryName || companyName || "Clocked", 380, y + 8, { width: 160, align: "right" });
 
   document.font("Helvetica").fontSize(8).fillColor("#94a3b8").text(interpolate(template.footer), 54, 770, { align: "center", width: 487 });
   document.end();

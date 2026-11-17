@@ -16,7 +16,7 @@ mockPrisma({
   },
 });
 
-const { getAllAttendance } = require("../src/services/attendance.service");
+const { getAllAttendance, getAttendanceHistory } = require("../src/services/attendance.service");
 
 describe("attendance list by the employee's branch", () => {
   beforeEach(() => {
@@ -40,5 +40,10 @@ describe("attendance list by the employee's branch", () => {
     assert.equal(seenWhere.employee, undefined);
     await getAllAttendance("org-1", {});
     assert.equal(seenWhere.employee, undefined);
+  });
+
+  it("filters the attendance history by the employee's assigned branch", async () => {
+    await getAttendanceHistory({ userId: "u-1", organizationId: "org-1", role: "COMPANY_ADMIN", branchId: "b-salem", from: "2026-10-01", to: "2026-10-31" });
+    assert.deepEqual(seenWhere.employee, { user: { role: { notIn: ["SUPER_ADMIN", "COMPANY_ADMIN"] } }, branchId: "b-salem" });
   });
 });

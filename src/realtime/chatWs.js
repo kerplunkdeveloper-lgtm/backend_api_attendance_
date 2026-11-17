@@ -7,8 +7,7 @@ const PRESENCE_CHANNEL = "workpulse:chat:presence";
 
 function getWs() {
   try {
-    // eslint-disable-next-line global-require
-    return require("ws");
+return require("ws");
   } catch {
     return null;
   }
@@ -117,8 +116,7 @@ function bindClient(ws, payload) {
       }
       ws.subscribedThreads.add(msg.threadId);
     } catch {
-      // ignore malformed frames
-    }
+      }
   });
 
   ws.on("close", () => {
@@ -261,9 +259,7 @@ function broadcastLocalToThread(threadId, message) {
 
 function broadcastToThread(threadId, message) {
   if (!threadId) return;
-  // Publish once; every API replica, including this one, receives the event.
-  // Without Redis, publishRedis returns false and we retain single-process
-  // WebSocket behavior for local development.
+
   publishRedis(CHAT_CHANNEL, { threadId, message }).then((published) => {
     if (!published) broadcastLocalToThread(threadId, message);
   });

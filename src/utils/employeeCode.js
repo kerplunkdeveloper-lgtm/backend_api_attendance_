@@ -15,7 +15,7 @@ const prefixForRole = (role) => {
 };
 
 const organizationPrefix = (organizationName) => {
-  const words = String(organizationName || "WorkPluse")
+  const words = String(organizationName || "Clocked")
     .trim()
     .split(/[^A-Za-z0-9]+/)
     .filter(Boolean);
@@ -38,7 +38,7 @@ const organizationPrefix = (organizationName) => {
  * before that date, in the first free slot. Existing codes are never renamed (they are login IDs), so when
  * no slot is free the code goes to the end of the sequence.
  */
-const getNextEmployeeCode = async (organizationId, db, role = "EMPLOYEE", organizationName = "WorkPluse", joiningDate = null) => {
+const getNextEmployeeCode = async (organizationId, db, role = "EMPLOYEE", organizationName = "Clocked", joiningDate = null) => {
   const companyPrefix = organizationPrefix(organizationName);
   const employees = await db.employee.findMany({
     where: { organizationId },
@@ -49,6 +49,7 @@ const getNextEmployeeCode = async (organizationId, db, role = "EMPLOYEE", organi
 
   const used = new Set();
   let highest = 0;
+  let sequenceWidth = 0;
   for (const employee of employees) {
     const value = String(employee.employeeCode || "").trim();
     const match = value.match(COMMON_CODE_PATTERN) || value.match(LEGACY_PREFIXED_CODE_PATTERN);
@@ -57,13 +58,16 @@ const getNextEmployeeCode = async (organizationId, db, role = "EMPLOYEE", organi
     if (!Number.isInteger(number) || number < 1 || number > 99999) continue;
     used.add(number);
     highest = Math.max(highest, number);
+    // Keep the organization's established format. For example, JK89 -> JK90
+    // while a company already using three digits continues with JK090.
+    sequenceWidth = Math.max(sequenceWidth, String(match[2]).length);
     const joined = employee.dateOfJoining ? new Date(employee.dateOfJoining).getTime() : NaN;
     if (!Number.isNaN(joinTime) && !Number.isNaN(joined) && joined <= joinTime) floor = Math.max(floor, number);
   }
 
   let next = floor + 1;
   while (used.has(next)) next += 1;
-  return `${companyPrefix}${String(next).padStart(3, "0")}`;
+  return `${companyPrefix}${String(next).padStart(sequenceWidth || 3, "0")}`;
 };
 
 module.exports = { getNextEmployeeCode, prefixForRole, organizationPrefix };

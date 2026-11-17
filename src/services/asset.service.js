@@ -231,6 +231,7 @@ class AssetService {
       specifications,
       notes,
       assignedToId,
+      employeeCode,
     } = payload;
 
     if (!name) {
@@ -262,9 +263,23 @@ class AssetService {
     let assignedDate = null;
     let assignedCondition = null;
 
-    if (assignedToId) {
+    const resolvedEmployeeCode = employeeCode?.trim().toUpperCase();
+    const resolvedAssignedToId = assignedToId || (resolvedEmployeeCode
+      ? (await prisma.employee.findFirst({
+          where: { organizationId, employeeCode: resolvedEmployeeCode },
+          select: { id: true },
+        }))?.id
+      : null);
+
+    if (resolvedEmployeeCode && !resolvedAssignedToId) {
+      const error = new Error(`Employee code '${resolvedEmployeeCode}' was not found in your organization`);
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (resolvedAssignedToId) {
       const emp = await prisma.employee.findFirst({
-        where: { id: assignedToId, organizationId },
+        where: { id: resolvedAssignedToId, organizationId },
       });
       if (!emp) {
         const error = new Error("Assigned employee not found");
@@ -293,19 +308,19 @@ class AssetService {
         condition,
         specifications: specifications || null,
         notes: notes ? notes.trim() : null,
-        assignedToId: assignedToId || null,
+        assignedToId: resolvedAssignedToId || null,
         assignedDate,
         assignedCondition,
       },
     });
 
     // If assigned at creation, create initial assignment record
-    if (assignedToId) {
+    if (resolvedAssignedToId) {
       await prisma.assetAssignment.create({
         data: {
           organizationId,
           assetId: asset.id,
-          employeeId: assignedToId,
+          employeeId: resolvedAssignedToId,
           type: "ASSIGNMENT",
           assignedDate: new Date(),
           conditionOnAssign: condition,
@@ -315,7 +330,7 @@ class AssetService {
       });
 
       const emp = await prisma.employee.findUnique({
-        where: { id: assignedToId },
+        where: { id: resolvedAssignedToId },
         include: { user: true },
       });
 
@@ -331,6 +346,77 @@ class AssetService {
     }
 
     return asset;
+  }
+
+  /**
+   * Create many assets after validating every row. A bad row fails the whole
+   * import, so HR never ends up with a half-imported inventory file.
+   */
+  async bulkCreateAssets(organizationId, rows, createdByUser) {
+    if (!Array.isArray(rows) || rows.length === 0) {
+      const error = new Error("At least one asset row is required");
+      error.statusCode = 400;
+      throw error;
+    }
+    if (rows.length > 500) {
+      const error = new Error("Bulk import is limited to 500 assets per upload");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const normalized = rows.map((row, index) => {
+      const name = String(row.name || row.assetName || "").trim();
+      const category = String(row.category || "LAPTOP").trim().toUpperCase();
+      const employeeCode = String(row.employeeCode || "").trim().toUpperCase();
+      const assetCode = String(row.assetCode || "").trim().toUpperCase();
+      if (!name) throw Object.assign(new Error(`Row ${index + 1}: asset name is required`), { statusCode: 400 });
+      if (!ASSET_CATEGORIES.some((item) => item.id === category)) {
+        throw Object.assign(new Error(`Row ${index + 1}: invalid category '${category}'`), { statusCode: 400 });
+      }
+      return { ...row, name, category, employeeCode, assetCode };
+    });
+
+    const explicitCodes = normalized.filter((row) => row.assetCode).map((row) => row.assetCode);
+    if (new Set(explicitCodes).size !== explicitCodes.length) {
+      const error = new Error("The same asset code appears more than once in the upload");
+      error.statusCode = 400;
+      throw error;
+    }
+    const existing = explicitCodes.length
+      ? await prisma.asset.findMany({
+          where: { organizationId, assetCode: { in: explicitCodes } },
+          select: { assetCode: true },
+        })
+      : [];
+    if (existing.length) {
+      const error = new Error(`Asset code(s) already exist: ${existing.map((item) => item.assetCode).join(", ")}`);
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const employeeCodes = [...new Set(normalized.filter((row) => row.employeeCode).map((row) => row.employeeCode))];
+    const employees = employeeCodes.length
+      ? await prisma.employee.findMany({
+          where: { organizationId, employeeCode: { in: employeeCodes } },
+          select: { id: true, employeeCode: true, status: true },
+        })
+      : [];
+    const employeeByCode = new Map(employees.map((employee) => [employee.employeeCode.toUpperCase(), employee]));
+    for (const [index, row] of normalized.entries()) {
+      if (row.employeeCode && !employeeByCode.has(row.employeeCode)) {
+        throw Object.assign(new Error(`Row ${index + 1}: employee code '${row.employeeCode}' was not found`), { statusCode: 400 });
+      }
+      if (row.employeeCode) assetRules.assertWorking(employeeByCode.get(row.employeeCode), WORKING_STATUSES);
+    }
+
+    const created = [];
+    for (const row of normalized) {
+      created.push(await this.createAsset(organizationId, {
+        ...row,
+        assignedToId: row.employeeCode ? employeeByCode.get(row.employeeCode).id : undefined,
+      }, createdByUser));
+    }
+    return { created, count: created.length };
   }
 
   /**

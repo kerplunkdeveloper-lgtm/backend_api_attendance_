@@ -10,7 +10,7 @@
  * column round-trips cleanly.
  */
 
-// WorkPulse is India-first. Keep a real local default so a new workspace does
+// Clocked is India-first. Keep a real local default so a new workspace does
 // not bucket a 09:00 IST punch as 03:30 UTC in attendance and dashboard views.
 // Organisations can still choose any supported IANA timezone in Settings.
 const DEFAULT_TIMEZONE = "Asia/Kolkata";

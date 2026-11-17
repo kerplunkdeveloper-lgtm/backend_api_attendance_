@@ -257,6 +257,7 @@ const schemas = {
       endDate: z.string().min(8).max(32),
       reason: z.string().trim().min(3).max(1000),
       totalDays: z.coerce.number().positive().max(366).optional(),
+      halfDayPeriod: z.enum(["MORNING", "AFTERNOON"]).optional(),
       employeeId: UUID.optional(),
     })
     .strict(),

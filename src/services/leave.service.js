@@ -37,6 +37,11 @@ const calendarMonthsInclusive = (from, to) => {
   return Math.max(0, (end.getUTCFullYear() - start.getUTCFullYear()) * 12 + end.getUTCMonth() - start.getUTCMonth() + 1);
 };
 
+const laterDate = (...dates) => dates
+  .filter(Boolean)
+  .map((date) => new Date(date))
+  .reduce((latest, date) => (!latest || date > latest ? date : latest), null);
+
 /**
  * Parses a Shift.workingDays CSV ("1,2,3,4,5" where 0=Sunday) into a Set.
  * Falls back to Mon–Sat when the employee has no shift configured.
@@ -83,18 +88,21 @@ const classifyRangeDays = (start, end, holidayDateKeys, workingDaySet) => {
 };
 
 class LeaveService {
-  async getMonthlyPaidLeaveStatus({ db = prisma, employee, organizationId, eligibleFrom, leaveDate, excludeRequestId = null, policy }) {
+  async getMonthlyPaidLeaveStatus({ db = prisma, employee, organizationId, eligibleFrom, leaveDate, excludeRequestId = null, policy, eligibilityActive = true }) {
     const currentLeaveDate = leaveDate || new Date();
     const currentPolicy = policy || await policyService.getPolicy(organizationId);
     const monthlyPaidLeaveDays = Math.max(0, Number(currentPolicy.monthlyPaidLeaveDays ?? 1));
     const carryForward = currentPolicy.paidLeaveCarryForward !== false;
     const eligibleDate = eligibleFrom ? new Date(eligibleFrom) : null;
-    if (eligibleDate && currentLeaveDate < eligibleDate) {
+    if (eligibilityActive && eligibleDate && currentLeaveDate < eligibleDate) {
       return { monthlyAllowance: monthlyPaidLeaveDays, carryForward, accruedDays: 0, usedDays: 0, remainingDays: 0 };
     }
-    const accrualStart = carryForward
-      ? monthStartUtc(eligibleFrom || employee.dateOfJoining || employee.createdAt || currentLeaveDate)
-      : monthStartUtc(currentLeaveDate);
+    // Paid leave starts when the employee is brought into WorkPulse, not from
+    // the employee's historical joining date. This prevents leave imported
+    // from another HR tool from reducing the new monthly allowance.
+    const systemStart = employee.paidLeaveStartDate || employee.createdAt || currentLeaveDate;
+    const effectiveStart = eligibilityActive ? laterDate(systemStart, eligibleFrom) : systemStart;
+    const accrualStart = carryForward ? monthStartUtc(effectiveStart) : monthStartUtc(currentLeaveDate);
     const accrualEnd = monthEndUtc(currentLeaveDate);
     const accruedDays = (carryForward ? calendarMonthsInclusive(accrualStart, accrualEnd) : 1) * monthlyPaidLeaveDays;
 
@@ -108,9 +116,10 @@ class LeaveService {
         employeeId: employee.id,
         status: { in: BLOCKING_STATUSES },
         ...(excludeRequestId ? { id: { not: excludeRequestId } } : {}),
-        startDate: { lte: accrualEnd },
-        endDate: { gte: accrualStart },
-        leaveType: { isPaid: true },
+        // Only requests created for a date in the WorkPulse accrual window are
+        // charged. A legacy request that overlaps the boundary is historical.
+        startDate: { gte: accrualStart, lte: accrualEnd },
+        leaveType: { isPaid: true, code: { not: OT_LEAVE_CODE } },
       },
       select: { totalDays: true },
     });
@@ -122,6 +131,7 @@ class LeaveService {
       accruedDays,
       usedDays,
       remainingDays: Math.max(0, accruedDays - usedDays),
+      accrualStart,
     };
   }
 
@@ -133,6 +143,7 @@ class LeaveService {
       eligibleFrom: eligibility.eligibleFrom,
       leaveDate,
       excludeRequestId,
+      eligibilityActive: eligibility.leaveEligibilityActive,
     });
     if (status.remainingDays < requestedDays) {
       const error = new Error(
@@ -276,6 +287,7 @@ class LeaveService {
       organizationId,
       eligibleFrom: eligibility.eligibleFrom,
       leaveDate: new Date(),
+      eligibilityActive: eligibility.leaveEligibilityActive,
     });
 
     const balances = await Promise.all(
@@ -334,7 +346,7 @@ class LeaveService {
    * 4. Submit Leave Request (Employee)
    */
   async createLeaveRequest(userId, organizationId, data, actorRole = "EMPLOYEE") {
-    const { leaveTypeId, startDate, endDate, totalDays, reason } = data;
+    const { leaveTypeId, startDate, endDate, totalDays, halfDayPeriod, reason } = data;
 
     if (!leaveTypeId || !startDate || !endDate || !reason) {
       const error = new Error("leaveTypeId, startDate, endDate, and reason are required");
@@ -365,6 +377,19 @@ class LeaveService {
 
     if (end < start) {
       const error = new Error("End date cannot be before start date");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const requestedTotalDays = totalDays === undefined || totalDays === null ? null : Number(totalDays);
+    const isHalfDay = requestedTotalDays === 0.5 || Boolean(halfDayPeriod);
+    if (isHalfDay && !["MORNING", "AFTERNOON"].includes(halfDayPeriod)) {
+      const error = new Error("Choose whether the half-day leave is for the morning or afternoon.");
+      error.statusCode = 400;
+      throw error;
+    }
+    if (isHalfDay && toDateKey(start) !== toDateKey(end)) {
+      const error = new Error("Half-day leave must be for one date only.");
       error.statusCode = 400;
       throw error;
     }
@@ -423,8 +448,7 @@ class LeaveService {
     }
 
     // A caller-supplied totalDays may never exceed the computed working days.
-    const requestedDays =
-      totalDays !== undefined && totalDays !== null ? Number(totalDays) : effectiveWorkingDays;
+    const requestedDays = isHalfDay ? 0.5 : (requestedTotalDays !== null ? requestedTotalDays : effectiveWorkingDays);
 
     if (!Number.isFinite(requestedDays) || requestedDays <= 0) {
       const error = new Error("totalDays must be a positive number");
@@ -527,6 +551,7 @@ class LeaveService {
         startDate: start,
         endDate: end,
         totalDays: calculatedDays,
+        halfDayPeriod: isHalfDay ? halfDayPeriod : null,
         reason,
         status: "PENDING",
       },
@@ -542,7 +567,7 @@ class LeaveService {
       organizationId,
       employeeId: employee.id,
       title: "New leave request",
-      summary: `applied for ${request.leaveType?.name || "leave"} from ${toDateKey(request.startDate)} to ${toDateKey(request.endDate)} (${calculatedDays} day${Number(calculatedDays) === 1 ? "" : "s"}).`,
+      summary: `applied for ${request.leaveType?.name || "leave"} from ${toDateKey(request.startDate)} to ${toDateKey(request.endDate)} (${calculatedDays} day${Number(calculatedDays) === 1 ? "" : "s"}${request.halfDayPeriod ? `, ${request.halfDayPeriod.toLowerCase()} half` : ""}).`,
     });
 
     return request;
@@ -735,7 +760,7 @@ class LeaveService {
           workingDaySet
         );
 
-        for (const day of leaveDays) {
+        for (const day of request.halfDayPeriod ? [] : leaveDays) {
           const dateOnly = getTodayDateOnly(day);
           const assignedStatus = "ON_LEAVE";
 

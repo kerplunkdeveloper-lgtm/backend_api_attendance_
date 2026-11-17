@@ -44,3 +44,8 @@ test("someone who joined later does not push the code ahead of earlier joiners",
   const rows = [{ employeeCode: "KM001", dateOfJoining: "2026-01-01" }];
   assert.equal(await getNextEmployeeCode("org-1", dbWithDates(rows), "EMPLOYEE", "Kerplunk Media", "2025-01-01"), "KM002");
 });
+
+test("preserves the existing numeric width, so JK89 becomes JK90", async () => {
+  const rows = [{ employeeCode: "JK89", dateOfJoining: "2026-01-01" }];
+  assert.equal(await getNextEmployeeCode("org-1", dbWithDates(rows), "EMPLOYEE", "JK", "2026-02-01"), "JK90");
+});

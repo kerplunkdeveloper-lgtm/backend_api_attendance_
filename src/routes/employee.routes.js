@@ -19,6 +19,10 @@ const avatarFields = avatarUpload.fields([
 ]);
 
 router.use(authenticate);
+router.get(
+  "/:id/avatar-file",
+  employeeController.getEmployeeAvatarFile
+);
 
 router.get("/me", employeeController.getMe);
 router.put("/me", employeeController.updateMe);
@@ -33,6 +37,13 @@ router.get(
   "/",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   employeeController.list,
+);
+
+// Preview the next company-wide employee code before the employee is saved.
+router.get(
+  "/next-code",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
+  employeeController.nextCode,
 );
 
 // Must stay above "/:id" or "celebrations" would be treated as an employee id.

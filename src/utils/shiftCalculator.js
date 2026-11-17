@@ -160,7 +160,13 @@ const evaluateAttendanceAgainstShift = (
   // Completing the productive target does not erase a late arrival. The monthly
   // late-coming policy must still see this day so rules such as 3 late arrivals
   // = 1 LOP can be applied during payroll.
-  const status = workingMinutes < halfDayThreshold ? "HALF_DAY" : lateMinutes > 0 ? "LATE" : "PRESENT";
+  const status = workingMinutes < halfDayThreshold
+    ? "HALF_DAY"
+    : workingMinutes < fullDayThresholdMinutes
+    ? "SHORT_HOURS"
+    : lateMinutes > 0
+    ? "LATE"
+    : "PRESENT";
   return { ...base, workingMinutes, workingHours: (workingMinutes / 60).toFixed(1), workingFormatted: formatMinutes(workingMinutes), lateMinutes, originalLateMinutes: lateMinutes, lateArrivalWaived: false, isCompletedFullDay, lateFormatted: formatMinutes(lateMinutes), earlyMinutes, earlyFormatted: formatMinutes(earlyMinutes), overtimeMinutes, overtimeHours: (overtimeMinutes / 60).toFixed(1), overtimeFormatted: formatMinutes(overtimeMinutes), status };
 };
 const formatMinutes = (minutes) => {
