@@ -15,6 +15,7 @@ const logoFields = imageUploader(2).fields([
 const router = express.Router();
 router.use(authenticate);
 router.get("/", orgController.get);
+router.get("/logo-file", orgController.getLogoFile);
 router.get("/offer-letter-template", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"), orgController.getOfferLetterTemplate);
 router.put("/offer-letter-template", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"), orgController.updateOfferLetterTemplate);
 router.get("/exit-document-templates", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"), orgController.getExitDocumentTemplates);

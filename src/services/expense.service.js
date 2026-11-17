@@ -1,6 +1,8 @@
 const prisma = require("../config/database");
 const notificationDelivery = require("./notification-delivery.service");
-const { uploadImage, uploadBuffer } = require("../config/cloudinary");
+const { uploadImage, uploadBuffer: uploadCloudinaryBuffer } = require("../config/cloudinary");
+const { uploadBuffer: uploadS3Buffer, getDownloadUrl, deleteObject: deleteS3Object } = require("../config/s3");
+const { assertSniffedType } = require("../middleware/upload.middleware");
 const { assertCanReview, visibleToReviewer } = require("../utils/approvalChain");
 const webhookService = require("./webhook.service");
 
@@ -59,11 +61,23 @@ const normalizeCategory = (cat) => {
 };
 
 class ExpenseService {
+  async presentClaim(claim) {
+    if (!claim?.receiptStorageKey) return claim;
+    try {
+      return { ...claim, receiptUrl: await getDownloadUrl(claim.receiptStorageKey) };
+    } catch (error) {
+      console.warn("[S3] Could not sign expense receipt:", error.message);
+      return { ...claim, receiptUrl: null };
+    }
+  }
+
+  async presentClaims(claims) { return Promise.all(claims.map((claim) => this.presentClaim(claim))); }
+
   /**
    * 1. Submit a new Expense Reimbursement Claim
    */
   async createExpenseClaim(organizationId, employeeId, data) {
-    const { category, amount, date, title, description, receiptUrl, receiptData } = data;
+    const { category, amount, date, title, description, receiptUrl, receiptData, receiptFile } = data;
 
     if (!category || amount === undefined || amount === null || String(amount).trim() === "") {
       const error = new Error("Category and amount are required fields.");
@@ -90,19 +104,49 @@ class ExpenseService {
       throw error;
     }
 
-    // Upload receipt to Cloudinary if base64 data URI provided
+    const useS3 = String(process.env.STORAGE_PROVIDER || "").toLowerCase() === "s3";
     let finalReceiptUrl = receiptUrl || null;
     let receiptPublicId = null;
+    let receiptStorageKey = null;
+    let receiptStorageProvider = useS3 ? "s3" : "cloudinary";
+    let uploadedS3Key = null;
+
+    const maxReceiptBytes = 10 * 1024 * 1024;
+    const allowedReceiptTypes = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
+    const uploadReceiptToS3 = async (buffer, contentType) => {
+      if (buffer.length > maxReceiptBytes) throw Object.assign(new Error("Receipt must be 10 MB or smaller."), { statusCode: 400 });
+      if (!allowedReceiptTypes.includes(String(contentType).toLowerCase())) throw Object.assign(new Error("Receipt must be a PDF, JPEG, PNG or WebP file."), { statusCode: 400 });
+      const result = await uploadS3Buffer(buffer, { organizationId, folder: "receipts", contentType });
+      uploadedS3Key = result.key;
+      receiptStorageKey = result.key;
+      finalReceiptUrl = null;
+    };
+
+    if (receiptFile?.buffer) {
+      assertSniffedType(receiptFile);
+      if (useS3) await uploadReceiptToS3(receiptFile.buffer, receiptFile.mimetype);
+      else {
+        const uploadRes = await uploadCloudinaryBuffer(receiptFile.buffer, { folder: `workpulse/${organizationId}/receipts`, resource_type: "auto" });
+        finalReceiptUrl = uploadRes.secure_url || uploadRes.url;
+        receiptPublicId = uploadRes.public_id;
+      }
+    }
 
     const sourceData = receiptData || receiptUrl;
-    if (typeof sourceData === "string" && sourceData.startsWith("data:")) {
+    if (useS3 && !receiptFile?.buffer && typeof sourceData === "string" && sourceData && !sourceData.startsWith("data:") && !/(^|\.)cloudinary\.com\//i.test(sourceData)) {
+      const error = new Error("Receipt URLs must use HTTPS Cloudinary storage or be uploaded directly.");
+      error.statusCode = 400;
+      throw error;
+    }
+    if (!receiptFile?.buffer && typeof sourceData === "string" && sourceData.startsWith("data:")) {
       try {
-        const uploadRes = await uploadImage(sourceData, {
-          folder: `workpulse/expenses/${organizationId}`,
-          resource_type: "auto",
-        });
-        if (uploadRes && uploadRes.secure_url) {
-          finalReceiptUrl = uploadRes.secure_url;
+        const match = sourceData.match(/^data:([^;,]+);base64,(.+)$/i);
+        if (!match) throw new Error("Invalid receipt data");
+        const buffer = Buffer.from(match[2], "base64");
+        if (useS3) await uploadReceiptToS3(buffer, match[1]);
+        else {
+          const uploadRes = await uploadImage(sourceData, { folder: `workpulse/expenses/${organizationId}`, resource_type: "auto" });
+          finalReceiptUrl = uploadRes.secure_url || uploadRes.url;
           receiptPublicId = uploadRes.public_id;
         }
       } catch (cloudErr) {
@@ -115,7 +159,9 @@ class ExpenseService {
     const claimDate = date ? new Date(date) : new Date();
     const finalTitle = (title || description || `${cleanCategory.replace(/_/g, " ")} Claim`).slice(0, 150).trim();
 
-    const claim = await prisma.expenseClaim.create({
+    let claim;
+    try {
+      claim = await prisma.expenseClaim.create({
       data: {
         organizationId,
         employeeId,
@@ -126,6 +172,8 @@ class ExpenseService {
         description: description ? description.trim() : null,
         receiptUrl: finalReceiptUrl,
         receiptPublicId,
+        receiptStorageProvider,
+        receiptStorageKey,
         status: "PENDING",
       },
       include: {
@@ -139,7 +187,11 @@ class ExpenseService {
           },
         },
       },
-    });
+      });
+    } catch (error) {
+      if (uploadedS3Key) await deleteS3Object(uploadedS3Key, organizationId).catch(() => {});
+      throw error;
+    }
 
     void require("./notification.service").notifyReviewersOfRequest({
       organizationId,
@@ -148,7 +200,7 @@ class ExpenseService {
       summary: `submitted an expense claim of ${numAmount}: ${finalTitle}.`,
     });
 
-    return claim;
+    return this.presentClaim(claim);
   }
 
   /**
@@ -193,7 +245,7 @@ class ExpenseService {
       ];
     }
 
-    return await prisma.expenseClaim.findMany({
+    const claims = await prisma.expenseClaim.findMany({
       take: 500, // safety cap: a person's own history can grow for years
       where,
       include: {
@@ -217,6 +269,7 @@ class ExpenseService {
       },
       orderBy: { date: "desc" },
     });
+    return this.presentClaims(claims);
   }
 
   /**
@@ -229,7 +282,7 @@ class ExpenseService {
     if (status) where.status = status;
     if (category) where.category = category;
 
-    return await prisma.expenseClaim.findMany({
+    const claims = await prisma.expenseClaim.findMany({
       take: 500, // safety cap: a person's own history can grow for years
       where,
       include: {
@@ -244,6 +297,7 @@ class ExpenseService {
       },
       orderBy: { date: "desc" },
     });
+    return this.presentClaims(claims);
   }
 
   /**
