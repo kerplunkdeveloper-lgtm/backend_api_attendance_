@@ -19,7 +19,9 @@ const avatarFields = avatarUpload.fields([
 ]);
 
 router.use(authenticate);
-
+// Keep the literal /me routes before any dynamic /:id route. Express matches
+// /me as { id: "me" } otherwise, which sends profile requests to the avatar
+// handler and returns a misleading 404.
 router.get("/me", employeeController.getMe);
 router.put("/me", employeeController.updateMe);
 router.post(
@@ -27,6 +29,11 @@ router.post(
   avatarFields,
   handleUploadErrors,
   employeeController.uploadMyAvatar,
+);
+
+router.get(
+  "/:id/avatar-file",
+  employeeController.getEmployeeAvatarFile
 );
 
 router.get(
