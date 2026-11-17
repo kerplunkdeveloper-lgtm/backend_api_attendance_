@@ -593,4 +593,5 @@ module.exports = {
   updateMe,
   uploadMyAvatar,
   uploadEmployeeAvatar,
+  getEmployeeAvatarFile,
 };
