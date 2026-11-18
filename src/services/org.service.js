@@ -1,4 +1,5 @@
 const prisma = require("../config/database");
+const { organizationLogoUrl } = require("../utils/privateMediaUrls");
 const { uploadBuffer } = require("../config/cloudinary");
 const { uploadBuffer: uploadS3Buffer, getFileContent, deleteObject: deleteS3Object } = require("../config/s3");
 const { assertRealImage } = require("../middleware/upload.middleware");
@@ -27,7 +28,7 @@ const presentOrganization = (organization) => {
   const { ssoClientSecretCiphertext, ...safe } = organization;
   const storedAccess = organization.hrAccess && typeof organization.hrAccess === "object" ? organization.hrAccess : {};
   const hrAccess = Object.fromEntries(HR_ACCESS_AREAS.map((area) => [area, storedAccess[area] === undefined ? true : storedAccess[area] === true]));
-  return { ...safe, hrAccess, roleAccess: normalizeRoleAccess(storedAccess.ROLE_ACCESS), sso: ssoService.getConfiguration(organization) };
+  return { ...safe, logoUrl: organizationLogoUrl(safe), hrAccess, roleAccess: normalizeRoleAccess(storedAccess.ROLE_ACCESS), sso: ssoService.getConfiguration(organization) };
 };
 
 async function getSettings(organizationId) {
