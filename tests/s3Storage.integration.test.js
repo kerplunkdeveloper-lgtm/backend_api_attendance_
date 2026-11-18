@@ -1,6 +1,7 @@
 const { describe, it, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const { installModule } = require("./helpers/mockPrisma");
+const { presentAuthUser } = require("../src/services/entitlement.service");
 
 const folders = [
   "avatars",
@@ -286,5 +287,36 @@ describe("S3 service persistence contract", () => {
     assert.match(capturedOrganization.logoStorageKey, /^organizations\/org-a\/branding\//);
     assert.equal(capturedOrganization.logoUrl, null);
     assert.doesNotMatch(capturedOrganization.logoStorageKey, /X-Amz-/);
+  });
+});
+
+describe("frontend private media contract", () => {
+  it("returns authenticated API media routes without exposing storage keys", () => {
+    const user = presentAuthUser({
+      id: "user-a",
+      email: "a@example.test",
+      role: "EMPLOYEE",
+      organizationId,
+      avatarUrl: null,
+      avatarStorageKey: "organizations/org-a/avatars/avatar-key",
+      employee: {
+        id: "emp-a",
+        avatarUrl: null,
+        avatarStorageKey: "organizations/org-a/avatars/avatar-key",
+      },
+      organization: {
+        id: organizationId,
+        logoUrl: null,
+        logoStorageKey: "organizations/org-a/branding/logo-key",
+        subscription: null,
+      },
+    });
+
+    assert.equal(user.avatarUrl, "/api/employees/emp-a/avatar-file");
+    assert.equal(user.employee.avatarUrl, "/api/employees/emp-a/avatar-file");
+    assert.equal(user.organization.logoUrl, "/api/organization/logo-file");
+    assert.equal("avatarStorageKey" in user, false);
+    assert.equal("avatarStorageKey" in user.employee, false);
+    assert.equal("logoStorageKey" in user.organization, false);
   });
 });
