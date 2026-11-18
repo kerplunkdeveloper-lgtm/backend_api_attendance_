@@ -15,14 +15,18 @@ const normalizeDatabaseUrl = (value: string) => {
   return url;
 };
 
+// Test migrations must be able to pin Prisma to an isolated database without
+// rewriting the developer's .env or risking a Production/Alpha URL.
 const dbUrl = normalizeDatabaseUrl(
-  process.env.DATABASE_URL || "",
+  process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || "",
 );
 
 // Neon branch checkouts provide DATABASE_URL_UNPOOLED. Prefer it so schema
 // commands cannot accidentally keep using a stale DIRECT_URL from another
 // branch or environment.
-const directUrl = process.env.DATABASE_URL_UNPOOLED
+const directUrl = process.env.TEST_DATABASE_URL
+  ? dbUrl
+  : process.env.DATABASE_URL_UNPOOLED
   ? normalizeDatabaseUrl(process.env.DATABASE_URL_UNPOOLED)
   : process.env.DIRECT_URL
     ? normalizeDatabaseUrl(process.env.DIRECT_URL)
