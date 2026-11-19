@@ -521,8 +521,22 @@ const setEmployeeAvatar = async (
   });
 };
 
+const getMyAvatarFile = async (userId, organizationId) => {
+  const user = await prisma.user.findFirst({
+    where: { id: userId, organizationId },
+    select: { avatarStorageKey: true },
+  });
+  if (!user?.avatarStorageKey) throw httpError("Avatar not found", 404);
+  const file = await require("../config/s3").getFileContent(user.avatarStorageKey, organizationId);
+  if (!["image/jpeg", "image/png", "image/webp", "image/gif"].includes(file.contentType)) {
+    throw httpError("Unsupported avatar image type", 415);
+  }
+  return file;
+};
+
 module.exports = {
   uploadAvatarFile,
   setMyAvatar,
   setEmployeeAvatar,
+  getMyAvatarFile,
 };

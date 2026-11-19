@@ -504,10 +504,12 @@ const getEmployeeAvatarFile = async (req, res) => {
         id: true,
         userId: true,
         avatarStorageKey: true,
+        user: { select: { avatarStorageKey: true } },
       },
     });
 
-    if (!employee || !employee.avatarStorageKey) {
+    const key = employee?.avatarStorageKey || employee?.user?.avatarStorageKey;
+    if (!employee || !key) {
       return res.status(404).json({
         success: false,
         message: "Avatar not found",
@@ -531,8 +533,6 @@ const getEmployeeAvatarFile = async (req, res) => {
         message: "Avatar access denied",
       });
     }
-
-    const key = employee.avatarStorageKey;
 
     const expectedPrefix =
       `organizations/${encodeURIComponent(String(organizationId))}/avatars/`;

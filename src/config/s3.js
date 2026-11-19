@@ -103,17 +103,16 @@ async function uploadBuffer(
   };
 }
 
-async function getDownloadUrl(key, expiresIn = 300) {
+async function getDownloadUrl(key, expiresIn = 300, organizationId = null) {
   requireBucket();
 
-  if (
+  if (organizationId) validateStorageKey(key, organizationId);
+  else if (
     typeof key !== "string" ||
     !key.startsWith("organizations/") ||
     key.includes("..") ||
     key.includes("\\")
-  ) {
-    throw new Error("Invalid S3 key");
-  }
+  ) throw new Error("Invalid S3 key");
 
   return getSignedUrl(
     s3,

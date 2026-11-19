@@ -57,6 +57,41 @@ const assertPortalCandidate = (candidate, { allowClosedReadOnly = false } = {}) 
 };
 
 class OnboardingService {
+  async getDocumentContent(document, organizationId) {
+    if (!document) throw Object.assign(new Error("Document not found"), { statusCode: 404 });
+    if (document.storageProvider === "s3") {
+      if (!document.storageKey) throw Object.assign(new Error("Document storage key is missing"), { statusCode: 500 });
+      const file = await require("../config/s3").getFileContent(document.storageKey, organizationId);
+      return { ...file, fileName: document.fileName };
+    }
+    if (!document.fileUrl) throw Object.assign(new Error("Document file is missing"), { statusCode: 404 });
+    const response = await fetch(signedDeliveryUrl(document.fileUrl));
+    if (!response.ok) throw Object.assign(new Error("Document could not be loaded"), { statusCode: 404 });
+    return {
+      buffer: Buffer.from(await response.arrayBuffer()),
+      contentType: document.mimeType || response.headers.get("content-type") || "application/octet-stream",
+      fileName: document.fileName,
+    };
+  }
+
+  async getPortalDocumentContent(token, documentId) {
+    const candidate = await prisma.onboardingCandidate.findUnique({
+      where: { token },
+      include: { documents: { where: { id: documentId } } },
+    });
+    const live = assertPortalCandidate(candidate, { allowClosedReadOnly: true });
+    return this.getDocumentContent(live.documents?.[0], live.organizationId);
+  }
+
+  async getCandidateDocumentContent(organizationId, candidateId, documentId) {
+    const candidate = await prisma.onboardingCandidate.findFirst({
+      where: { id: candidateId, organizationId },
+      include: { documents: { where: { id: documentId } } },
+    });
+    if (!candidate) throw Object.assign(new Error("Candidate record not found"), { statusCode: 404 });
+    return this.getDocumentContent(candidate.documents?.[0], organizationId);
+  }
+
   /**
    * 1. HR/Admin: Create New Joiner invitation
    */
@@ -256,7 +291,7 @@ class OnboardingService {
       ...live,
       documents: await Promise.all((live.documents || []).map(async (doc) => ({
         ...doc,
-        fileUrl: doc.storageKey ? await getDownloadUrl(doc.storageKey) : signedDeliveryUrl(doc.fileUrl, {
+        fileUrl: doc.storageKey ? await getDownloadUrl(doc.storageKey, 300, live.organizationId) : signedDeliveryUrl(doc.fileUrl, {
           ttlSeconds: 300,
           authenticated: isSensitiveDocumentType(doc.documentType),
         }),
@@ -551,7 +586,7 @@ class OnboardingService {
     // Aadhaar, PAN and bank files are stored privately, so their raw URL is refused. Hand out signed ones.
     return {
       ...candidate,
-      documents: await Promise.all((candidate.documents || []).map(async (doc) => ({ ...doc, fileUrl: doc.storageKey ? await getDownloadUrl(doc.storageKey) : signedDeliveryUrl(doc.fileUrl) }))),
+      documents: await Promise.all((candidate.documents || []).map(async (doc) => ({ ...doc, fileUrl: doc.storageKey ? await getDownloadUrl(doc.storageKey, 300, candidate.organizationId) : signedDeliveryUrl(doc.fileUrl) }))),
     };
   }
 

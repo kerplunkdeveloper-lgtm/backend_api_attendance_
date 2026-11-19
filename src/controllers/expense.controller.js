@@ -199,6 +199,19 @@ class ExpenseController {
     }
   }
 
+  async getReceipt(req, res, next) {
+    try {
+      const file = await expenseService.getReceiptContent(req.user.organizationId, req.params.id, req.user);
+      res.setHeader("Content-Type", file.contentType);
+      res.setHeader("Content-Disposition", `inline; filename="${String(file.fileName).replace(/[\"\r\n]/g, "_")}"`);
+      res.setHeader("Cache-Control", "private, no-store");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      return res.status(200).send(file.buffer);
+    } catch (error) {
+      next(error);
+    }
+  }
+
   /**
    * Summary KPIs for claims
    */

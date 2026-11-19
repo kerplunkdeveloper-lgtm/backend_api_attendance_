@@ -127,6 +127,28 @@ class OnboardingController {
     }
   }
 
+  async getPortalDocumentContent(req, res, next) {
+    try {
+      const file = await onboardingService.getPortalDocumentContent(req.params.token, req.params.documentId);
+      res.setHeader("Content-Type", file.contentType);
+      res.setHeader("Content-Disposition", `inline; filename="${String(file.fileName).replace(/[\"\r\n]/g, "_")}"`);
+      res.setHeader("Cache-Control", "private, no-store");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      return res.status(200).send(file.buffer);
+    } catch (err) { next(err); }
+  }
+
+  async getCandidateDocumentContent(req, res, next) {
+    try {
+      const file = await onboardingService.getCandidateDocumentContent(req.user.organizationId, req.params.id, req.params.documentId);
+      res.setHeader("Content-Type", file.contentType);
+      res.setHeader("Content-Disposition", `inline; filename="${String(file.fileName).replace(/[\"\r\n]/g, "_")}"`);
+      res.setHeader("Cache-Control", "private, no-store");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      return res.status(200).send(file.buffer);
+    } catch (err) { next(err); }
+  }
+
   /**
    * PUT /api/onboarding/:id/hr-verify - HR verifies profile and documents
    */

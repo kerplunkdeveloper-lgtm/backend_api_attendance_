@@ -311,6 +311,16 @@ const getMe = async (req, res) => {
   } catch (error) { return sendControllerError(res, error, { fallbackStatus: 400 }); }
 };
 
+const getMyAvatarFile = async (req, res) => {
+  try {
+    const avatarService = require("../services/avatar.service");
+    const file = await avatarService.getMyAvatarFile(req.user.id, req.user.organizationId);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.type(file.contentType).send(file.buffer);
+  } catch (error) { return sendControllerError(res, error, { fallbackStatus: 404 }); }
+};
+
 const updateMe = async (req, res) => {
   try {
     const avatarUrl = req.body?.avatarUrl;
@@ -478,6 +488,7 @@ module.exports = {
   refreshToken,
   logout,
   getMe,
+  getMyAvatarFile,
   updateMe,
   uploadAvatar,
   getPlans,

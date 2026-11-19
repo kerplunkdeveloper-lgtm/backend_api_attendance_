@@ -232,6 +232,10 @@ const assertFeature = (org, flag, label) => {
   }
 };
 
+const privateAvatarUrl = (employeeId) => employeeId
+  ? `/api/employees/${encodeURIComponent(String(employeeId))}/avatar-file`
+  : "/api/auth/avatar-file";
+
 const presentAuthUser = (user) => {
   const org = user?.organization || null;
   const entitlement = evaluateEntitlement(org);
@@ -240,6 +244,18 @@ const presentAuthUser = (user) => {
   const daysRemaining = expiresAt
     ? Math.max(0, Math.ceil((new Date(expiresAt).getTime() - Date.now()) / 86400000))
     : null;
+  const employee = user.employee
+    ? (() => {
+        const { avatarStorageKey, ...safeEmployee } = user.employee;
+        return {
+          ...safeEmployee,
+          avatarUrl: avatarStorageKey
+            ? privateAvatarUrl(user.employee.id)
+            : safeEmployee.avatarUrl,
+        };
+      })()
+    : null;
+  const { logoStorageKey, unlockCode, ...safeOrganization } = org || {};
   return {
     id: user.id,
     email: user.email,
@@ -247,7 +263,8 @@ const presentAuthUser = (user) => {
     organizationId: user.organizationId,
     organization: org
       ? {
-          ...org,
+          ...safeOrganization,
+          logoUrl: logoStorageKey ? "/api/organization/logo-file" : org.logoUrl,
           subscriptionPlan: org.subscription?.plan || org.subscriptionPlan,
           subscriptionStatus: org.subscription?.status || org.subscriptionStatus,
           subscriptionExpiresAt:
@@ -255,8 +272,10 @@ const presentAuthUser = (user) => {
           maxEmployees: features.maxEmployees,
         }
       : null,
-    employee: user.employee || null,
-    avatarUrl: user.avatarUrl || user.employee?.avatarUrl || null,
+    employee,
+    avatarUrl: user.avatarStorageKey
+      ? privateAvatarUrl(user.employee?.id)
+      : user.avatarUrl || employee?.avatarUrl || null,
     planLocked: org?.planLocked ?? false,
     mustChangePassword: user.mustChangePassword ?? false,
     emailVerifiedAt: user.emailVerifiedAt || null,

@@ -59,9 +59,32 @@ const SENSITIVE_EMPLOYEE_FIELDS = [
   "emergencyContactPhone",
 ];
 
-const withoutSensitiveEmployeeFields = (employee) => {
+const privateAvatarUrl = (employeeId) => employeeId
+  ? `/api/employees/${encodeURIComponent(String(employeeId))}/avatar-file`
+  : null;
+
+const presentEmployeeMedia = (employee) => {
   if (!employee) return employee;
   const safe = { ...employee };
+  const employeeStorageKey = safe.avatarStorageKey;
+  delete safe.avatarStorageKey;
+  if (safe.user) {
+    const userStorageKey = safe.user.avatarStorageKey;
+    safe.user = { ...safe.user };
+    delete safe.user.avatarStorageKey;
+    if (userStorageKey || employeeStorageKey) {
+      safe.avatarUrl = privateAvatarUrl(safe.id);
+      safe.user.avatarUrl = safe.avatarUrl;
+    }
+  } else if (employeeStorageKey) {
+    safe.avatarUrl = privateAvatarUrl(safe.id);
+  }
+  return safe;
+};
+
+const withoutSensitiveEmployeeFields = (employee) => {
+  if (!employee) return employee;
+  const safe = presentEmployeeMedia(employee);
   for (const field of SENSITIVE_EMPLOYEE_FIELDS) delete safe[field];
   return safe;
 };
@@ -370,7 +393,7 @@ const getEmployees = async (organizationId, query = {}, actorRole = "EMPLOYEE") 
       where,
       include: {
         user: {
-          select: { id: true, email: true, role: true, avatarUrl: true, isActive: true },
+          select: { id: true, email: true, role: true, avatarUrl: true, avatarStorageKey: true, isActive: true },
         },
         branch: true,
         department: true,
@@ -426,8 +449,8 @@ const getCelebrations = async (organizationId, actorRole = "EMPLOYEE") => {
       where,
       select: {
         id: true, firstName: true, lastName: true, dateOfBirth: true,
-        dateOfJoining: true, designation: true, avatarUrl: true,
-        department: { select: { name: true } }, user: { select: { avatarUrl: true } },
+        dateOfJoining: true, designation: true, avatarUrl: true, avatarStorageKey: true,
+        department: { select: { name: true } }, user: { select: { avatarUrl: true, avatarStorageKey: true } },
       },
       orderBy: { createdAt: "desc" },
     });
@@ -451,7 +474,9 @@ const getCelebrations = async (organizationId, actorRole = "EMPLOYEE") => {
     department: row.department?.name || null,
     // Only a photo someone actually uploaded. Not the generated placeholder avatar, so the
     // card can fall back to initials instead of showing a fake face-less image.
-    photoUrl: (row.avatarUrl || row.user?.avatarUrl || "").trim() || null,
+    photoUrl: row.avatarStorageKey || row.user?.avatarStorageKey
+      ? privateAvatarUrl(row.id)
+      : (row.avatarUrl || row.user?.avatarUrl || "").trim() || null,
     birthMonth: row.dateOfBirth ? row.dateOfBirth.getUTCMonth() + 1 : null,
     birthDay: row.dateOfBirth ? row.dateOfBirth.getUTCDate() : null,
     dateOfJoining: row.dateOfJoining ? row.dateOfJoining.toISOString().slice(0, 10) : null,
@@ -467,7 +492,7 @@ const getEmployeeById = async (organizationId, employeeId, actorRole = "EMPLOYEE
     where: { id: employeeId, organizationId, deletedAt: null },
     include: {
       user: {
-        select: { id: true, email: true, role: true, avatarUrl: true },
+        select: { id: true, email: true, role: true, avatarUrl: true, avatarStorageKey: true },
       },
       branch: true,
       department: true,
@@ -486,7 +511,7 @@ const getEmployeeById = async (organizationId, employeeId, actorRole = "EMPLOYEE
 
   // Admins and HR open the full profile (it feeds the edit form); the route already excludes plain employees.
   return ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"].includes(actorRole)
-    ? employee
+    ? presentEmployeeMedia(employee)
     : withoutSensitiveEmployeeFields(employee);
 };
 

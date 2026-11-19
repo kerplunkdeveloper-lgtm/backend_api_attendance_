@@ -89,6 +89,7 @@ router.post(
 
 // Protected Authentication Endpoints
 router.get("/me", authenticate, authController.getMe);
+router.get("/avatar-file", authenticate, authController.getMyAvatarFile);
 router.put("/me", authenticate, authController.updateMe);
 router.post(
   "/avatar",

@@ -63,12 +63,44 @@ const normalizeCategory = (cat) => {
 class ExpenseService {
   async presentClaim(claim) {
     if (!claim?.receiptStorageKey) return claim;
-    try {
-      return { ...claim, receiptUrl: await getDownloadUrl(claim.receiptStorageKey) };
-    } catch (error) {
-      console.warn("[S3] Could not sign expense receipt:", error.message);
-      return { ...claim, receiptUrl: null };
+    return {
+      ...claim,
+      receiptUrl: claim.id ? `/api/expenses/${encodeURIComponent(String(claim.id))}/receipt` : null,
+    };
+  }
+
+  async getReceiptContent(organizationId, claimId, actor) {
+    const claim = await prisma.expenseClaim.findFirst({
+      where: { id: claimId, organizationId },
+      select: { id: true, employeeId: true, receiptStorageProvider: true, receiptStorageKey: true, receiptUrl: true },
+    });
+    if (!claim || (!claim.receiptStorageKey && !claim.receiptUrl)) {
+      const error = new Error("Receipt not found.");
+      error.statusCode = 404;
+      throw error;
     }
+    const staff = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"].includes(actor?.role);
+    if (!staff && actor?.employee?.id !== claim.employeeId) {
+      const error = new Error("Receipt access denied.");
+      error.statusCode = 403;
+      throw error;
+    }
+    if (claim.receiptStorageProvider === "s3") {
+      const { getFileContent } = require("../config/s3");
+      const file = await getFileContent(claim.receiptStorageKey, organizationId);
+      return { ...file, fileName: `receipt-${claim.id}` };
+    }
+    const response = await fetch(claim.receiptUrl);
+    if (!response.ok) {
+      const error = new Error("Receipt could not be loaded.");
+      error.statusCode = 404;
+      throw error;
+    }
+    return {
+      buffer: Buffer.from(await response.arrayBuffer()),
+      contentType: response.headers.get("content-type") || "application/octet-stream",
+      fileName: `receipt-${claim.id}`,
+    };
   }
 
   async presentClaims(claims) { return Promise.all(claims.map((claim) => this.presentClaim(claim))); }
