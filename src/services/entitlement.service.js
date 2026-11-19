@@ -255,7 +255,7 @@ const presentAuthUser = (user) => {
         };
       })()
     : null;
-  const { logoStorageKey, ...safeOrganization } = org || {};
+  const { logoStorageKey, unlockCode, ...safeOrganization } = org || {};
   return {
     id: user.id,
     email: user.email,

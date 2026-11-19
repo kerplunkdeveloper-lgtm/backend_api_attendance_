@@ -24,7 +24,7 @@ const normalizeRoleAccess = (stored) => {
 
 const presentOrganization = (organization) => {
   if (!organization) return organization;
-  const { ssoClientSecretCiphertext, logoStorageKey, ...safe } = organization;
+  const { ssoClientSecretCiphertext, unlockCode, logoStorageKey, ...safe } = organization;
   const storedAccess = organization.hrAccess && typeof organization.hrAccess === "object" ? organization.hrAccess : {};
   const hrAccess = Object.fromEntries(HR_ACCESS_AREAS.map((area) => [area, storedAccess[area] === undefined ? true : storedAccess[area] === true]));
   return {
