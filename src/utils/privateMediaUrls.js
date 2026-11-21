@@ -16,7 +16,19 @@ const organizationLogoUrl = (organization) => {
 
 const presentEmployeeImage = (employee) => {
   if (!employee) return employee;
-  return { ...employee, avatarUrl: employeeAvatarUrl(employee) };
+  const { avatarStorageKey, ...safe } = employee;
+  return { ...safe, avatarUrl: employeeAvatarUrl(employee) };
 };
 
-module.exports = { employeeAvatarUrl, organizationLogoUrl, presentEmployeeImage };
+const presentOrganizationImage = (organization) => {
+  if (!organization) return organization;
+  const { logoStorageKey, ...safe } = organization;
+  return { ...safe, logoUrl: organizationLogoUrl(organization) };
+};
+
+module.exports = {
+  employeeAvatarUrl,
+  organizationLogoUrl,
+  presentEmployeeImage,
+  presentOrganizationImage,
+};
