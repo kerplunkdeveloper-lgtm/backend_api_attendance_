@@ -1,4 +1,8 @@
-const { employeeAvatarUrl, organizationLogoUrl, presentEmployeeImage } = require("../utils/privateMediaUrls");
+const {
+  employeeAvatarUrl,
+  presentEmployeeImage,
+  presentOrganizationImage,
+} = require("../utils/privateMediaUrls");
 const prisma = require("../config/database");
 const { SEAT_STATUSES, getPlan } = require("../config/plans");
 
@@ -264,8 +268,7 @@ const presentAuthUser = (user) => {
     organizationId: user.organizationId,
     organization: org
       ? {
-          ...org,
-          logoUrl: organizationLogoUrl(org),
+          ...presentOrganizationImage(org),
           subscriptionPlan: org.subscription?.plan || org.subscriptionPlan,
           subscriptionStatus: org.subscription?.status || org.subscriptionStatus,
           subscriptionExpiresAt:
