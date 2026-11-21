@@ -1,7 +1,7 @@
 const offboardingService = require("../services/offboarding.service");
 const prisma = require("../config/database");
 
-const ADMIN_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"];
+const ADMIN_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"];
 
 /**
  * Exit records hold settlement figures and personal feedback, so an employee

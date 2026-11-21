@@ -10,6 +10,7 @@ const create = async (req, res) => {
       req.user.organizationId,
       req.body,
       req.user.role,
+      req.user.id,
     );
 
     return res.status(201).json({
@@ -258,6 +259,7 @@ const bulkImport = async (req, res) => {
       req.user.organizationId,
       employees,
       req.user.role,
+      req.user.id,
     );
 
     return res.status(200).json(result);

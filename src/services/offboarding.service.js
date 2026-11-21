@@ -357,7 +357,7 @@ class OffboardingService {
 
     try {
       const reviewers = await prisma.user.findMany({
-        where: { organizationId, role: { in: [...EXIT_ADMIN_ROLES, "MANAGER"] }, isActive: true },
+        where: { organizationId, role: { in: [...EXIT_ADMIN_ROLES, "MANAGER", "HR"] }, isActive: true },
         select: { id: true },
       });
       const name = `${exit.employee.firstName} ${exit.employee.lastName || ""}`.trim();

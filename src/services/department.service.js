@@ -1,7 +1,9 @@
 const prisma = require("../config/database");
 
-// Common starting departments for a new workspace. This is also applied
-// lazily for older workspaces when the Departments page is opened.
+// Common starting departments for a new workspace. New workspaces are seeded
+// during registration in auth.service.js. Keep this list exported for shared
+// provisioning code, but do not seed it from the read endpoint: doing that
+// would recreate departments immediately after an administrator deletes them.
 const DEFAULT_DEPARTMENT_NAMES = [
   "IT",
   "Non-IT",
@@ -58,7 +60,6 @@ const createDepartment = async (organizationId, name) => {
  * 2. GET /api/departments - List Departments
  */
 const getDepartments = async (organizationId) => {
-  await ensureDefaultDepartments(organizationId);
   const [departments, titleCounts] = await Promise.all([
     prisma.department.findMany({
       where: { organizationId },
@@ -174,9 +175,25 @@ const deleteDepartment = async (organizationId, departmentId) => {
   }
 
   return await prisma.$transaction(async (tx) => {
+    // Delete titles explicitly before deleting the department. Newer databases
+    // use ON DELETE CASCADE, but older tenant databases may still have the
+    // original restrictive foreign-key rule. Explicit cleanup keeps seeded
+    // default departments deletable across both schemas.
+    await tx.designation.deleteMany({
+      where: { departmentId, organizationId },
+    });
+
     // Unassign department from employees before deleting
     await tx.employee.updateMany({
-      where: { departmentId },
+      where: { departmentId, organizationId },
+      data: { departmentId: null },
+    });
+
+    // Onboarding candidates may also be linked to this department. Clear that
+    // optional relation before deleting so the department delete is not blocked
+    // by the foreign key constraint.
+    await tx.onboardingCandidate.updateMany({
+      where: { departmentId, organizationId },
       data: { departmentId: null },
     });
 

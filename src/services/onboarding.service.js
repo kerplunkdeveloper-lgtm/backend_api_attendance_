@@ -26,6 +26,20 @@ const ONBOARDING_DOCUMENT_TYPE_ALIASES = {
 const PORTAL_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const CLOSED_PORTAL_STATUSES = new Set(["ACTIVATED", "REJECTED", "OFFER_REJECTED"]);
 
+// Keep all joining dates date-only. Constructing a Date from a locale string
+// causes the same candidate to appear one day early/late in some timezones.
+const parseJoiningDate = (value) => {
+  if (!value) return null;
+  const raw = String(value).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+  const [year, month, day] = raw.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+  return date;
+};
+
+const joiningDateError = () => Object.assign(new Error("Joining date must be a valid date in YYYY-MM-DD format"), { statusCode: 400 });
+
 const assertPortalCandidate = (candidate, { allowClosedReadOnly = false } = {}) => {
   if (!candidate) {
     const error = new Error("Invalid or expired onboarding invitation link");
@@ -101,6 +115,9 @@ class OnboardingService {
       throw error;
     }
 
+    const joinDateOnly = parseJoiningDate(expectedJoinDate);
+    if (!joinDateOnly) throw joiningDateError();
+
     const cleanEmail = email.trim().toLowerCase();
     const cleanPhone = normalizeIndianPhone(phone);
 
@@ -168,7 +185,6 @@ class OnboardingService {
     }
 
     const token = crypto.randomUUID();
-    const joinDateOnly = new Date(expectedJoinDate);
 
     const candidate = await prisma.onboardingCandidate.create({
       data: {
@@ -650,10 +666,13 @@ class OnboardingService {
 
     // Prepare Offer Letter data compilation
     const offerLetterRef = `WP-OFF-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-    const salaryVal = candidate.proposedSalary ? Number(candidate.proposedSalary) : 50000;
+    // proposedSalary is the annual CTC shown by the UI; payroll stores the
+    // monthly equivalent in SalaryStructure.
+    const salaryVal = candidate.proposedSalary ? Number(candidate.proposedSalary) / 12 : 50000;
     const basic = Math.round(salaryVal * 0.5);
     const hra = Math.round(salaryVal * 0.3);
     const specialAllowance = Math.round(salaryVal * 0.2);
+    const offerTemplate = normalizeOfferLetterTemplate(candidate.organization.hrAccess?.OFFER_LETTER_TEMPLATE || DEFAULT_OFFER_LETTER_TEMPLATE);
 
     const offerLetterData = {
       referenceNo: offerLetterRef,
@@ -682,7 +701,8 @@ class OnboardingService {
         noticePeriodDays: 30,
         workingHours: "09:00 AM - 06:00 PM (Monday to Friday)",
       },
-      template: normalizeOfferLetterTemplate(candidate.organization.hrAccess?.OFFER_LETTER_TEMPLATE || DEFAULT_OFFER_LETTER_TEMPLATE),
+      template: offerTemplate,
+      templateVersion: offerTemplate.version,
     };
 
     // Execute atomic transaction for user, employee, candidate activation, and offer letter
@@ -760,7 +780,8 @@ class OnboardingService {
         });
       }
 
-      // 4. Update Candidate Record to ACTIVATED with offer letter details
+      // 4. Direct activation is the explicit no-offer route. Do not create a
+      // misleading offer snapshot or dispatch an offer after activation.
       const activatedCandidate = await tx.onboardingCandidate.update({
         where: { id: candidate.id },
         data: {
@@ -769,9 +790,6 @@ class OnboardingService {
           adminNotes: adminNotes ? String(adminNotes).trim() : null,
           adminApprovedAt: new Date(),
           employeeId: newEmployee.id,
-          offerLetterRef,
-          offerLetterData,
-          offerLetterGeneratedAt: new Date(),
         },
         include: {
           branch: { select: { id: true, name: true } },
@@ -784,16 +802,14 @@ class OnboardingService {
         user: newUser,
         employee: newEmployee,
         candidate: activatedCandidate,
-        offerLetter: offerLetterData,
+        offerLetter: null,
         temporaryPassword: existingUser ? null : tempPassword,
       };
     });
 
-    // Asynchronously dispatch Offer Letter notifications via Email and WhatsApp
+    // Send only the account welcome message for the direct activation path.
     const candEmail = candidate.email;
-    const candPhone = candidate.phone;
     const candName = `${candidate.firstName} ${candidate.lastName || ""}`.trim();
-    const offerUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/onboarding/portal/${candidate.token}`;
 
     if (candEmail && result.temporaryPassword) {
       emailService
@@ -805,30 +821,6 @@ class OnboardingService {
           role: "EMPLOYEE",
         })
         .catch((e) => console.warn("[OnboardingActivate] Welcome email failed:", e.message));
-    }
-
-    if (candEmail) {
-      emailService
-        .sendOfferLetterEmail(candEmail, candName, {
-          designation: candidate.designation,
-          department: candidate.department?.name,
-          expectedJoinDate: candidate.expectedJoinDate,
-          salary: candidate.proposedSalary,
-          offerUrl,
-          offerLetterData: result.offerLetter,
-          companyName: candidate.organization?.name,
-          companyLogoUrl: candidate.organization?.logoUrl,
-        })
-        .catch((e) => console.warn("[OfferNotification:Email] Error:", e.message));
-    }
-
-    if (candPhone) {
-      whatsappService
-        .sendOfferLetterWhatsApp(candPhone, candName, {
-          designation: candidate.designation,
-          offerUrl,
-        })
-        .catch((e) => console.warn("[OfferNotification:WhatsApp] Error:", e.message));
     }
 
     return result;
@@ -865,10 +857,11 @@ class OnboardingService {
     const offerLetterRef =
       candidate.offerLetterRef ||
       `WP-OFF-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-    const salaryVal = candidate.proposedSalary ? Number(candidate.proposedSalary) : 50000;
+    const salaryVal = candidate.proposedSalary ? Number(candidate.proposedSalary) / 12 : 50000;
     const basic = Math.round(salaryVal * 0.5);
     const hra = Math.round(salaryVal * 0.3);
     const specialAllowance = Math.round(salaryVal * 0.2);
+    const offerTemplate = normalizeOfferLetterTemplate(candidate.organization.hrAccess?.OFFER_LETTER_TEMPLATE || DEFAULT_OFFER_LETTER_TEMPLATE);
 
     const offerLetterData = {
       referenceNo: offerLetterRef,
@@ -897,7 +890,8 @@ class OnboardingService {
         noticePeriodDays: 30,
         workingHours: "09:00 AM - 06:00 PM (Monday to Friday)",
       },
-      template: normalizeOfferLetterTemplate(candidate.organization.hrAccess?.OFFER_LETTER_TEMPLATE || DEFAULT_OFFER_LETTER_TEMPLATE),
+      template: offerTemplate,
+      templateVersion: offerTemplate.version,
     };
 
     await prisma.onboardingCandidate.update({
@@ -938,13 +932,25 @@ class OnboardingService {
     }
 
     const { adminNotes } = approvalData;
+    const requestedJoiningDate = approvalData.confirmedJoiningDate || approvalData.expectedJoinDate || approvalData.joiningDate;
+    const approvedJoiningDate = requestedJoiningDate ? parseJoiningDate(requestedJoiningDate) : candidate.expectedJoinDate;
+    if (!approvedJoiningDate) throw joiningDateError();
+
+    // Once an offer is sent, changing the joining date must happen through a
+    // new approval cycle. Never silently mutate the accepted offer snapshot.
+    if (candidate.status === "OFFER_SENT") {
+      const error = new Error("This offer has already been sent. Withdraw it before generating a new version.");
+      error.statusCode = 409;
+      throw error;
+    }
 
     // Generate Offer Letter
     const offerLetterRef = `WP-OFF-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-    const salaryVal = candidate.proposedSalary ? Number(candidate.proposedSalary) : 50000;
+    const salaryVal = candidate.proposedSalary ? Number(candidate.proposedSalary) / 12 : 50000;
     const basic = Math.round(salaryVal * 0.5);
     const hra = Math.round(salaryVal * 0.3);
     const specialAllowance = Math.round(salaryVal * 0.2);
+    const offerTemplate = normalizeOfferLetterTemplate(candidate.organization.hrAccess?.OFFER_LETTER_TEMPLATE || DEFAULT_OFFER_LETTER_TEMPLATE);
 
     const offerLetterData = {
       referenceNo: offerLetterRef,
@@ -957,7 +963,7 @@ class OnboardingService {
       designation: candidate.designation,
       department: candidate.department?.name || "General",
       branch: candidate.branch?.name || "Corporate Headquarters",
-      expectedJoinDate: candidate.expectedJoinDate.toISOString().split("T")[0],
+      expectedJoinDate: approvedJoiningDate.toISOString().split("T")[0],
       organizationName: candidate.organization.name,
       companyAddress: candidate.organization.address || "Company address not configured",
       companyLogoUrl: candidate.organization.logoUrl || null,
@@ -973,13 +979,15 @@ class OnboardingService {
         noticePeriodDays: 30,
         workingHours: "09:00 AM - 06:00 PM (Monday to Friday)",
       },
-      template: normalizeOfferLetterTemplate(candidate.organization.hrAccess?.OFFER_LETTER_TEMPLATE || DEFAULT_OFFER_LETTER_TEMPLATE),
+      template: offerTemplate,
+      templateVersion: offerTemplate.version,
     };
 
     return await prisma.onboardingCandidate.update({
       where: { id: candidate.id },
       data: {
         status: "OFFER_GENERATED",
+        expectedJoinDate: approvedJoiningDate,
         adminApproverId: adminUserId,
         adminNotes: adminNotes ? String(adminNotes).trim() : null,
         adminApprovedAt: new Date(),
@@ -1016,13 +1024,17 @@ class OnboardingService {
       throw error;
     }
 
-    if (!["OFFER_GENERATED", "ADMIN_APPROVED"].includes(candidate.status)) {
+    const isResend = sendData.resend === true && candidate.status === "OFFER_SENT";
+    if (!["OFFER_GENERATED", "ADMIN_APPROVED"].includes(candidate.status) && !isResend) {
       const error = new Error("Candidate is not ready for offer dispatch");
       error.statusCode = 400;
       throw error;
     }
 
     const { hrReviewNotes } = sendData;
+    const deliveryChannel = ["EMAIL", "WHATSAPP", "BOTH"].includes(String(sendData.deliveryChannel || "").toUpperCase())
+      ? String(sendData.deliveryChannel).toUpperCase()
+      : "BOTH";
 
     const updated = await prisma.onboardingCandidate.update({
       where: { id: candidate.id },
@@ -1040,23 +1052,28 @@ class OnboardingService {
 
     const offerUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/onboarding/portal/${candidate.token}`;
     const candidateName = `${candidate.firstName} ${candidate.lastName || ""}`.trim();
+    const offerMessage = {
+      designation: candidate.designation,
+      department: candidate.department?.name,
+      expectedJoinDate: candidate.expectedJoinDate,
+      salary: candidate.proposedSalary,
+      offerUrl,
+      offerLetterData: candidate.offerLetterData,
+      companyName: candidate.organization?.name,
+      companyLogoUrl: candidate.organization?.logoUrl,
+    };
     const [emailDelivery, whatsappDelivery] = await Promise.all([
-      emailService.sendOfferLetterEmail(candidate.email, candidateName, {
-        designation: candidate.designation,
-        department: candidate.department?.name,
-        expectedJoinDate: candidate.expectedJoinDate,
-        salary: candidate.proposedSalary,
-        offerUrl,
-        offerLetterData: candidate.offerLetterData,
-        companyName: candidate.organization?.name,
-        companyLogoUrl: candidate.organization?.logoUrl,
-      }).catch((error) => ({ success: false, error: error.message })),
-      candidate.phone
-        ? whatsappService.sendOfferLetterWhatsApp(candidate.phone, candidateName, { designation: candidate.designation, offerUrl }).catch((error) => ({ success: false, error: error.message }))
-        : Promise.resolve({ success: false, error: "Candidate phone is missing" }),
+      deliveryChannel === "WHATSAPP"
+        ? Promise.resolve({ success: false, skipped: true, error: "Email delivery skipped" })
+        : emailService.sendOfferLetterEmail(candidate.email, candidateName, offerMessage).catch((error) => ({ success: false, error: error.message })),
+      deliveryChannel === "EMAIL"
+        ? Promise.resolve({ success: false, skipped: true, error: "WhatsApp delivery skipped" })
+        : candidate.phone
+          ? whatsappService.sendOfferLetterWhatsApp(candidate.phone, candidateName, { designation: candidate.designation, offerUrl }).catch((error) => ({ success: false, error: error.message }))
+          : Promise.resolve({ success: false, error: "Candidate phone is missing" }),
     ]);
 
-    return { ...updated, emailDelivery, whatsappDelivery };
+    return { ...updated, deliveryChannel, emailDelivery, whatsappDelivery, resent: isResend };
   }
 
   /**
@@ -1120,7 +1137,7 @@ class OnboardingService {
       const tempPassword = generateTempPassword();
       const passwordHash = await bcrypt.hash(tempPassword, 10);
       const finalEmployeeCode = await getNextEmployeeCode(candidate.organizationId, prisma);
-      const salaryVal = candidate.proposedSalary ? Number(candidate.proposedSalary) : 50000;
+      const salaryVal = candidate.proposedSalary ? Number(candidate.proposedSalary) / 12 : 50000;
       const basic = Math.round(salaryVal * 0.5);
       const hra = Math.round(salaryVal * 0.3);
       const specialAllowance = Math.round(salaryVal * 0.2);

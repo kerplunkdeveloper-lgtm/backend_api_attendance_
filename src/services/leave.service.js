@@ -280,6 +280,17 @@ class LeaveService {
 
     if (!employee) return [];
 
+    const result = await this.getEmployeeLeaveBalances(organizationId, employee.id, year);
+    return result?.balances || [];
+  }
+
+  async getEmployeeLeaveBalances(organizationId, employeeId, year = new Date().getFullYear()) {
+    const employee = await prisma.employee.findFirst({
+      where: { id: employeeId, organizationId, deletedAt: null },
+      include: { department: { select: { id: true, name: true } } },
+    });
+    if (!employee) return null;
+
     const leaveTypes = await this.getLeaveTypes(organizationId);
     const eligibility = await this.getEligibilityForEmployee(employee, organizationId);
     const monthlyPaidLeave = await this.getMonthlyPaidLeaveStatus({
@@ -323,9 +334,21 @@ class LeaveService {
           });
         }
 
+        const pending = await prisma.leaveRequest.aggregate({
+          where: {
+            organizationId,
+            employeeId: employee.id,
+            leaveTypeId: type.id,
+            status: "PENDING",
+            startDate: { gte: new Date(Date.UTC(parseInt(year), 0, 1)) },
+            endDate: { lte: new Date(Date.UTC(parseInt(year), 11, 31, 23, 59, 59)) },
+          },
+          _sum: { totalDays: true },
+        });
         const allocated = Number(balance.allocatedDays);
         const used = Number(balance.usedDays);
-        const remaining = Math.max(0, allocated - used);
+        const pendingDays = Number(pending._sum.totalDays || 0);
+        const remaining = Math.max(0, allocated - used - pendingDays);
 
         return {
           id: balance.id,
@@ -333,13 +356,145 @@ class LeaveService {
           year: balance.year,
           allocatedDays: allocated,
           usedDays: used,
+          pendingDays,
           remainingDays: remaining,
           monthlyPaidLeave: type.isPaid ? monthlyPaidLeave : null,
         };
       })
     );
 
-    return balances;
+    return { employee: { id: employee.id, firstName: employee.firstName, lastName: employee.lastName, employeeCode: employee.employeeCode, department: employee.department }, year: parseInt(year), balances };
+  }
+
+  async getDepartmentConflicts(organizationId, employeeId, startDate, endDate) {
+    const employee = await prisma.employee.findFirst({
+      where: { id: employeeId, organizationId, deletedAt: null },
+      select: { id: true, departmentId: true, department: { select: { id: true, name: true } } },
+    });
+    if (!employee) return null;
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return { department: employee.department, conflicts: [] };
+    const requests = employee.departmentId
+      ? await prisma.leaveRequest.findMany({
+          where: {
+            organizationId,
+            employee: { departmentId: employee.departmentId },
+            employeeId: { not: employee.id },
+            status: { in: ["PENDING", "APPROVED"] },
+            startDate: { lte: end },
+            endDate: { gte: start },
+          },
+          include: { leaveType: { select: { name: true, isPaid: true } }, employee: { select: { firstName: true, lastName: true, employeeCode: true } } },
+          orderBy: { startDate: "asc" },
+        })
+      : [];
+    return {
+      department: employee.department,
+      approvedCount: requests.filter((request) => request.status === "APPROVED").length,
+      pendingCount: requests.filter((request) => request.status === "PENDING").length,
+      conflicts: requests.map((request) => ({ id: request.id, status: request.status, startDate: request.startDate, endDate: request.endDate, totalDays: Number(request.totalDays), leaveType: request.leaveType, employee: request.employee })),
+    };
+  }
+
+  async requestLeaveDateChange(userId, organizationId, requestId, data, actorRole = "EMPLOYEE") {
+    const reason = String(data.reason || "").trim().slice(0, 500);
+    if (!reason) throw Object.assign(new Error("A reason is required to move approved leave"), { statusCode: 400 });
+    const request = await prisma.leaveRequest.findFirst({
+      where: { id: requestId, organizationId },
+      include: { leaveType: true, employee: { include: { user: true, department: true, shift: true } } },
+    });
+    if (!request) throw Object.assign(new Error("Leave request not found"), { statusCode: 404 });
+    const isAdmin = ADMIN_ROLES.includes(actorRole);
+    if (!isAdmin && request.employee?.userId !== userId) throw Object.assign(new Error("You can only change your own leave"), { statusCode: 403 });
+    if (request.status !== "APPROVED") throw Object.assign(new Error("Only approved leave can be moved through a date-change request"), { statusCode: 400 });
+
+    const newStart = await getOrgDateOnly(organizationId, new Date(data.newStartDate));
+    const newEnd = await getOrgDateOnly(organizationId, new Date(data.newEndDate));
+    const today = await getOrgDateOnly(organizationId, new Date());
+    if (!(newStart instanceof Date) || Number.isNaN(newStart.getTime()) || Number.isNaN(newEnd.getTime()) || newEnd < newStart) {
+      throw Object.assign(new Error("Choose a valid new leave date range"), { statusCode: 400 });
+    }
+    if (newStart <= today) throw Object.assign(new Error("Approved leave can only be changed at least one day before the new start date"), { statusCode: 400 });
+
+    const holidays = await prisma.holiday.findMany({
+      where: { organizationId, date: { gte: newStart, lte: newEnd }, OR: [{ branchId: null }, ...(request.employee.branchId ? [{ branchId: request.employee.branchId }] : [])], isOptional: false },
+    });
+    const holidayKeys = new Set(holidays.map((holiday) => toDateKey(holiday.date)));
+    const workingDays = classifyRangeDays(newStart, newEnd, holidayKeys, parseWorkingDays(request.employee.shift)).leaveDays.length;
+    const requestedDays = request.halfDayPeriod ? 0.5 : workingDays;
+    if (requestedDays !== Number(request.totalDays)) throw Object.assign(new Error("Date changes must keep the same number of leave days"), { statusCode: 400 });
+
+    const overlap = await prisma.leaveRequest.findFirst({ where: { organizationId, employeeId: request.employeeId, id: { not: request.id }, status: { in: ["PENDING", "APPROVED"] }, startDate: { lte: newEnd }, endDate: { gte: newStart } } });
+    if (overlap) throw Object.assign(new Error("The new dates overlap another leave request"), { statusCode: 409 });
+    const existing = await prisma.leaveChangeRequest.findFirst({ where: { organizationId, leaveRequestId: request.id, status: "PENDING" } });
+    if (existing) throw Object.assign(new Error("A date-change request is already pending"), { statusCode: 409 });
+
+    const created = await prisma.leaveChangeRequest.create({
+      data: { organizationId, leaveRequestId: request.id, employeeId: request.employeeId, oldStartDate: request.startDate, oldEndDate: request.endDate, newStartDate: newStart, newEndDate: newEnd, reason, requestedBy: userId },
+      include: { leaveRequest: { include: { leaveType: true } }, employee: { select: { id: true, firstName: true, lastName: true, employeeCode: true, department: { select: { name: true } } } } },
+    });
+    void notificationService.notifyReviewersOfRequest({
+      organizationId,
+      employeeId: request.employeeId,
+      title: "Leave date-change request",
+      summary: `requested to move ${request.leaveType?.name || "leave"} from ${toDateKey(request.startDate)}–${toDateKey(request.endDate)} to ${toDateKey(newStart)}–${toDateKey(newEnd)}.`,
+    });
+    return created;
+  }
+
+  async getMyLeaveChangeRequests(userId, organizationId) {
+    const employee = await prisma.employee.findFirst({ where: { userId, organizationId }, select: { id: true } });
+    if (!employee) return [];
+    return prisma.leaveChangeRequest.findMany({ where: { organizationId, employeeId: employee.id }, include: { leaveRequest: { include: { leaveType: true } } }, orderBy: { createdAt: "desc" } });
+  }
+
+  async getAllLeaveChangeRequests(organizationId, status = "PENDING") {
+    return prisma.leaveChangeRequest.findMany({ where: { organizationId, ...(status !== "ALL" ? { status } : {}) }, include: { leaveRequest: { include: { leaveType: true } }, employee: { select: { id: true, firstName: true, lastName: true, employeeCode: true, department: { select: { name: true } } } } }, orderBy: { createdAt: "desc" } });
+  }
+
+  async reviewLeaveDateChange(requestId, organizationId, reviewerUserId, data, reviewerRole = "COMPANY_ADMIN") {
+    if (!["APPROVED", "REJECTED"].includes(data.status)) throw Object.assign(new Error("Status must be APPROVED or REJECTED"), { statusCode: 400 });
+    const reviewNote = typeof data.reviewNote === "string" ? data.reviewNote.trim().slice(0, 500) : "";
+    if (data.status === "REJECTED" && !reviewNote) throw Object.assign(new Error("A rejection reason is required"), { statusCode: 400 });
+    const change = await prisma.leaveChangeRequest.findFirst({ where: { id: requestId, organizationId }, include: { leaveRequest: true } });
+    if (!change) throw Object.assign(new Error("Date-change request not found"), { statusCode: 404 });
+    if (change.status !== "PENDING") throw Object.assign(new Error("Date-change request has already been reviewed"), { statusCode: 400 });
+
+    const result = await prisma.$transaction(async (tx) => {
+      const claimed = await tx.leaveChangeRequest.updateMany({ where: { id: requestId, organizationId, status: "PENDING" }, data: { status: data.status, reviewedBy: reviewerUserId, reviewNote: reviewNote || null, reviewedAt: new Date() } });
+      if (!claimed.count) throw Object.assign(new Error("Date-change request has already been reviewed"), { statusCode: 409 });
+      if (data.status === "APPROVED") {
+        const oldStart = new Date(change.leaveRequest.startDate);
+        const oldEnd = new Date(change.leaveRequest.endDate);
+        for (let cursor = new Date(oldStart); cursor <= oldEnd; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+          const date = getTodayDateOnly(cursor);
+          const existing = await tx.attendance.findUnique({ where: { employeeId_date: { employeeId: change.employeeId, date } }, select: { id: true, checkIn: true } });
+          if (existing?.id && !existing.checkIn) await tx.attendance.delete({ where: { id: existing.id } });
+        }
+        const newStart = new Date(change.newStartDate);
+        const newEnd = new Date(change.newEndDate);
+        for (let cursor = new Date(newStart); cursor <= newEnd; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+          const date = getTodayDateOnly(cursor);
+          await tx.attendance.upsert({ where: { employeeId_date: { employeeId: change.employeeId, date } }, update: { status: "ON_LEAVE" }, create: { organizationId, employeeId: change.employeeId, date, status: "ON_LEAVE", workingMinutes: 0 } });
+        }
+        await tx.leaveRequest.update({ where: { id: change.leaveRequestId }, data: { startDate: change.newStartDate, endDate: change.newEndDate } });
+      }
+      return tx.leaveChangeRequest.findFirst({ where: { id: requestId, organizationId }, include: { leaveRequest: { include: { leaveType: true } } } });
+    });
+    const employee = await prisma.employee.findUnique({ where: { id: change.employeeId }, include: { user: { select: { id: true } } } });
+    if (employee?.user?.id) {
+      void notificationService.createNotification({
+        organizationId,
+        userId: employee.user.id,
+        title: data.status === "APPROVED" ? "Leave dates updated" : "Leave date-change rejected",
+        message: data.status === "APPROVED"
+          ? `Your leave was moved to ${toDateKey(change.newStartDate)}–${toDateKey(change.newEndDate)}.`
+          : `Your leave date-change request was rejected${reviewNote ? `: ${reviewNote}` : "."}`,
+        type: "LEAVE",
+      });
+    }
+    return result;
   }
 
   /**
@@ -642,6 +797,13 @@ class LeaveService {
       throw error;
     }
 
+    const normalizedReviewNote = typeof reviewNote === "string" ? reviewNote.trim().slice(0, 500) : "";
+    if (status === "REJECTED" && !normalizedReviewNote) {
+      const error = new Error("A rejection reason is required so the employee can understand what to correct.");
+      error.statusCode = 400;
+      throw error;
+    }
+
     const request = await prisma.leaveRequest.findFirst({
       where: { id: requestId, organizationId },
       include: {
@@ -701,7 +863,7 @@ class LeaveService {
         data: {
           status,
           reviewedBy: reviewerUserId,
-          reviewNote: reviewNote || null,
+          reviewNote: normalizedReviewNote || null,
         },
       });
       if (claimed.count === 0) {
@@ -836,7 +998,7 @@ class LeaveService {
           message:
             `Your ${request.leaveType?.name || "leave"} request for ` +
             `${toDateKey(request.startDate)} to ${toDateKey(request.endDate)} was ${status.toLowerCase()}.` +
-            (reviewNote ? ` Note: ${reviewNote}` : ""),
+            (normalizedReviewNote ? ` Note: ${normalizedReviewNote}` : ""),
           type: "LEAVE",
         })
         .catch((err) => console.warn("[LeaveNotification:InApp] Error:", err.message));
@@ -850,7 +1012,7 @@ class LeaveService {
           startDate: request.startDate,
           endDate: request.endDate,
           totalDays: Number(request.totalDays),
-          reviewNote,
+          reviewNote: normalizedReviewNote || null,
           companyName: request.employee?.organization?.name,
           companyLogoUrl: request.employee?.organization?.logoUrl,
         })
@@ -865,7 +1027,7 @@ class LeaveService {
           startDate: request.startDate,
           endDate: request.endDate,
           totalDays: Number(request.totalDays),
-          reviewNote,
+          reviewNote: normalizedReviewNote || null,
         })
         .catch((err) => console.warn("[LeaveNotification:WhatsApp] Error:", err.message));
     }

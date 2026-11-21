@@ -7,7 +7,7 @@ const router = express.Router();
 router.use(authenticate);
 
 // HR and admins announce or withdraw company leave; everyone can see it.
-const hrOnly = authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER");
+const hrOnly = authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR");
 
 router.get("/", companyLeaveController.list);
 router.post("/", hrOnly, companyLeaveController.create);

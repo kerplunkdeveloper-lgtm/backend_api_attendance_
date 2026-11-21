@@ -2,6 +2,7 @@ const prisma = require("../config/database");
 const { uploadImage, uploadBuffer, signedDeliveryUrl, isSensitiveDocumentType } = require("../config/cloudinary");
 const notificationService = require("./notification.service");
 const { assertSniffedType } = require("../middleware/upload.middleware");
+const { WORKING_STATUSES } = require("../utils/employeeStatus");
 
 const uploadFailure = (message, cause) => {
   const error = new Error(message);
@@ -38,6 +39,32 @@ const DOCUMENT_DEFINITIONS = [
 ];
 
 class EmployeeDocumentService {
+  /** Dashboard-friendly mandatory-document compliance summary. */
+  async getMissingDocumentsSummary(organizationId, { branchId, limit = 50 } = {}) {
+    const employees = await prisma.employee.findMany({
+      where: { organizationId, status: { in: WORKING_STATUSES }, ...(branchId ? { branchId: String(branchId) } : {}) },
+      select: {
+        id: true, employeeCode: true, firstName: true, lastName: true, branch: { select: { id: true, name: true } },
+        documents: { select: { documentType: true, status: true } },
+      },
+      orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
+    });
+    const mandatory = DOCUMENT_DEFINITIONS.filter((definition) => definition.isMandatory);
+    const rows = employees.map((employee) => {
+      const missing = mandatory.filter((definition) => !employee.documents.some((doc) => doc.documentType === definition.type && doc.status === "VERIFIED"));
+      const uploaded = mandatory.filter((definition) => employee.documents.some((doc) => doc.documentType === definition.type));
+      return {
+        employee: { id: employee.id, employeeCode: employee.employeeCode, firstName: employee.firstName, lastName: employee.lastName, branch: employee.branch },
+        missing: missing.map((definition) => ({ type: definition.type, label: definition.label, reason: employee.documents.some((doc) => doc.documentType === definition.type && doc.status === "REJECTED") ? "REJECTED" : "MISSING" })),
+        uploadedMandatory: uploaded.length,
+        totalMandatory: mandatory.length,
+        completionPercentage: mandatory.length ? Math.round((uploaded.length / mandatory.length) * 100) : 100,
+      };
+    }).filter((row) => row.missing.length > 0);
+    const capped = rows.slice(0, Math.max(1, Math.min(Number(limit) || 50, 200)));
+    return { summary: { employeesWithMissingDocuments: rows.length, totalEmployees: employees.length, totalMandatory: mandatory.length, returned: capped.length }, employees: capped };
+  }
+
   /**
    * Get all documents for an employee + checklist status
    */

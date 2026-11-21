@@ -126,6 +126,7 @@ model Organization {
   corrections          AttendanceCorrection[]
   leaveTypes           LeaveType[]
   leaveRequests        LeaveRequest[]
+  leaveChangeRequests  LeaveChangeRequest[]
   leaveBalances        LeaveBalance[]
   holidays             Holiday[]
   companyLeaves        CompanyLeave[]
@@ -316,10 +317,24 @@ model AttendancePolicy {
   halfDayThresholdMinutes       Int      @default(240) // 4h = HALF_DAY trigger
   maxLatesBeforeDeduction       Int      @default(3) // First N lates are free
   lateDeductionPercent          Decimal  @default(0.25) @db.Decimal(4, 2) // % of daily rate per extra late
+  breakDeductionEnabled         Boolean  @default(false)
+  lunchDeductionEnabled         Boolean  @default(false)
+  breakGraceMinutes             Int      @default(0)
+  lunchGraceMinutes             Int      @default(0)
+  pauseDeductionSalaryBasis     String   @default("BASE_SALARY") // BASE_SALARY, GROSS_SALARY, MONTHLY_CTC
+  breakDeductionMethod          String   @default("HOURLY_RATE") // HOURLY_RATE or FIXED_PER_MINUTE
+  lunchDeductionMethod          String   @default("HOURLY_RATE") // HOURLY_RATE or FIXED_PER_MINUTE
+  breakFixedPerMinute           Decimal  @default(0) @db.Decimal(10, 2)
+  lunchFixedPerMinute           Decimal  @default(0) @db.Decimal(10, 2)
+  maxPauseDeductionPerDay       Decimal  @default(0) @db.Decimal(10, 2) // 0 = unlimited
   allowWfh                      Boolean  @default(true)
   requireOtApproval             Boolean  @default(false) // OT must be approved before payroll
   geofenceStrict                Boolean  @default(false) // When true, reject punches outside branch radius
   requireTrustedDevice          Boolean  @default(false)
+  deviceVerificationEnabled     Boolean  @default(true)
+  deviceConflictAlertEnabled    Boolean  @default(true)
+  deviceConflictAutoBlock       Boolean  @default(false)
+  allowSharedKioskDevice        Boolean  @default(false)
   shootRecoveryEnabled          Boolean  @default(true)
   shootRecoveryThresholdMinutes Int      @default(720) // 12 hours by default
   shootTravelOtEnabled          Boolean  @default(true)
@@ -717,6 +732,8 @@ model Employee {
   paidLeaveStartDate    DateTime @default(now())
   dateOfBirth           DateTime?
   gender                String? // MALE, FEMALE
+  bloodGroup            String? // A+, A-, B+, B-, AB+, AB-, O+, O-
+  maritalStatus         String? // MARRIED, UNMARRIED, DIVORCED, WIDOWED
   employmentType        String? // FULL_TIME, PART_TIME, CONTRACT, INTERN
   reportingManagerId    String?
   workEmail             String?
@@ -751,6 +768,7 @@ model Employee {
   attendances              Attendance[]
   corrections              AttendanceCorrection[]
   leaveRequests            LeaveRequest[]
+  leaveChangeRequests      LeaveChangeRequest[]
   workFromHomeRequests     WorkFromHomeRequest[]
   shootRequests            ShootRequest[]
   shootRequestParticipants ShootRequestParticipant[]
@@ -838,6 +856,10 @@ model Attendance {
   earlyMinutes    Int              @default(0)
   overtimeMinutes Int              @default(0)
   wfhNote         String? // Note for WFH check-ins
+  securityReviewStatus String  @default("CLEAR") // CLEAR, PENDING, APPROVED, REJECTED, FALSE_POSITIVE
+  securityReviewNote   String?
+  securityReviewedBy   String?
+  securityReviewedAt   DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -939,6 +961,7 @@ model LeaveRequest {
   organization Organization @relation(fields: [organizationId], references: [id])
   employee     Employee     @relation(fields: [employeeId], references: [id])
   leaveType    LeaveType    @relation(fields: [leaveTypeId], references: [id])
+  changeRequests LeaveChangeRequest[]
 
   @@index([organizationId, status])
   @@index([employeeId])
@@ -946,6 +969,34 @@ model LeaveRequest {
   // Backs the overlap check on apply and the unpaid-leave lookup in payroll.
   @@index([employeeId, startDate, endDate])
   @@index([organizationId, status, startDate])
+}
+
+model LeaveChangeRequest {
+  id             String        @id @default(uuid())
+  organizationId String
+  leaveRequestId String
+  employeeId     String
+  oldStartDate   DateTime      @db.Date
+  oldEndDate     DateTime      @db.Date
+  newStartDate   DateTime      @db.Date
+  newEndDate     DateTime      @db.Date
+  reason         String
+  status         RequestStatus @default(PENDING)
+  requestedBy    String
+  reviewedBy     String?
+  reviewNote     String?
+  reviewedAt     DateTime?
+  attendanceId   String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  leaveRequest LeaveRequest @relation(fields: [leaveRequestId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id])
+
+  @@index([organizationId, status])
+  @@index([employeeId, status])
+  @@index([leaveRequestId])
 }
 
 model LeaveBalance {
@@ -1100,6 +1151,9 @@ model Payslip {
   periodStart          DateTime? @db.Date
   periodEnd            DateTime? @db.Date
   permissionDeduction  Decimal   @default(0) @db.Decimal(10, 2)
+  breakDeduction       Decimal   @default(0) @db.Decimal(10, 2)
+  lunchDeduction       Decimal   @default(0) @db.Decimal(10, 2)
+  pauseDeduction       Decimal   @default(0) @db.Decimal(10, 2)
   status               String    @default("DRAFT") // DRAFT, PENDING_APPROVAL, APPROVED, DISBURSED, REJECTED
   approvedBy           String?
   approvedAt           DateTime?
@@ -1274,6 +1328,17 @@ model AuditLog {
   entityId       String?
   details        String? // Optional descriptive details
   ipAddress      String?
+  employeeId     String?
+  branchId       String?
+  deviceId       String?
+  deviceName     String?
+  eventType      String?
+  riskLevel      String?  // LOW, MEDIUM, HIGH
+  reviewStatus   String?  // NOT_REQUIRED, PENDING, APPROVED, REJECTED, FALSE_POSITIVE
+  reviewedBy     String?
+  reviewNote     String?
+  reviewedAt     DateTime?
+  attendanceId   String?
   createdAt      DateTime @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id])
@@ -1282,6 +1347,12 @@ model AuditLog {
   @@index([organizationId, createdAt])
   @@index([userId])
   @@index([entityId])
+  @@index([organizationId, eventType])
+  @@index([organizationId, reviewStatus])
+  @@index([organizationId, employeeId, createdAt])
+  @@index([organizationId, branchId, createdAt])
+  @@index([organizationId, deviceId, createdAt])
+  @@index([organizationId, attendanceId])
 }
 
 model EmployeeDevice {

@@ -21,7 +21,7 @@ router.get("/exit-document-templates", authorizeRoles("SUPER_ADMIN", "COMPANY_AD
 router.put("/exit-document-templates", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"), orgController.updateExitDocumentTemplates);
 router.put(
   "/",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"),
   orgController.update,
 );
 router.post("/logo", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"), logoFields, handleUploadErrors, orgController.uploadLogo);

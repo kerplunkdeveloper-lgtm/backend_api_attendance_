@@ -54,6 +54,21 @@ beforeEach(() => {
 });
 
 describe("posting announcements", () => {
+  it("creates a one-day welcome announcement for a new joiner", async () => {
+    const before = Date.now();
+    const result = await announcements.createNewJoiner("org-1", {
+      firstName: "Asha",
+      lastName: "Rao",
+      designation: "Designer",
+    }, "u-admin");
+
+    assert.equal(result.title, "Welcome Asha Rao to the team!");
+    assert.match(result.body, /Asha Rao \(Designer\)/);
+    assert.ok(result.expiresAt.getTime() >= before + 24 * 60 * 60 * 1000 - 1000);
+    assert.ok(result.expiresAt.getTime() <= Date.now() + 24 * 60 * 60 * 1000 + 1000);
+    assert.equal(result.notified, 2);
+  });
+
   it("lets HR post, and notifies everyone still working except the author", async () => {
     const result = await announcements.create("org-1", hr, { title: "Diwali holiday", body: "Office closed 31 Oct." });
     assert.equal(result.notified, 2);

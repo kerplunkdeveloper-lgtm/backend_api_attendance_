@@ -168,7 +168,7 @@ class OnboardingController {
       res.status(200).json({
         success: true,
         message:
-          "Employee successfully approved, account activated, and offer letter generated!",
+          "Employee successfully approved and account activated without an offer letter.",
         data: result,
       });
     } catch (err) {

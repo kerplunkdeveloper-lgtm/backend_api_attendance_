@@ -25,6 +25,7 @@ const { parsePagination } = require("../utils/pagination");
 const { resolvePunchLocation } = require("../utils/reverseGeocode");
 const shootRequestService = require("./shoot-request.service");
 const notificationService = require("./notification.service");
+const deviceService = require("./device.service");
 
 const formatLocalTime = (value, timezone = DEFAULT_TIMEZONE) =>
   new Date(value).toLocaleTimeString("en-IN", {
@@ -340,6 +341,18 @@ const isWorkingDay = (shift, date, timezone = DEFAULT_TIMEZONE) => {
  *   - Logs geofence bypass audit on AttendanceEvent
  */
 const assertTrustedDevice = async (employee, organizationId, policy, deviceId) => {
+  if (policy?.deviceConflictAutoBlock && !policy?.allowSharedKioskDevice && deviceId) {
+    const conflicting = await prisma.employeeDevice.findFirst({
+      where: { organizationId, deviceId: String(deviceId), employeeId: { not: employee.id } },
+      select: { id: true },
+    });
+    if (conflicting) {
+      const error = new Error("This device is already registered to another employee. Ask HR to verify it before punching.");
+      error.statusCode = 403;
+      error.code = "DUPLICATE_DEVICE_BLOCKED";
+      throw error;
+    }
+  }
   if (!policy?.requireTrustedDevice) return;
   if (!deviceId) {
     const error = new Error("This organization requires a trusted device. Register this phone first.");
@@ -488,6 +501,9 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
     punchNote = String(note || "").trim() || `${approvedShoot.shootName} @ ${approvedShoot.location}`;
   }
   await assertTrustedDevice(employee, organizationId, policy, deviceId);
+  void deviceService.recordDailyUse({ userId, organizationId, employee, deviceId, timestamp: checkInTime }).catch((error) => {
+    console.warn("[DeviceAudit] Could not record punch device usage:", error.message);
+  });
 
 
   // ── Week-Off / Holiday / Leave Detection ──────────────────────────────────
@@ -806,6 +822,9 @@ const wfhCheckIn = async ({ userId, employeeId, organizationId, timestamp, wfhNo
   const today = getLocalDateOnly(checkInTime, timezone);
   const policy = await getPolicy(organizationId);
   await assertTrustedDevice(employee, organizationId, policy, deviceId);
+  void deviceService.recordDailyUse({ userId, organizationId, employee, deviceId, timestamp: checkInTime }).catch((error) => {
+    console.warn("[DeviceAudit] Could not record WFH device usage:", error.message);
+  });
 
   if (!policy.allowWfh) {
     const error = new Error("Work From Home punch-in is not enabled for this organization.");
@@ -986,6 +1005,9 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
   const policy = await getPolicy(organizationId);
   assertLocationCaptured({ latitude, longitude, action: "out", skip: skipGeofence || source === "BIOMETRIC" || (isOnBehalf(employee, userId) && ADMIN_ROLES.includes(actorRole)) });
   await assertTrustedDevice(employee, organizationId, policy, deviceId);
+  void deviceService.recordDailyUse({ userId, organizationId, employee, deviceId, timestamp: timestamp || new Date() }).catch((error) => {
+    console.warn("[DeviceAudit] Could not record punch-out device usage:", error.message);
+  });
   const checkOutTime = assertPunchTimestamp(timestamp, { actorRole, source: source || "WEB" });
   const timezone = await getOrgTimezone(organizationId);
   const today = getLocalDateOnly(checkOutTime, timezone);
