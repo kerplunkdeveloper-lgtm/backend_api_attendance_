@@ -76,7 +76,7 @@ async function uploadS3(buffer, {
     contentType,
   });
 
-  const temporaryUrl = await getDownloadUrl(result.key);
+  const temporaryUrl = await getDownloadUrl(result.key, 300, organizationId);
 
   return {
     provider: "s3",

@@ -15,6 +15,7 @@ const portalUpload = documentUploader(10);
 
 // Candidate accesses portal via unique token
 router.get("/portal/:token", onboardingController.getCandidateByToken);
+router.get("/portal/:token/documents/:documentId/content", onboardingController.getPortalDocumentContent);
 
 // Candidate submits / updates profile
 router.put(
@@ -59,6 +60,11 @@ router.get(
   "/:id",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   onboardingController.getCandidateDetails,
+);
+router.get(
+  "/:id/documents/:documentId/content",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  onboardingController.getCandidateDocumentContent,
 );
 
 // HR: Verify candidate profile & review documents

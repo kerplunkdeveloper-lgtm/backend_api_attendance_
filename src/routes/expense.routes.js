@@ -39,6 +39,7 @@ router.get("/my", expenseController.listMyClaims);
 
 // Summary KPIs — org-wide spend figures
 router.get("/summary", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"), expenseController.getSummary);
+router.get("/:id/receipt", expenseController.getReceipt);
 
 // View claims (all for manager/admin, personal for employee)
 router.get("/", expenseController.listOrganizationClaims);
