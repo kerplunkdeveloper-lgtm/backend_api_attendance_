@@ -49,3 +49,35 @@ test("keeps the existing half-day rule separate from short-hour deductions", () 
   assert.equal(row.lopDeduction, 500);
   assert.equal(row.earnedSalary, 500);
 });
+
+test("does not double-charge pause minutes as both short hours and pause deduction", () => {
+  const row = payroll.buildDailyPayrollLedger({
+    period,
+    asOf: period.end,
+    workingDays: new Set([1]),
+    holidayKeys: new Set(),
+    attendanceByKey: new Map([[
+      "2027-02-01",
+      { status: "PRESENT", workingMinutes: 465, breakMinutes: 50, lunchMinutes: 0, checkIn: "2027-02-01T09:00:00.000Z", checkOut: "2027-02-01T18:00:00.000Z" },
+    ]]),
+    approvedOvertimeByKey: new Map(),
+    unpaidLeaveKeys: new Set(),
+    companyLeaveByKey: new Map(),
+    todayKey: "2027-02-02",
+    dailyRate: 1000,
+    hourlyRate: 125,
+    pauseHourlyRate: 125,
+    requiredProductiveMinutes: 480,
+    allowedBreakMinutes: 30,
+    allowedLunchMinutes: 60,
+    pausePolicy: { breakDeductionEnabled: true, lunchDeductionEnabled: false, breakGraceMinutes: 5, lunchGraceMinutes: 0, breakDeductionMethod: "HOURLY_RATE", lunchDeductionMethod: "HOURLY_RATE" },
+    overtimeMultiplier: 1.5,
+    lateComingRules: [],
+    maxLatesBeforeDeduction: 3,
+    lateDeductionPercent: 0.25,
+  })[0];
+
+  assert.equal(row.shortfallMinutes, 0);
+  assert.equal(row.hoursShortfallDeduction, 0);
+  assert.equal(row.breakDeduction, 31.25);
+});

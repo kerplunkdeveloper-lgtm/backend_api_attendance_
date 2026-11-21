@@ -1,4 +1,5 @@
 const policyService = require("../services/policy.service");
+const auditService = require("../services/audit.service");
 const { sendControllerError } = require("../utils/controllerError");
 
 class PolicyController {
@@ -17,6 +18,26 @@ class PolicyController {
         req.user.organizationId,
         req.body,
       );
+      await auditService.logAction({
+        organizationId: req.user.organizationId,
+        userId: req.user.id,
+        action: "UPDATE",
+        entity: "ATTENDANCE_POLICY",
+        entityId: result.id,
+        eventType: "ATTENDANCE_POLICY_UPDATED",
+        riskLevel: "MEDIUM",
+        ipAddress: req.ip,
+        details: {
+          breakDeductionEnabled: result.breakDeductionEnabled,
+          lunchDeductionEnabled: result.lunchDeductionEnabled,
+          breakGraceMinutes: result.breakGraceMinutes,
+          lunchGraceMinutes: result.lunchGraceMinutes,
+          pauseDeductionSalaryBasis: result.pauseDeductionSalaryBasis,
+          breakDeductionMethod: result.breakDeductionMethod,
+          lunchDeductionMethod: result.lunchDeductionMethod,
+          maxPauseDeductionPerDay: result.maxPauseDeductionPerDay,
+        },
+      });
       return res
         .status(200)
         .json({

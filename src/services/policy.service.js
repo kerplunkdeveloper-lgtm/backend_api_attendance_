@@ -16,10 +16,24 @@ const DEFAULT_POLICY = {
   halfDayThresholdMinutes: 240,
   maxLatesBeforeDeduction: 3,
   lateDeductionPercent: 0.25,
+  breakDeductionEnabled: false,
+  lunchDeductionEnabled: false,
+  breakGraceMinutes: 0,
+  lunchGraceMinutes: 0,
+  pauseDeductionSalaryBasis: "BASE_SALARY",
+  breakDeductionMethod: "HOURLY_RATE",
+  lunchDeductionMethod: "HOURLY_RATE",
+  breakFixedPerMinute: 0,
+  lunchFixedPerMinute: 0,
+  maxPauseDeductionPerDay: 0,
   allowWfh: true,
   requireOtApproval: false,
   geofenceStrict: false,
   requireTrustedDevice: false,
+  deviceVerificationEnabled: true,
+  deviceConflictAlertEnabled: true,
+  deviceConflictAutoBlock: false,
+  allowSharedKioskDevice: false,
   shootRecoveryEnabled: true,
   shootRecoveryThresholdMinutes: 720,
   shootTravelOtEnabled: true,
@@ -59,6 +73,16 @@ const normalizePolicy = (policy, organizationId, isDefault = false) => ({
   ...(policy || {}),
   organizationId,
   lateDeductionPercent: Number(policy?.lateDeductionPercent ?? DEFAULT_POLICY.lateDeductionPercent),
+  breakDeductionEnabled: Boolean(policy?.breakDeductionEnabled ?? DEFAULT_POLICY.breakDeductionEnabled),
+  lunchDeductionEnabled: Boolean(policy?.lunchDeductionEnabled ?? DEFAULT_POLICY.lunchDeductionEnabled),
+  breakGraceMinutes: Number(policy?.breakGraceMinutes ?? DEFAULT_POLICY.breakGraceMinutes),
+  lunchGraceMinutes: Number(policy?.lunchGraceMinutes ?? DEFAULT_POLICY.lunchGraceMinutes),
+  pauseDeductionSalaryBasis: String(policy?.pauseDeductionSalaryBasis ?? DEFAULT_POLICY.pauseDeductionSalaryBasis),
+  breakDeductionMethod: String(policy?.breakDeductionMethod ?? DEFAULT_POLICY.breakDeductionMethod),
+  lunchDeductionMethod: String(policy?.lunchDeductionMethod ?? DEFAULT_POLICY.lunchDeductionMethod),
+  breakFixedPerMinute: Number(policy?.breakFixedPerMinute ?? DEFAULT_POLICY.breakFixedPerMinute),
+  lunchFixedPerMinute: Number(policy?.lunchFixedPerMinute ?? DEFAULT_POLICY.lunchFixedPerMinute),
+  maxPauseDeductionPerDay: Number(policy?.maxPauseDeductionPerDay ?? DEFAULT_POLICY.maxPauseDeductionPerDay),
   monthlyPaidLeaveDays: Number(policy?.monthlyPaidLeaveDays ?? DEFAULT_POLICY.monthlyPaidLeaveDays),
   paidLeaveCarryForward: Boolean(policy?.paidLeaveCarryForward ?? DEFAULT_POLICY.paidLeaveCarryForward),
   monthlyPermissionHours: Number(policy?.monthlyPermissionHours ?? DEFAULT_POLICY.monthlyPermissionHours),
@@ -119,10 +143,24 @@ class PolicyService {
       halfDayThresholdMinutes,
       maxLatesBeforeDeduction,
       lateDeductionPercent,
+      breakDeductionEnabled,
+      lunchDeductionEnabled,
+      breakGraceMinutes,
+      lunchGraceMinutes,
+      pauseDeductionSalaryBasis,
+      breakDeductionMethod,
+      lunchDeductionMethod,
+      breakFixedPerMinute,
+      lunchFixedPerMinute,
+      maxPauseDeductionPerDay,
       allowWfh,
       requireOtApproval,
       geofenceStrict,
       requireTrustedDevice,
+      deviceVerificationEnabled,
+      deviceConflictAlertEnabled,
+      deviceConflictAutoBlock,
+      allowSharedKioskDevice,
       shootRecoveryEnabled,
       shootRecoveryThresholdMinutes,
       shootTravelOtEnabled,
@@ -147,10 +185,24 @@ class PolicyService {
     if (halfDayThresholdMinutes !== undefined) payload.halfDayThresholdMinutes = boundedNumber("Half-day threshold", halfDayThresholdMinutes, { min: 0, max: 1440, integer: true });
     if (maxLatesBeforeDeduction !== undefined) payload.maxLatesBeforeDeduction = boundedNumber("Lates before deduction", maxLatesBeforeDeduction, { min: 0, max: 31, integer: true });
     if (lateDeductionPercent !== undefined) payload.lateDeductionPercent = boundedNumber("Late deduction (fraction of daily rate)", lateDeductionPercent, { min: 0, max: 1 });
+    if (breakDeductionEnabled !== undefined) payload.breakDeductionEnabled = parseBoolean(breakDeductionEnabled);
+    if (lunchDeductionEnabled !== undefined) payload.lunchDeductionEnabled = parseBoolean(lunchDeductionEnabled);
+    if (breakGraceMinutes !== undefined) payload.breakGraceMinutes = boundedNumber("Break grace minutes", breakGraceMinutes, { min: 0, max: 1440, integer: true });
+    if (lunchGraceMinutes !== undefined) payload.lunchGraceMinutes = boundedNumber("Lunch grace minutes", lunchGraceMinutes, { min: 0, max: 1440, integer: true });
+    if (pauseDeductionSalaryBasis !== undefined) payload.pauseDeductionSalaryBasis = ["BASE_SALARY", "GROSS_SALARY", "MONTHLY_CTC"].includes(String(pauseDeductionSalaryBasis)) ? String(pauseDeductionSalaryBasis) : DEFAULT_POLICY.pauseDeductionSalaryBasis;
+    if (breakDeductionMethod !== undefined) payload.breakDeductionMethod = ["HOURLY_RATE", "FIXED_PER_MINUTE"].includes(String(breakDeductionMethod)) ? String(breakDeductionMethod) : DEFAULT_POLICY.breakDeductionMethod;
+    if (lunchDeductionMethod !== undefined) payload.lunchDeductionMethod = ["HOURLY_RATE", "FIXED_PER_MINUTE"].includes(String(lunchDeductionMethod)) ? String(lunchDeductionMethod) : DEFAULT_POLICY.lunchDeductionMethod;
+    if (breakFixedPerMinute !== undefined) payload.breakFixedPerMinute = boundedNumber("Fixed break deduction per minute", breakFixedPerMinute, { min: 0, max: 100000 });
+    if (lunchFixedPerMinute !== undefined) payload.lunchFixedPerMinute = boundedNumber("Fixed lunch deduction per minute", lunchFixedPerMinute, { min: 0, max: 100000 });
+    if (maxPauseDeductionPerDay !== undefined) payload.maxPauseDeductionPerDay = boundedNumber("Maximum pause deduction per day", maxPauseDeductionPerDay, { min: 0, max: 100000 });
     if (allowWfh !== undefined) payload.allowWfh = parseBoolean(allowWfh);
     if (requireOtApproval !== undefined) payload.requireOtApproval = parseBoolean(requireOtApproval);
     if (geofenceStrict !== undefined) payload.geofenceStrict = parseBoolean(geofenceStrict);
     if (requireTrustedDevice !== undefined) payload.requireTrustedDevice = parseBoolean(requireTrustedDevice);
+    if (deviceVerificationEnabled !== undefined) payload.deviceVerificationEnabled = parseBoolean(deviceVerificationEnabled);
+    if (deviceConflictAlertEnabled !== undefined) payload.deviceConflictAlertEnabled = parseBoolean(deviceConflictAlertEnabled);
+    if (deviceConflictAutoBlock !== undefined) payload.deviceConflictAutoBlock = parseBoolean(deviceConflictAutoBlock);
+    if (allowSharedKioskDevice !== undefined) payload.allowSharedKioskDevice = parseBoolean(allowSharedKioskDevice);
     if (shootRecoveryEnabled !== undefined) payload.shootRecoveryEnabled = parseBoolean(shootRecoveryEnabled);
     if (shootRecoveryThresholdMinutes !== undefined) payload.shootRecoveryThresholdMinutes = boundedNumber("Shoot recovery threshold", shootRecoveryThresholdMinutes, { min: 1, max: 2880, integer: true });
     if (shootTravelOtEnabled !== undefined) payload.shootTravelOtEnabled = parseBoolean(shootTravelOtEnabled);
@@ -159,6 +211,20 @@ class PolicyService {
     if (shootOtMultiplier !== undefined) payload.shootOtMultiplier = boundedNumber("Shoot overtime multiplier", shootOtMultiplier, { min: 0, max: 5 });
     if (shootOtSalaryBasis !== undefined) payload.shootOtSalaryBasis = ["BASE_SALARY", "MONTHLY_CTC"].includes(String(shootOtSalaryBasis)) ? String(shootOtSalaryBasis) : DEFAULT_POLICY.shootOtSalaryBasis;
     if (weeklyOffDays !== undefined) payload.weeklyOffDays = normalizeWeeklyOffDays(weeklyOffDays);
+
+    // Pause deductions are a payroll entitlement. Existing plan records expose
+    // the single source of truth for whether payroll is active in this tenant.
+    if ((payload.breakDeductionEnabled || payload.lunchDeductionEnabled)) {
+      const organization = await prisma.organization.findUnique({
+        where: { id: organizationId },
+        select: { subscription: { select: { hasPayroll: true } } },
+      });
+      if (organization?.subscription && organization.subscription.hasPayroll === false) {
+        const error = new Error("Extra break/lunch salary deductions require a Payroll-enabled plan.");
+        error.statusCode = 402;
+        throw error;
+      }
+    }
     const createPayload = { ...DEFAULT_POLICY, ...payload };
 
     const save = () =>
@@ -193,6 +259,16 @@ class PolicyService {
         delete legacyPayload.shootTravelOtMultiplier;
         delete legacyPayload.shootOtMultiplier;
         delete legacyPayload.shootOtSalaryBasis;
+        delete legacyPayload.breakDeductionEnabled;
+        delete legacyPayload.lunchDeductionEnabled;
+        delete legacyPayload.breakGraceMinutes;
+        delete legacyPayload.lunchGraceMinutes;
+        delete legacyPayload.pauseDeductionSalaryBasis;
+        delete legacyPayload.breakDeductionMethod;
+        delete legacyPayload.lunchDeductionMethod;
+        delete legacyPayload.breakFixedPerMinute;
+        delete legacyPayload.lunchFixedPerMinute;
+        delete legacyPayload.maxPauseDeductionPerDay;
         policy = await prisma.attendancePolicy.upsert({
           where: { organizationId },
           update: legacyPayload,

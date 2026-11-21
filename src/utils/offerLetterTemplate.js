@@ -36,6 +36,10 @@ const normalizeOfferLetterTemplate = (value = {}) => ({
   signatoryTitle: clean(value.signatoryTitle, DEFAULT_OFFER_LETTER_TEMPLATE.signatoryTitle, 120),
   primaryColor: /^#[0-9a-f]{6}$/i.test(String(value.primaryColor || "")) ? value.primaryColor : DEFAULT_OFFER_LETTER_TEMPLATE.primaryColor,
   footer: clean(value.footer, DEFAULT_OFFER_LETTER_TEMPLATE.footer, 400),
+  sourceType: ["EDITOR", "JSON", "CSV", "TXT", "MD", "HTML", "DOCX"].includes(String(value.sourceType || "").toUpperCase()) ? String(value.sourceType).toUpperCase() : "EDITOR",
+  sourceFileName: clean(value.sourceFileName, "", 180),
+  version: Number.isInteger(Number(value.version)) && Number(value.version) > 0 ? Number(value.version) : 1,
+  status: ["DRAFT", "ACTIVE", "ARCHIVED"].includes(String(value.status || "").toUpperCase()) ? String(value.status).toUpperCase() : "ACTIVE",
 });
 
 module.exports = { DEFAULT_OFFER_LETTER_TEMPLATE, normalizeOfferLetterTemplate };

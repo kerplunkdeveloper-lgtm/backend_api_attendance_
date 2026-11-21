@@ -28,8 +28,47 @@ class LeaveController {
         req.user.organizationId,
         req.query.year,
       );
+      return res.status(200).json({ success: true, data: Array.isArray(result) ? result : result?.balances || [], ...(result?.employee ? { employee: result.employee, year: result.year } : {}) });
+    } catch (err) { return fail(res, err); }
+  }
+
+  async getEmployeeLeaveBalances(req, res) {
+    try {
+      const result = await leaveService.getEmployeeLeaveBalances(req.user.organizationId, req.params.employeeId, req.query.year);
+      if (!result) return res.status(404).json({ success: false, message: "Employee not found" });
       return res.status(200).json({ success: true, data: result });
     } catch (err) { return fail(res, err); }
+  }
+
+  async getDepartmentConflicts(req, res) {
+    try {
+      const employeeId = req.query.employeeId || req.user.employee?.id;
+      if (!employeeId) return res.status(404).json({ success: false, message: "Employee profile not found" });
+      const result = await leaveService.getDepartmentConflicts(req.user.organizationId, employeeId, req.query.startDate, req.query.endDate);
+      return res.status(200).json({ success: true, data: result });
+    } catch (err) { return fail(res, err); }
+  }
+
+  async requestDateChange(req, res) {
+    try {
+      const result = await leaveService.requestLeaveDateChange(req.user.id, req.user.organizationId, req.params.id, req.body, req.user.role);
+      return res.status(201).json({ success: true, message: "Date-change request submitted", data: result });
+    } catch (err) { return fail(res, err); }
+  }
+
+  async getMyDateChanges(req, res) {
+    try { return res.json({ success: true, data: await leaveService.getMyLeaveChangeRequests(req.user.id, req.user.organizationId) }); }
+    catch (err) { return fail(res, err); }
+  }
+
+  async getDateChanges(req, res) {
+    try { return res.json({ success: true, data: await leaveService.getAllLeaveChangeRequests(req.user.organizationId, req.query.status || "PENDING") }); }
+    catch (err) { return fail(res, err); }
+  }
+
+  async reviewDateChange(req, res) {
+    try { return res.json({ success: true, message: "Date-change request reviewed", data: await leaveService.reviewLeaveDateChange(req.params.id, req.user.organizationId, req.user.id, req.body, req.user.role) }); }
+    catch (err) { return fail(res, err); }
   }
 
   async getEligibility(req, res) {

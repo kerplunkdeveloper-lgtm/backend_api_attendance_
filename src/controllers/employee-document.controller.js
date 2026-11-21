@@ -1,6 +1,15 @@
 const employeeDocumentService = require("../services/employee-document.service");
 
 class EmployeeDocumentController {
+  async getMissingSummary(req, res, next) {
+    try {
+      const data = await employeeDocumentService.getMissingDocumentsSummary(req.user.organizationId, req.query);
+      return res.status(200).json({ success: true, data, ...data });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   /**
    * Helper to verify employee access permissions
    */

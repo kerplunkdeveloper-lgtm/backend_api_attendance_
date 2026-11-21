@@ -139,6 +139,11 @@ describe("leave", () => {
     assert.equal(applied.status, "PENDING");
     assert.equal(applied.totalDays, 1);
 
+    await assert.rejects(
+      () => leaveService.reviewLeaveRequest("lr-1", "org-1", "manager-1", { status: "REJECTED" }),
+      (error) => error.statusCode === 400 && /rejection reason is required/i.test(error.message),
+    );
+
     const reviewed = await leaveService.reviewLeaveRequest("lr-1", "org-1", "manager-1", {
       status: "APPROVED",
     });

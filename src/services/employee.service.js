@@ -5,6 +5,8 @@ const {
   validateCompanyAdminProfile,
   assertRequiredNotCleared,
   normalizeGender,
+  normalizeBloodGroup,
+  normalizeMaritalStatus,
   normalizeEmploymentType,
   normalizePersonalEmail,
   assertStatus,
@@ -16,11 +18,13 @@ const prisma = require("../config/database");
 const emailService = require("./email.service");
 const { generateTempPassword, resolveAssignableRole, assertRoleAssignment } = require("../utils/password");
 const { resolveAvatarUrl } = require("../utils/avatar");
+const { presentEmployeeImage } = require("../utils/privateMediaUrls");
 const { assertSeatAvailable, assertBranchAvailable } = require("./entitlement.service");
 const { isPaidPlan } = require("../config/plans");
 const { getNextEmployeeCode, organizationPrefix } = require("../utils/employeeCode");
 const webhookService = require("./webhook.service");
 const { releaseDeletedEmployeeEmail } = require("../utils/releaseDeletedAccountEmail");
+const announcementService = require("./announcement.service");
 
 function badRequest(message) {
   const err = new Error(message);
@@ -86,7 +90,7 @@ const withoutSensitiveEmployeeFields = (employee) => {
   if (!employee) return employee;
   const safe = presentEmployeeMedia(employee);
   for (const field of SENSITIVE_EMPLOYEE_FIELDS) delete safe[field];
-  return safe;
+  return presentEmployeeImage(safe);
 };
 
 // HR (the MANAGER role) maintains the full employee profile, including identity and bank details.
@@ -96,7 +100,7 @@ const MANAGER_UPDATE_FIELDS = new Set([
   "shiftId", "designation", "employmentType", "employeeCode", "reportingManagerId", "avatarUrl",
   "profileImage", "profilePicture", "avatar", "role", "gender", "dateOfBirth",
   "dateOfJoining", "workEmail", "personalEmail", "address", "emergencyContactName", "emergencyContactPhone",
-  "panNumber", "uanNumber", "esiNumber", "bankName", "bankAccountNumber", "bankIfsc",
+  "panNumber", "uanNumber", "esiNumber", "bankName", "bankAccountNumber", "bankIfsc", "bloodGroup", "maritalStatus",
 ]);
 
 /** The Employee columns a validated manual-entry / invite profile fills in. */
@@ -108,6 +112,8 @@ const employeeProfileColumns = (profile) => ({
   dateOfBirth: profile.dateOfBirth,
   dateOfJoining: profile.dateOfJoining,
   designation: profile.designation,
+  bloodGroup: profile.bloodGroup,
+  maritalStatus: profile.maritalStatus,
   employmentType: profile.employmentType,
   personalEmail: profile.personalEmail,
   address: profile.address,
@@ -181,7 +187,7 @@ const seedSalaryStructure = async (organizationId, employeeId, annualCtc, label)
 /**
  * 1. POST /api/employees - Create Employee
  */
-const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN") => {
+const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN", actorUserId = null) => {
   await assertRolesAccess(organizationId, actorRole);
   const {
     password,
@@ -326,6 +332,8 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN")
   });
 
   if (userRole !== "COMPANY_ADMIN") await seedSalaryStructure(organizationId, createdEmployee.id, profile.ctc, "CreateEmployee");
+
+  await announcementService.createNewJoiner(organizationId, createdEmployee, actorUserId);
 
   // Dispatch welcome email with credentials
   const loginUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/login`;
@@ -511,7 +519,7 @@ const getEmployeeById = async (organizationId, employeeId, actorRole = "EMPLOYEE
 
   // Admins and HR open the full profile (it feeds the edit form); the route already excludes plain employees.
   return ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"].includes(actorRole)
-    ? presentEmployeeMedia(employee)
+    ? presentEmployeeImage(employee)
     : withoutSensitiveEmployeeFields(employee);
 };
 
@@ -561,6 +569,8 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
     dateOfJoining,
     dateOfBirth,
     gender,
+    bloodGroup,
+    maritalStatus,
     employmentType,
     reportingManagerId,
     workEmail,
@@ -580,6 +590,8 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
   assertRequiredNotCleared(data);
   const genderToSet = gender !== undefined ? normalizeGender(gender) : undefined;
   if (gender !== undefined && !genderToSet) throw badRequest("Gender must be Male or Female");
+  const bloodGroupToSet = bloodGroup !== undefined ? normalizeBloodGroup(bloodGroup) : undefined;
+  const maritalStatusToSet = maritalStatus !== undefined ? normalizeMaritalStatus(maritalStatus) : undefined;
   const employmentTypeToSet = employmentType !== undefined ? normalizeEmploymentType(employmentType) : undefined;
   const identity = validateIdentityFields({
     panNumber,
@@ -679,6 +691,8 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
         ...(joiningDateToSet !== undefined ? { dateOfJoining: joiningDateToSet } : {}),
         ...(birthDateToSet !== undefined ? { dateOfBirth: birthDateToSet } : {}),
         ...(genderToSet !== undefined ? { gender: genderToSet } : {}),
+        ...(bloodGroupToSet !== undefined ? { bloodGroup: bloodGroupToSet } : {}),
+        ...(maritalStatusToSet !== undefined ? { maritalStatus: maritalStatusToSet } : {}),
         ...(employmentTypeToSet !== undefined ? { employmentType: employmentTypeToSet } : {}),
         ...(reportingManagerId !== undefined ? { reportingManagerId: reportingManagerId || null } : {}),
         ...(workEmail !== undefined ? { workEmail: workEmail ? String(workEmail).trim().toLowerCase() : null } : {}),
@@ -1060,6 +1074,8 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
 
   if (userRole !== "COMPANY_ADMIN") await seedSalaryStructure(organizationId, employee.id, profile.ctc, "InviteEmployee");
 
+  await announcementService.createNewJoiner(organizationId, employee, invitedByUserId);
+
   // Send welcome email with credentials
   const loginUrl = `${process.env.FRONTEND_URL || "http://localhost:3000"}/login`;
   let emailDelivery = null;
@@ -1178,6 +1194,8 @@ const updateMyProfile = async (organizationId, userId, data, actorRole = "EMPLOY
     if (workEmailClash) throw badRequest("That office email is already used by another employee in this organization.");
   }
   const birthDate = data.dateOfBirth !== undefined ? parsePastDate("Date of birth", data.dateOfBirth) : undefined;
+  const bloodGroupToSet = data.bloodGroup !== undefined ? normalizeBloodGroup(data.bloodGroup) : undefined;
+  const maritalStatusToSet = data.maritalStatus !== undefined ? normalizeMaritalStatus(data.maritalStatus) : undefined;
   const joiningDate = data.dateOfJoining !== undefined
     ? parsePastDate("Date of joining", data.dateOfJoining, { allowFuture: true })
     : undefined;
@@ -1228,6 +1246,8 @@ const updateMyProfile = async (organizationId, userId, data, actorRole = "EMPLOY
           ? { emergencyContactPhone: data.emergencyContactPhone ? String(data.emergencyContactPhone).trim() : null }
           : {}),
         ...(birthDate ? { dateOfBirth: birthDate } : {}),
+        ...(bloodGroupToSet !== undefined ? { bloodGroup: bloodGroupToSet } : {}),
+        ...(maritalStatusToSet !== undefined ? { maritalStatus: maritalStatusToSet } : {}),
         ...(joiningDate ? { dateOfJoining: joiningDate } : {}),
         ...(data.bankName !== undefined ? { bankName: data.bankName ? String(data.bankName).trim() : null } : {}),
         ...(identity.bankAccountNumber !== undefined ? { bankAccountNumber: identity.bankAccountNumber } : {}),
@@ -1255,7 +1275,7 @@ const BULK_HASH_CONCURRENCY = 20;
 const BULK_HASH_COST = 8;
 
 
-const bulkImportEmployees = async (organizationId, employeesList, actorRole = "COMPANY_ADMIN") => {
+const bulkImportEmployees = async (organizationId, employeesList, actorRole = "COMPANY_ADMIN", actorUserId = null) => {
   if (!Array.isArray(employeesList) || employeesList.length === 0) {
     throw badRequest("No employee records provided for import");
   }
@@ -1556,6 +1576,10 @@ const bulkImportEmployees = async (organizationId, employeesList, actorRole = "C
 
   const imported = results.filter((r) => r.status === "SUCCESS");
   const failed = results.filter((r) => r.status === "FAILED");
+
+  if (toInsert.length) {
+    await announcementService.createNewJoiner(organizationId, toInsert, actorUserId);
+  }
 
   return {
     success: true,

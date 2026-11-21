@@ -57,6 +57,8 @@ const parsePastDate = (label, value, { allowFuture = false } = {}) => {
 };
 
 const GENDER_VALUES = ["MALE", "FEMALE"];
+const BLOOD_GROUP_VALUES = ["A_POSITIVE", "A_NEGATIVE", "B_POSITIVE", "B_NEGATIVE", "AB_POSITIVE", "AB_NEGATIVE", "O_POSITIVE", "O_NEGATIVE"];
+const MARITAL_STATUS_VALUES = ["MARRIED", "UNMARRIED", "DIVORCED", "WIDOWED"];
 
 /** Blank means "not recorded". Anything else must be Male or Female. */
 const normalizeGender = (value) => {
@@ -65,6 +67,16 @@ const normalizeGender = (value) => {
   if (!GENDER_VALUES.includes(gender)) fail("Gender must be Male or Female");
   return gender;
 };
+
+const normalizeChoice = (label, values, value) => {
+  if (blank(value) || String(value).trim().toUpperCase() === "NOT_SPECIFIED") return null;
+  const normalized = String(value).trim().toUpperCase();
+  if (!values.includes(normalized)) fail(`${label} is not valid.`);
+  return normalized;
+};
+
+const normalizeBloodGroup = (value) => normalizeChoice("Blood group", BLOOD_GROUP_VALUES, value);
+const normalizeMaritalStatus = (value) => normalizeChoice("Marital status", MARITAL_STATUS_VALUES, value);
 
 const EMPLOYMENT_TYPES = ["FULL_TIME", "PART_TIME", "CONTRACT", "INTERN"];
 
@@ -142,6 +154,8 @@ const validateNewEmployeeProfile = (data) => {
     firstName: String(data.firstName).trim(),
     lastName: String(data.lastName).trim(),
     gender: normalizeGender(data.gender) || fail("Gender must be Male or Female"),
+    bloodGroup: normalizeBloodGroup(data.bloodGroup),
+    maritalStatus: normalizeMaritalStatus(data.maritalStatus),
     dateOfBirth: parsePastDate("Date of birth", data.dateOfBirth),
     dateOfJoining: parsePastDate("Date of joining", data.dateOfJoining, { allowFuture: true }),
     employmentType: normalizeEmploymentType(data.employmentType),
@@ -176,6 +190,8 @@ const validateCompanyAdminProfile = (data) => {
     lastName: blank(data.lastName) ? null : String(data.lastName).trim(),
     phone: identity.phone,
     gender: null,
+    bloodGroup: null,
+    maritalStatus: null,
     dateOfBirth: null,
     dateOfJoining: null,
     employmentType: null,
@@ -208,6 +224,8 @@ module.exports = {
   validateCompanyAdminProfile,
   assertRequiredNotCleared,
   normalizeGender,
+  normalizeBloodGroup,
+  normalizeMaritalStatus,
   normalizeEmploymentType,
   normalizePersonalEmail,
   assertStatus,

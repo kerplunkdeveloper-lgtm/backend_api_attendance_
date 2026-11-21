@@ -1,3 +1,4 @@
+const { employeeAvatarUrl, organizationLogoUrl, presentEmployeeImage } = require("../utils/privateMediaUrls");
 const prisma = require("../config/database");
 const { SEAT_STATUSES, getPlan } = require("../config/plans");
 
@@ -263,8 +264,8 @@ const presentAuthUser = (user) => {
     organizationId: user.organizationId,
     organization: org
       ? {
-          ...safeOrganization,
-          logoUrl: logoStorageKey ? "/api/organization/logo-file" : org.logoUrl,
+          ...org,
+          logoUrl: organizationLogoUrl(org),
           subscriptionPlan: org.subscription?.plan || org.subscriptionPlan,
           subscriptionStatus: org.subscription?.status || org.subscriptionStatus,
           subscriptionExpiresAt:
@@ -272,10 +273,10 @@ const presentAuthUser = (user) => {
           maxEmployees: features.maxEmployees,
         }
       : null,
-    employee,
-    avatarUrl: user.avatarStorageKey
-      ? privateAvatarUrl(user.employee?.id)
-      : user.avatarUrl || employee?.avatarUrl || null,
+    employee: presentEmployeeImage(user.employee) || null,
+    avatarUrl: user.employee?.avatarStorageKey
+      ? employeeAvatarUrl(user.employee)
+      : (user.avatarUrl || user.employee?.avatarUrl || null),
     planLocked: org?.planLocked ?? false,
     mustChangePassword: user.mustChangePassword ?? false,
     emailVerifiedAt: user.emailVerifiedAt || null,

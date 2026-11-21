@@ -10,6 +10,7 @@ const money = require("../utils/money");
 const statutoryService = require("./statutory.service");
 const { normalizeSplit, buildSalaryBreakdown } = require("../utils/salarySplit");
 const { getScheduledDurationMinutes } = require("../utils/shiftCalculator");
+const { calculatePauseDeduction, applyPauseDailyCap } = require("../utils/pauseDeduction");
 
 // Payroll preview must remain usable while an additive payroll migration is
 // being rolled out. Prisma reports both a missing table and a missing column
@@ -79,7 +80,7 @@ const productiveMinutesForShift = (shift) => {
 };
 
 /** A tenant-visible, auditable day ledger used by payroll preview and payslips. */
-const buildDailyPayrollLedger = ({ period, asOf, workingDays, holidayKeys, attendanceByKey, approvedOvertimeByKey, permissionMinutesByKey = new Map(), unpaidLeaveKeys, halfDayLeaveByKey = new Map(), companyLeaveByKey, todayKey, dailyRate, hourlyRate, requiredProductiveMinutes = 480, overtimeMultiplier, lateComingRules, maxLatesBeforeDeduction, lateDeductionPercent }) => {
+const buildDailyPayrollLedger = ({ period, asOf, workingDays, holidayKeys, attendanceByKey, approvedOvertimeByKey, permissionMinutesByKey = new Map(), unpaidLeaveKeys, halfDayLeaveByKey = new Map(), companyLeaveByKey, todayKey, dailyRate, hourlyRate, requiredProductiveMinutes = 480, overtimeMultiplier, lateComingRules, maxLatesBeforeDeduction, lateDeductionPercent, pausePolicy = {}, allowedBreakMinutes = 0, allowedLunchMinutes = 0, pauseHourlyRate = hourlyRate }) => {
   const rows = [];
   let lateCount = 0;
   const lateRules = (lateComingRules || []).filter((rule) => rule.isActive && Number(rule.lateDays) > 0 && Number(rule.lopDays) > 0);
@@ -145,10 +146,44 @@ const buildDailyPayrollLedger = ({ period, asOf, workingDays, holidayKeys, atten
     // approved evening permission from becoming a salary shortfall.
     const approvedPermissionMinutes = Math.min(requiredProductiveMinutes, Number(permissionMinutesByKey.get(dateKey) || 0));
     const adjustedRequiredProductiveMinutes = Math.max(0, requiredProductiveMinutes - approvedPermissionMinutes);
-    const shortfallMinutes = isWorkedDay
+    // Only a completed attendance record is eligible. This avoids charging a
+    // live/open session whose final pause duration is not known yet.
+    const pauseClosed = Boolean(attendance?.checkIn && attendance?.checkOut);
+    const rawShortfallMinutes = isWorkedDay
       ? Math.max(0, adjustedRequiredProductiveMinutes - workingMinutes)
       : 0;
+    // When a pause deduction is enabled, remove the pause-over-allowance part
+    // from generic short-hours deduction. Otherwise the same minutes would be
+    // charged once as short hours and again as break/lunch deduction.
+    const pauseMinutesHandledSeparately = pauseClosed
+      ? (pausePolicy.breakDeductionEnabled ? Math.max(0, Number(attendance?.breakMinutes || 0) - Number(allowedBreakMinutes || 0)) : 0)
+        + (pausePolicy.lunchDeductionEnabled ? Math.max(0, Number(attendance?.lunchMinutes || 0) - Number(allowedLunchMinutes || 0)) : 0)
+      : 0;
+    const shortfallMinutes = Math.max(0, rawShortfallMinutes - pauseMinutesHandledSeparately);
     const hoursShortfallDeduction = round2((shortfallMinutes / requiredProductiveMinutes) * Number(dailyRate || 0));
+    const breakPause = calculatePauseDeduction({
+      enabled: pauseClosed && pausePolicy.breakDeductionEnabled,
+      actualMinutes: attendance?.breakMinutes,
+      allowedMinutes: allowedBreakMinutes,
+      graceMinutes: pausePolicy.breakGraceMinutes,
+      method: pausePolicy.breakDeductionMethod,
+      fixedPerMinute: pausePolicy.breakFixedPerMinute,
+      hourlyRate: pauseHourlyRate,
+    });
+    const lunchPause = calculatePauseDeduction({
+      enabled: pauseClosed && pausePolicy.lunchDeductionEnabled,
+      actualMinutes: attendance?.lunchMinutes,
+      allowedMinutes: allowedLunchMinutes,
+      graceMinutes: pausePolicy.lunchGraceMinutes,
+      method: pausePolicy.lunchDeductionMethod,
+      fixedPerMinute: pausePolicy.lunchFixedPerMinute,
+      hourlyRate: pauseHourlyRate,
+    });
+    const pauseDeduction = applyPauseDailyCap({
+      breakAmount: breakPause.amount,
+      lunchAmount: lunchPause.amount,
+      cap: pausePolicy.maxPauseDeductionPerDay,
+    });
     rows.push({
       date: dateKey,
       status: category,
@@ -161,6 +196,15 @@ const buildDailyPayrollLedger = ({ period, asOf, workingDays, holidayKeys, atten
       approvedPermissionMinutes,
       shortfallMinutes,
       hoursShortfallDeduction,
+      breakMinutes: Number(attendance?.breakMinutes || 0),
+      lunchMinutes: Number(attendance?.lunchMinutes || 0),
+      allowedBreakMinutes: Number(allowedBreakMinutes || 0),
+      allowedLunchMinutes: Number(allowedLunchMinutes || 0),
+      extraBreakMinutes: breakPause.extraMinutes,
+      extraLunchMinutes: lunchPause.extraMinutes,
+      breakDeduction: pauseDeduction.breakDeduction,
+      lunchDeduction: pauseDeduction.lunchDeduction,
+      pauseDeduction: pauseDeduction.pauseDeduction,
       overtimeMinutes,
       overtimePay,
       lateMinutes: Number(attendance?.lateMinutes || 0),
@@ -169,7 +213,7 @@ const buildDailyPayrollLedger = ({ period, asOf, workingDays, holidayKeys, atten
       lopDeduction: round2(lopDeduction),
       lateDeductionDays,
       lateDeduction: round2(lateDeduction),
-      earnedSalary: round2(Math.max(0, dailyRate - lopDeduction - lateDeduction - hoursShortfallDeduction + overtimePay)),
+      earnedSalary: round2(Math.max(0, dailyRate - lopDeduction - lateDeduction - hoursShortfallDeduction - pauseDeduction.pauseDeduction + overtimePay)),
     });
   }
   return rows;
@@ -434,6 +478,11 @@ class PayrollService {
     const special = Number(salary.special);
     const otherAllowance = Number(salary.otherAllowance || 0);
     const allowancesTotal = money.sum(hra, transport, special, otherAllowance);
+    const pauseSalaryBasisAmount = policy.pauseDeductionSalaryBasis === "MONTHLY_CTC"
+      ? (monthlyCtc || (annualCtc ? annualCtc / 12 : baseSalary))
+      : policy.pauseDeductionSalaryBasis === "GROSS_SALARY"
+        ? money.sum(baseSalary, allowancesTotal)
+        : baseSalary;
     const pf = Number(salary.pf || 0);
     const esi = Number(salary.esi || 0);
     const professionalTax = Number(salary.professionalTax || 0);
@@ -441,6 +490,7 @@ class PayrollService {
 
     const dailyRate = money.divide(baseSalary, basisDays);
     const hourlyRate = money.divide(dailyRate, 8);
+    const pauseHourlyRate = money.divide(money.divide(pauseSalaryBasisAmount, basisDays), 8);
 
     const todayDate = await getOrgDateOnly(organizationId);
     const todayKey = toIsoKey(todayDate);
@@ -552,6 +602,10 @@ class PayrollService {
       lateComingRules,
       maxLatesBeforeDeduction,
       lateDeductionPercent,
+      pausePolicy: policy,
+      allowedBreakMinutes: employee.shift?.breakIncluded === false ? 0 : Number(employee.shift?.breakMinutes || 0),
+      allowedLunchMinutes: employee.shift?.lunchIncluded === false ? 0 : Number(employee.shift?.lunchMinutes || 0),
+      pauseHourlyRate,
     });
 
     let totalOvertimeMinutes = 0;
@@ -636,11 +690,15 @@ class PayrollService {
     const lateCount = dayCounts.lateCount;
     const lateDeduction = money.round(dailyPayroll.reduce((sum, row) => sum + Number(row.lateDeduction || 0), 0));
     const hoursShortfallDeduction = money.round(dailyPayroll.reduce((sum, row) => sum + Number(row.hoursShortfallDeduction || 0), 0));
+    const breakDeduction = money.round(dailyPayroll.reduce((sum, row) => sum + Number(row.breakDeduction || 0), 0));
+    const lunchDeduction = money.round(dailyPayroll.reduce((sum, row) => sum + Number(row.lunchDeduction || 0), 0));
+    const pauseDeduction = money.round(dailyPayroll.reduce((sum, row) => sum + Number(row.pauseDeduction || 0), 0));
     const statutoryDeductions = money.sum(pf, esi, professionalTax);
     const deductionsTotal = money.sum(
       unpaidLeaveDeduction,
       hoursShortfallDeduction,
       lateDeduction,
+      pauseDeduction,
       permission.deduction,
       statutoryDeductions
     );
@@ -708,6 +766,10 @@ class PayrollService {
         overtimeHours,
         overtimePay,
         hourlyRate: money.round(hourlyRate),
+        pauseHourlyRate: money.round(pauseHourlyRate),
+        breakDeduction: breakDeduction,
+        lunchDeduction: lunchDeduction,
+        pauseDeduction: pauseDeduction,
         overtimeMultiplier,
         lateMinutes: dailyPayroll.reduce((sum, row) => sum + Number(row.lateMinutes || 0), 0),
         lopDeduction: unpaidLeaveDeduction,
@@ -744,6 +806,9 @@ class PayrollService {
         unpaidLeaveDeduction,
         hoursShortfallDeduction,
         lateDeduction,
+        breakDeduction,
+        lunchDeduction,
+        pauseDeduction,
         permissionDeduction: permission.deduction,
         pfDeduction: pf,
         esiDeduction: esi,
@@ -959,6 +1024,9 @@ class PayrollService {
         unpaidLeaveDeduction: payroll.deductions.unpaidLeaveDeduction || 0,
         hoursShortfallDeduction: payroll.deductions.hoursShortfallDeduction || 0,
         lateDeduction: payroll.deductions.lateDeduction || 0,
+        breakDeduction: payroll.deductions.breakDeduction || 0,
+        lunchDeduction: payroll.deductions.lunchDeduction || 0,
+        pauseDeduction: payroll.deductions.pauseDeduction || 0,
         pfDeduction: payroll.deductions.pfDeduction || 0,
         esiDeduction: payroll.deductions.esiDeduction || 0,
         ptDeduction: payroll.deductions.ptDeduction || 0,
@@ -1430,6 +1498,18 @@ class PayrollService {
         category: "ATTENDANCE_HOURS",
         explanation: `Permission hours beyond monthly allowance deducted at INR ${hourlyRate}/hr`,
       }] : []),
+      ...(Number(payslip.breakDeduction || 0) > 0 ? [{
+        label: "Extra Break Deduction",
+        amount: Number(payslip.breakDeduction),
+        category: "ATTENDANCE_PAUSE",
+        explanation: "Additional break time beyond the shift allowance and configured grace period.",
+      }] : []),
+      ...(Number(payslip.lunchDeduction || 0) > 0 ? [{
+        label: "Extra Lunch Deduction",
+        amount: Number(payslip.lunchDeduction),
+        category: "ATTENDANCE_PAUSE",
+        explanation: "Additional lunch time beyond the shift allowance and configured grace period.",
+      }] : []),
       ...(Number(payslip.pfDeduction || 0) > 0 ? [{
         label: "Provident Fund (PF)",
         amount: Number(payslip.pfDeduction),
@@ -1507,6 +1587,9 @@ class PayrollService {
         lateCount: Array.isArray(payslip.dailyPayroll) ? payslip.dailyPayroll.filter((row) => row.status === "LATE").length : 0,
         lateMinutes: Array.isArray(payslip.dailyPayroll) ? payslip.dailyPayroll.reduce((sum, row) => sum + Number(row.lateMinutes || 0), 0) : 0,
         lateDeduction: Number(payslip.lateDeduction || 0),
+        breakDeduction: Number(payslip.breakDeduction || 0),
+        lunchDeduction: Number(payslip.lunchDeduction || 0),
+        pauseDeduction: Number(payslip.pauseDeduction || 0),
         permissionDeduction: Number(payslip.permissionDeduction || 0),
       },
       shootSettlements: Array.isArray(payslip.shootSettlementBreakdown) ? payslip.shootSettlementBreakdown : [],

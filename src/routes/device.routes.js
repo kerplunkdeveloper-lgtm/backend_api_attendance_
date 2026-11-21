@@ -16,6 +16,7 @@ router.post("/register", async (req, res) => {
       req.user.id,
       req.user.organizationId,
       req.body,
+      { ip: req.ip },
     );
     return res
       .status(201)
@@ -47,7 +48,7 @@ router.get("/my", async (req, res) => {
 // 3. Get all registered devices (Admin & Manager)
 router.get(
   "/",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   async (req, res) => {
     try {
       const devices = await deviceService.getAllDevices(
@@ -63,7 +64,7 @@ router.get(
 // 4. Update Device Trust / Revoke (Admin)
 router.put(
   "/:id/trust",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"),
   async (req, res) => {
     try {
       const { isTrusted } = req.body;
@@ -71,6 +72,7 @@ router.put(
         req.params.id,
         req.user.organizationId,
         isTrusted,
+        { userId: req.user.id, ip: req.ip },
       );
       const trusted = isTrusted === true || isTrusted === 1 || (typeof isTrusted === "string" && ["true", "1"].includes(isTrusted.trim().toLowerCase()));
       return res.json({
@@ -87,7 +89,7 @@ router.put(
 // 5. Delete device
 router.delete(
   "/:id",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"),
   async (req, res) => {
     try {
       await deviceService.deleteDevice(req.params.id, req.user.organizationId);

@@ -1,4 +1,5 @@
 const prisma = require("../config/database");
+const { organizationLogoUrl } = require("../utils/privateMediaUrls");
 const { uploadBuffer } = require("../config/cloudinary");
 const { uploadBuffer: uploadS3Buffer, getFileContent, deleteObject: deleteS3Object } = require("../config/s3");
 const { assertRealImage } = require("../middleware/upload.middleware");
@@ -6,7 +7,7 @@ const ssoService = require("./sso.service");
 const { isValidTimeZone } = require("../utils/datetime");
 const { DEFAULT_OFFER_LETTER_TEMPLATE, normalizeOfferLetterTemplate } = require("../utils/offerLetterTemplate");
 const { DEFAULT_EXIT_DOCUMENT_TEMPLATES, normalizeExitDocumentTemplates } = require("../utils/exitDocumentTemplate");
-const HR_ACCESS_AREAS = ["DASHBOARD", "ATTENDANCE", "EMPLOYEES", "ROLES", "APPROVALS", "ONBOARDING", "PAYROLL", "REPORTS", "ANNOUNCEMENTS", "BRANCHES", "POLICIES", "SHOOTS"];
+const HR_ACCESS_AREAS = ["DASHBOARD", "ATTENDANCE", "EMPLOYEES", "ROLES", "APPROVALS", "ONBOARDING", "PAYROLL", "REPORTS", "AUDIT", "ANNOUNCEMENTS", "BRANCHES", "POLICIES", "SHOOTS"];
 const DEFAULT_HR_ACCESS = Object.fromEntries(HR_ACCESS_AREAS.map((area) => [area, true]));
 const DEFAULT_EMPLOYEE_ACCESS = { DASHBOARD: true, ATTENDANCE: true, EMPLOYEES: false, ROLES: false, APPROVALS: false, ONBOARDING: false, PAYROLL: true, REPORTS: false, ANNOUNCEMENTS: true, BRANCHES: false, POLICIES: false, SHOOTS: true };
 const DEFAULT_ROLE_ACCESS = { MANAGER: DEFAULT_HR_ACCESS, HR: DEFAULT_HR_ACCESS, EMPLOYEE: DEFAULT_EMPLOYEE_ACCESS };
@@ -27,13 +28,7 @@ const presentOrganization = (organization) => {
   const { ssoClientSecretCiphertext, unlockCode, logoStorageKey, ...safe } = organization;
   const storedAccess = organization.hrAccess && typeof organization.hrAccess === "object" ? organization.hrAccess : {};
   const hrAccess = Object.fromEntries(HR_ACCESS_AREAS.map((area) => [area, storedAccess[area] === undefined ? true : storedAccess[area] === true]));
-  return {
-    ...safe,
-    logoUrl: logoStorageKey ? "/api/organization/logo-file" : organization.logoUrl,
-    hrAccess,
-    roleAccess: normalizeRoleAccess(storedAccess.ROLE_ACCESS),
-    sso: ssoService.getConfiguration(organization),
-  };
+  return { ...safe, logoUrl: organizationLogoUrl(safe), hrAccess, roleAccess: normalizeRoleAccess(storedAccess.ROLE_ACCESS), sso: ssoService.getConfiguration(organization) };
 };
 
 async function getSettings(organizationId) {
@@ -51,6 +46,10 @@ async function getSettings(organizationId) {
 
 async function updateSettings(organizationId, payload, actor = {}) {
   const data = {};
+  if (actor.role === "HR") {
+    const unsupported = Object.keys(payload || {}).filter((key) => !["hrAccess", "roleAccess"].includes(key));
+    if (unsupported.length) throw Object.assign(new Error("HR can update role permissions only."), { statusCode: 403 });
+  }
   const currentAccess = await prisma.organization.findUnique({ where: { id: organizationId }, select: { hrAccess: true } });
   const existingAccess = currentAccess?.hrAccess && typeof currentAccess.hrAccess === "object" ? currentAccess.hrAccess : {};
   if (payload.hrAccess !== undefined) {
@@ -175,7 +174,12 @@ async function getOfferLetterTemplate(organizationId) {
 async function updateOfferLetterTemplate(organizationId, payload) {
   const org = await prisma.organization.findUnique({ where: { id: organizationId }, select: { hrAccess: true } });
   const hrAccess = org?.hrAccess && typeof org.hrAccess === "object" ? org.hrAccess : {};
-  const template = normalizeOfferLetterTemplate(payload || {});
+  const existing = normalizeOfferLetterTemplate(hrAccess.OFFER_LETTER_TEMPLATE || DEFAULT_OFFER_LETTER_TEMPLATE);
+  const template = normalizeOfferLetterTemplate({
+    ...(payload || {}),
+    version: existing.version + 1,
+    status: "ACTIVE",
+  });
   await prisma.organization.update({ where: { id: organizationId }, data: { hrAccess: { ...hrAccess, OFFER_LETTER_TEMPLATE: template } } });
   return template;
 }

@@ -82,6 +82,45 @@ async function notifyEveryone(organizationId, authorUserId, title) {
   }
 }
 
+/**
+ * Publish the system announcement created after an employee joins.
+ * The post is visible to every employee for exactly 24 hours. Notification
+ * delivery is best-effort so a push/provider outage never rolls back hiring.
+ */
+async function createNewJoiner(organizationId, employeeOrEmployees, authorUserId = null) {
+  const employees = Array.isArray(employeeOrEmployees) ? employeeOrEmployees : [employeeOrEmployees];
+  const validEmployees = employees.filter(Boolean);
+  if (!validEmployees.length) return null;
+
+  const names = validEmployees
+    .map((employee) => `${employee.firstName || ""} ${employee.lastName || ""}`.trim())
+    .filter(Boolean);
+  if (!names.length) return null;
+
+  const title = names.length === 1 ? `Welcome ${names[0]} to the team!` : "New team members have joined!";
+  const body = names.length === 1
+    ? `Please welcome ${names[0]}${validEmployees[0].designation ? ` (${validEmployees[0].designation})` : ""} to the team.`
+    : `Please welcome our new team members: ${names.join(", ")}.`;
+
+  try {
+    const created = await prisma.announcement.create({
+      data: {
+        organizationId,
+        title,
+        body,
+        pinned: false,
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        createdByUserId: null,
+      },
+    });
+    const notified = await notifyEveryone(organizationId, authorUserId, title);
+    return { ...withState(created), notified };
+  } catch (error) {
+    console.warn("[Announcement] New joiner announcement failed:", error.message);
+    return null;
+  }
+}
+
 async function create(organizationId, user, payload = {}) {
   if (!canManage(user.role)) fail("Only HR or an admin can post announcements.", 403);
   const title = cleanText("Title", payload.title, MAX_TITLE);
@@ -134,4 +173,4 @@ async function remove(organizationId, user, id) {
   return { success: true };
 }
 
-module.exports = { list, create, update, remove, canManage };
+module.exports = { list, create, update, remove, createNewJoiner, canManage };

@@ -1,5 +1,6 @@
 const express = require("express");
 const employeeController = require("../controllers/employee.controller");
+const employeeDocumentController = require("../controllers/employee-document.controller");
 const {
   authenticate,
   authorizeRoles,
@@ -62,6 +63,13 @@ router.get(
   employeeController.exportCsv,
 );
 
+// Must stay above "/:id" or the word "documents" is treated as an employee id.
+router.get(
+  "/documents/missing",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
+  employeeDocumentController.getMissingSummary,
+);
+
 router.get(
   "/:id",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
@@ -118,8 +126,6 @@ router.delete(
   employeeController.remove,
 );
 
-const employeeDocumentController = require("../controllers/employee-document.controller");
-
 const upload = documentUploader(15);
 
 // Invite employee by email — auto-creates account + sends credentials via email
@@ -165,14 +171,14 @@ router.delete(
 // Verify or reject document (Admin/Manager only)
 router.post(
   "/:employeeId/documents/:documentId/verify",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   employeeDocumentController.verifyDocument,
 );
 
 // Trigger expiry reminder (Admin/Manager only)
 router.post(
   "/:employeeId/documents/:documentId/remind-expiry",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   employeeDocumentController.sendExpiryReminder,
 );
 

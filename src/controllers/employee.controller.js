@@ -14,7 +14,8 @@ const create = async (req, res) => {
     const employee = await employeeService.createEmployee(
       req.user.organizationId,
       req.body,
-      req.user.role
+      req.user.role,
+      req.user.id,
     );
 
     return res.status(201).json({
@@ -442,7 +443,8 @@ const bulkImport = async (req, res) => {
     const result = await employeeService.bulkImportEmployees(
       req.user.organizationId,
       employees,
-      req.user.role
+      req.user.role,
+      req.user.id,
     );
 
     return res.status(200).json(result);
