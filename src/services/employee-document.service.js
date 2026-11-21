@@ -1,42 +1,305 @@
 const prisma = require("../config/database");
-const { uploadImage, uploadBuffer, signedDeliveryUrl, isSensitiveDocumentType } = require("../config/cloudinary");
+
+const {
+  uploadImage,
+  uploadBuffer,
+  signedDeliveryUrl,
+  isSensitiveDocumentType,
+} = require("../config/cloudinary");
+
 const notificationService = require("./notification.service");
-const { assertSniffedType } = require("../middleware/upload.middleware");
+
+const {
+  assertSniffedType,
+} = require("../middleware/upload.middleware");
+
 const { WORKING_STATUSES } = require("../utils/employeeStatus");
 
-const uploadFailure = (message, cause) => {
+const {
+  getFileContent,
+  uploadBuffer: uploadToS3,
+  deleteObject: deleteFromS3,
+} = require("../config/s3");
+
+// --------------------------------------------------
+// Helpers
+// --------------------------------------------------
+
+function httpError(message, statusCode = 400) {
   const error = new Error(message);
-  error.statusCode = 502;
+  error.statusCode = statusCode;
+  return error;
+}
+
+function uploadFailure(message, cause) {
+  const error = httpError(message, 502);
   error.cause = cause;
   return error;
-};
+}
 
-const trustedCloudinaryUrl = (value) => {
+function trustedCloudinaryUrl(value) {
   try {
     const url = new URL(String(value));
-    if (url.protocol !== "https:" || !/(^|\.)cloudinary\.com$/i.test(url.hostname)) {
-      throw new Error("untrusted host");
+
+    if (
+      url.protocol !== "https:" ||
+      !/(^|\.)cloudinary\.com$/i.test(url.hostname)
+    ) {
+      throw new Error("Untrusted Cloudinary host");
     }
+
     return url.toString();
   } catch {
-    const error = new Error("Document URLs must use HTTPS Cloudinary storage.");
-    error.statusCode = 400;
-    throw error;
+    throw httpError(
+      "Document URL must use HTTPS Cloudinary storage.",
+      400
+    );
   }
-};
+}
+
+function documentForResponse(document) {
+  if (!document) return document;
+
+  const { storageKey, ...safe } = document;
+
+  return {
+    ...safe,
+    fileUrl:
+      document.storageProvider === "s3"
+        ? null
+        : document.fileUrl,
+  };
+}
+
+async function cleanupS3(
+  storageKey,
+  organizationId,
+  reason
+) {
+  if (!storageKey) return;
+
+  try {
+    await deleteFromS3(storageKey, organizationId);
+  } catch (error) {
+    console.error("[S3] Cleanup failed:", {
+      reason,
+      storageKey,
+      message: error.message,
+    });
+  }
+}
+
+// --------------------------------------------------
+// Document definitions
+// --------------------------------------------------
 
 const DOCUMENT_DEFINITIONS = [
-  { type: "AADHAAR", label: "Aadhaar Card", description: "Government 12-digit Unique Identification document", isMandatory: true, hasExpiry: false },
-  { type: "PAN", label: "PAN Card", description: "Income Tax Permanent Account Number card", isMandatory: true, hasExpiry: false },
-  { type: "PASSPORT", label: "Passport", description: "Passport bio page with valid dates", isMandatory: false, hasExpiry: true },
-  { type: "DRIVING_LICENCE", label: "Driving Licence", description: "State transport vehicle driving license", isMandatory: false, hasExpiry: true },
-  { type: "EDUCATION_CERTIFICATE", label: "Education Certificate", description: "Highest qualification degree / graduation marksheets", isMandatory: true, hasExpiry: false },
-  { type: "EXPERIENCE_LETTER", label: "Experience / Relieving Letter", description: "Previous employer relieving or work experience certificate", isMandatory: false, hasExpiry: false },
-  { type: "OFFER_LETTER", label: "Offer Letter", description: "Official signed offer of employment letter", isMandatory: false, hasExpiry: false },
-  { type: "EMPLOYMENT_CONTRACT", label: "Employment Contract", description: "Executed employment agreement / NDA contract", isMandatory: false, hasExpiry: true },
-  { type: "BANK_DOCUMENT", label: "Bank Document", description: "Bank passbook front page or cancelled cheque for salary credits", isMandatory: true, hasExpiry: false },
-  { type: "OTHER", label: "Other Document", description: "Additional certifications, police verification, or medical reports", isMandatory: false, hasExpiry: false },
+  {
+    type: "AADHAAR",
+    label: "Aadhaar Card",
+    description: "Government identification document",
+    isMandatory: true,
+    hasExpiry: false,
+  },
+  {
+    type: "PAN",
+    label: "PAN Card",
+    description: "Income Tax PAN document",
+    isMandatory: true,
+    hasExpiry: false,
+  },
+  {
+    type: "PASSPORT",
+    label: "Passport",
+    description: "Passport identification document",
+    isMandatory: false,
+    hasExpiry: true,
+  },
+  {
+    type: "DRIVING_LICENCE",
+    label: "Driving Licence",
+    description: "Driving licence document",
+    isMandatory: false,
+    hasExpiry: true,
+  },
+  {
+    type: "EDUCATION_CERTIFICATE",
+    label: "Education Certificate",
+    description: "Educational qualification document",
+    isMandatory: true,
+    hasExpiry: false,
+  },
+  {
+    type: "EXPERIENCE_LETTER",
+    label: "Experience / Relieving Letter",
+    description: "Previous employment document",
+    isMandatory: false,
+    hasExpiry: false,
+  },
+  {
+    type: "OFFER_LETTER",
+    label: "Offer Letter",
+    description: "Employment offer letter",
+    isMandatory: false,
+    hasExpiry: false,
+  },
+  {
+    type: "EMPLOYMENT_CONTRACT",
+    label: "Employment Contract",
+    description: "Signed employment contract",
+    isMandatory: false,
+    hasExpiry: true,
+  },
+  {
+    type: "BANK_DOCUMENT",
+    label: "Bank Document",
+    description: "Bank passbook or cancelled cheque",
+    isMandatory: true,
+    hasExpiry: false,
+  },
+  {
+    type: "OTHER",
+    label: "Other Document",
+    description: "Additional employee document",
+    isMandatory: false,
+    hasExpiry: false,
+  },
 ];
+
+// --------------------------------------------------
+// Storage adapter
+// --------------------------------------------------
+
+async function storeDocument({
+  organizationId,
+  employeeId,
+  documentType,
+  fileBuffer,
+  rawFileUrl,
+  mimeType,
+}) {
+  const useS3 = process.env.STORAGE_PROVIDER === "s3";
+
+  // AWS S3
+  if (useS3) {
+    if (!Buffer.isBuffer(fileBuffer) || !fileBuffer.length) {
+      throw httpError(
+        "S3 document uploads require a multipart file.",
+        400
+      );
+    }
+
+    assertSniffedType({
+      buffer: fileBuffer,
+      mimetype: mimeType,
+    });
+
+    let uploaded;
+
+    try {
+      uploaded = await uploadToS3(fileBuffer, {
+        organizationId,
+        folder: "documents",
+        contentType: mimeType,
+      });
+
+      if (!uploaded?.bucket || !uploaded?.key) {
+        throw new Error("S3 returned no bucket or key");
+      }
+    } catch (error) {
+      throw uploadFailure(
+        "S3 document upload failed. Please try again.",
+        error
+      );
+    }
+
+    return {
+      fileUrl: `s3://${uploaded.bucket}/${uploaded.key}`,
+      storageProvider: "s3",
+      storageKey: uploaded.key,
+      fileSize: uploaded.bytes,
+    };
+  }
+
+  // Existing Cloudinary
+  let result;
+
+  if (fileBuffer) {
+    assertSniffedType({
+      buffer: fileBuffer,
+      mimetype: mimeType,
+    });
+
+    try {
+      result = await uploadBuffer(fileBuffer, {
+        folder: `workpulse/employees/${employeeId}/documents`,
+        resource_type: "auto",
+        type: isSensitiveDocumentType(documentType)
+          ? "authenticated"
+          : "upload",
+      });
+    } catch (error) {
+      throw uploadFailure(
+        "Cloudinary document upload failed.",
+        error
+      );
+    }
+  } else if (
+    typeof rawFileUrl === "string" &&
+    rawFileUrl.startsWith("data:")
+  ) {
+    try {
+      result = await uploadImage(rawFileUrl, {
+        folder: `workpulse/employees/${employeeId}/documents`,
+        resource_type: "auto",
+        type: isSensitiveDocumentType(documentType)
+          ? "authenticated"
+          : "upload",
+      });
+    } catch (error) {
+      throw uploadFailure(
+        "Cloudinary document upload failed.",
+        error
+      );
+    }
+  } else if (rawFileUrl) {
+    if (isSensitiveDocumentType(documentType)) {
+      throw httpError(
+        "Sensitive documents must be uploaded directly.",
+        400
+      );
+    }
+
+    return {
+      fileUrl: trustedCloudinaryUrl(rawFileUrl),
+      storageProvider: "cloudinary",
+      storageKey: null,
+      fileSize: null,
+    };
+  } else {
+    throw httpError(
+      "fileUrl or uploaded file is required.",
+      400
+    );
+  }
+
+  if (!result?.secure_url) {
+    throw uploadFailure(
+      "Cloudinary returned no document URL."
+    );
+  }
+
+  return {
+    fileUrl: result.secure_url,
+    storageProvider: "cloudinary",
+    storageKey: null,
+    fileSize: result.bytes || null,
+  };
+}
+
+// --------------------------------------------------
+// Employee Document Service
+// --------------------------------------------------
 
 class EmployeeDocumentService {
   /** Dashboard-friendly mandatory-document compliance summary. */
@@ -68,39 +331,75 @@ class EmployeeDocumentService {
   /**
    * Get all documents for an employee + checklist status
    */
+  // ----------------------------------------------
+  // Get employee documents
+  // ----------------------------------------------
+
   async getEmployeeDocuments(organizationId, employeeId) {
     const employee = await prisma.employee.findFirst({
-      where: { id: employeeId, organizationId },
+      where: {
+        id: employeeId,
+        organizationId,
+      },
       include: {
-        user: { select: { id: true, email: true, role: true } },
-        department: { select: { id: true, name: true } },
-        branch: { select: { id: true, name: true } },
+        user: {
+          select: {
+            id: true,
+            email: true,
+            role: true,
+          },
+        },
+        department: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+        branch: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
       },
     });
 
     if (!employee) {
-      const error = new Error("Employee not found in organization");
-      error.statusCode = 404;
-      throw error;
+      throw httpError(
+        "Employee not found in organization.",
+        404
+      );
     }
 
     const documents = await prisma.employeeDocument.findMany({
-      where: { employeeId, organizationId },
-      orderBy: [{ createdAt: "desc" }],
+      where: {
+        employeeId,
+        organizationId,
+      },
+      orderBy: [
+        {
+          createdAt: "desc",
+        },
+      ],
     });
 
     const now = new Date();
 
-    // Map documents with enhanced calculated statuses (expiring soon, expired, etc.)
     const enrichedDocuments = documents.map((doc) => {
       let isExpired = false;
       let isExpiringSoon = false;
       let daysUntilExpiry = null;
 
       if (doc.expiryDate) {
-        const expDate = new Date(doc.expiryDate);
-        const diffTime = expDate.getTime() - now.getTime();
-        daysUntilExpiry = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        const expiry = new Date(doc.expiryDate);
+
+        const difference =
+          expiry.getTime() - now.getTime();
+
+        daysUntilExpiry = Math.ceil(
+          difference / (1000 * 60 * 60 * 24)
+        );
+
         if (daysUntilExpiry < 0) {
           isExpired = true;
         } else if (daysUntilExpiry <= 30) {
@@ -108,40 +407,83 @@ class EmployeeDocumentService {
         }
       }
 
+      const safeDocument = documentForResponse(doc);
+
       return {
-        ...doc,
-        fileUrl: signedDeliveryUrl(doc.fileUrl, {
-          ttlSeconds: 300,
-          authenticated: isSensitiveDocumentType(doc.documentType),
-        }),
+        ...safeDocument,
+
+        fileUrl:
+          doc.storageProvider === "s3"
+            ? null
+            : signedDeliveryUrl(doc.fileUrl, {
+                ttlSeconds: 300,
+                authenticated: isSensitiveDocumentType(
+                  doc.documentType
+                ),
+              }),
+
         isExpired,
         isExpiringSoon,
         daysUntilExpiry,
       };
     });
 
-    // Check checklist completion
-    const checklist = DOCUMENT_DEFINITIONS.map((def) => {
-      const matchingDocs = enrichedDocuments.filter((d) => d.documentType === def.type);
+    const checklist = DOCUMENT_DEFINITIONS.map((definition) => {
+      const matchingDocs = enrichedDocuments.filter(
+        (document) =>
+          document.documentType === definition.type
+      );
+
       const isUploaded = matchingDocs.length > 0;
-      const isVerified = matchingDocs.some((d) => d.status === "VERIFIED");
-      const hasPending = matchingDocs.some((d) => d.status === "PENDING");
-      const hasRejected = matchingDocs.some((d) => d.status === "REJECTED");
+
+      const isVerified = matchingDocs.some(
+        (document) => document.status === "VERIFIED"
+      );
+
+      const hasPending = matchingDocs.some(
+        (document) => document.status === "PENDING"
+      );
+
+      const hasRejected = matchingDocs.some(
+        (document) => document.status === "REJECTED"
+      );
 
       return {
-        ...def,
+        ...definition,
         isUploaded,
         isVerified,
-        status: isVerified ? "VERIFIED" : hasPending ? "PENDING" : hasRejected ? "REJECTED" : isUploaded ? "UPLOADED" : "MISSING",
+        status: isVerified
+          ? "VERIFIED"
+          : hasPending
+            ? "PENDING"
+            : hasRejected
+              ? "REJECTED"
+              : isUploaded
+                ? "UPLOADED"
+                : "MISSING",
         uploadedCount: matchingDocs.length,
         latestDocument: matchingDocs[0] || null,
       };
     });
 
-    const totalMandatory = checklist.filter((c) => c.isMandatory).length;
-    const uploadedMandatory = checklist.filter((c) => c.isMandatory && c.isUploaded).length;
-    const verifiedMandatory = checklist.filter((c) => c.isMandatory && c.isVerified).length;
-    const completionPercentage = totalMandatory > 0 ? Math.round((uploadedMandatory / totalMandatory) * 100) : 100;
+    const totalMandatory = checklist.filter(
+      (item) => item.isMandatory
+    ).length;
+
+    const uploadedMandatory = checklist.filter(
+      (item) => item.isMandatory && item.isUploaded
+    ).length;
+
+    const verifiedMandatory = checklist.filter(
+      (item) => item.isMandatory && item.isVerified
+    ).length;
+
+    const completionPercentage =
+      totalMandatory > 0
+        ? Math.round(
+            (uploadedMandatory / totalMandatory) * 100
+          )
+        : 100;
 
     return {
       employee: {
@@ -149,73 +491,148 @@ class EmployeeDocumentService {
         employeeCode: employee.employeeCode,
         firstName: employee.firstName,
         lastName: employee.lastName,
-        name: `${employee.firstName} ${employee.lastName || ""}`.trim(),
+        name: `${employee.firstName} ${
+          employee.lastName || ""
+        }`.trim(),
         email: employee.user?.email || null,
         department: employee.department?.name || "-",
         branch: employee.branch?.name || "-",
       },
+
       summary: {
         totalDocuments: enrichedDocuments.length,
-        verifiedCount: enrichedDocuments.filter((d) => d.status === "VERIFIED").length,
-        pendingCount: enrichedDocuments.filter((d) => d.status === "PENDING").length,
-        rejectedCount: enrichedDocuments.filter((d) => d.status === "REJECTED").length,
-        expiredCount: enrichedDocuments.filter((d) => d.isExpired).length,
-        expiringSoonCount: enrichedDocuments.filter((d) => d.isExpiringSoon).length,
+        verifiedCount: enrichedDocuments.filter(
+          (doc) => doc.status === "VERIFIED"
+        ).length,
+        pendingCount: enrichedDocuments.filter(
+          (doc) => doc.status === "PENDING"
+        ).length,
+        rejectedCount: enrichedDocuments.filter(
+          (doc) => doc.status === "REJECTED"
+        ).length,
+        expiredCount: enrichedDocuments.filter(
+          (doc) => doc.isExpired
+        ).length,
+        expiringSoonCount: enrichedDocuments.filter(
+          (doc) => doc.isExpiringSoon
+        ).length,
         completionPercentage,
         totalMandatory,
         uploadedMandatory,
         verifiedMandatory,
       },
+
       checklist,
       documents: enrichedDocuments,
     };
   }
 
-  /**
-   * Fetch a document through the authenticated API instead of exposing a
-   * private Cloudinary URL to the browser. This is required for PDF iframe
-   * previews because the browser cannot attach the Clocked bearer token to
-   * a direct Cloudinary navigation.
-   */
-  async getDocumentContent(organizationId, employeeId, documentId) {
+  // ----------------------------------------------
+  // Secure document content
+  // ----------------------------------------------
+
+  async getDocumentContent(
+    organizationId,
+    employeeId,
+    documentId
+  ) {
     const document = await prisma.employeeDocument.findFirst({
-      where: { id: documentId, employeeId, organizationId },
-      select: { fileUrl: true, fileName: true, mimeType: true },
+      where: {
+        id: documentId,
+        employeeId,
+        organizationId,
+      },
+      select: {
+        fileUrl: true,
+        fileName: true,
+        mimeType: true,
+        storageProvider: true,
+        storageKey: true,
+      },
     });
 
     if (!document) {
-      const error = new Error("Document not found");
-      error.statusCode = 404;
-      throw error;
+      throw httpError("Document not found.", 404);
     }
 
-    const response = await fetch(signedDeliveryUrl(document.fileUrl));
+    if (document.storageProvider === "s3") {
+      if (!document.storageKey) {
+        throw httpError(
+          "S3 document storage key is missing.",
+          500
+        );
+      }
+
+      const result = await getFileContent(
+        document.storageKey,
+        organizationId
+      );
+
+      return {
+        buffer: result.buffer,
+        contentType:
+          document.mimeType ||
+          result.contentType ||
+          "application/octet-stream",
+        fileName: document.fileName,
+      };
+    }
+
+    if (document.storageProvider !== "cloudinary") {
+      throw httpError(
+        "Unsupported document storage provider.",
+        500
+      );
+    }
+
+    const response = await fetch(
+      signedDeliveryUrl(
+        trustedCloudinaryUrl(document.fileUrl)
+      )
+    );
+
     if (!response.ok) {
-      const error = new Error("Document storage could not be reached");
-      error.statusCode = 502;
-      throw error;
+      throw httpError(
+        "Document storage could not be reached.",
+        502
+      );
     }
 
     return {
-      buffer: Buffer.from(await response.arrayBuffer()),
-      contentType: response.headers.get("content-type") || document.mimeType || "application/octet-stream",
+      buffer: Buffer.from(
+        await response.arrayBuffer()
+      ),
+      contentType:
+        response.headers.get("content-type") ||
+        document.mimeType ||
+        "application/octet-stream",
       fileName: document.fileName,
     };
   }
 
-  /**
-   * Upload or add a new employee document
-   */
-  async uploadEmployeeDocument(organizationId, employeeId, payload, fileBuffer, uploadedByUser) {
+  // ----------------------------------------------
+  // Upload employee document
+  // ----------------------------------------------
+
+  async uploadEmployeeDocument(
+    organizationId,
+    employeeId,
+    payload,
+    fileBuffer,
+    uploadedByUser
+  ) {
     const employee = await prisma.employee.findFirst({
-      where: { id: employeeId, organizationId },
-      include: { user: true },
+      where: {
+        id: employeeId,
+        organizationId,
+      },
+      include: {
+        user: true,
+      },
     });
 
     if (!employee) {
-      const error = new Error("Employee not found");
-      error.statusCode = 404;
-      throw error;
+      throw httpError("Employee not found.", 404);
     }
 
     const {
@@ -229,98 +646,91 @@ class EmployeeDocumentService {
     } = payload;
 
     if (!documentType) {
-      const error = new Error("documentType is required");
-      error.statusCode = 400;
-      throw error;
+      throw httpError("documentType is required.", 400);
     }
 
-    const validTypes = DOCUMENT_DEFINITIONS.map((d) => d.type);
+    const validTypes = DOCUMENT_DEFINITIONS.map(
+      (definition) => definition.type
+    );
+
     if (!validTypes.includes(documentType)) {
-      const error = new Error(`Invalid documentType. Allowed values: ${validTypes.join(", ")}`);
-      error.statusCode = 400;
-      throw error;
+      throw httpError(
+        `Invalid documentType. Allowed: ${validTypes.join(", ")}`,
+        400
+      );
     }
 
-    let finalFileUrl = rawFileUrl;
-    let computedFileName = fileName || `${documentType.toLowerCase()}_doc`;
-    let computedMimeType = mimeType || "application/octet-stream";
-    let computedFileSize = fileSize ? Number(fileSize) : null;
+    const computedMimeType =
+      mimeType || "application/octet-stream";
 
-    // 1. If a direct fileBuffer was provided via multer
-    if (fileBuffer) {
-      assertSniffedType({ buffer: fileBuffer, mimetype: computedMimeType });
-      try {
-        const uploadRes = await uploadBuffer(fileBuffer, {
-          folder: `workpulse/employees/${employeeId}/documents`,
-          resource_type: "auto",
-          type: isSensitiveDocumentType(documentType) ? "authenticated" : "upload",
-        });
-        if (uploadRes && uploadRes.secure_url) {
-          finalFileUrl = uploadRes.secure_url;
-          computedFileSize = uploadRes.bytes || computedFileSize;
-        }
-        if (!finalFileUrl) throw new Error("Storage provider returned no file URL");
-      } catch (err) {
-        throw uploadFailure("Document storage failed. Please try again.", err);
-      }
-    }
-    // 2. If base64 data URI was passed in payload
-    else if (finalFileUrl && typeof finalFileUrl === "string" && finalFileUrl.startsWith("data:")) {
-      try {
-        const uploadRes = await uploadImage(finalFileUrl, {
-          folder: `workpulse/employees/${employeeId}/documents`,
-          resource_type: "auto",
-          type: isSensitiveDocumentType(documentType) ? "authenticated" : "upload",
-        });
-        if (uploadRes && uploadRes.secure_url) {
-          finalFileUrl = uploadRes.secure_url;
-          computedFileSize = uploadRes.bytes || computedFileSize;
-        }
-        if (!finalFileUrl || finalFileUrl.startsWith("data:")) {
-          throw new Error("Storage provider returned no file URL");
-        }
-      } catch (err) {
-        throw uploadFailure("Document storage failed. Please try again.", err);
-      }
-    } else if (finalFileUrl && typeof finalFileUrl === "string") {
-      if (isSensitiveDocumentType(documentType)) {
-        const error = new Error("Sensitive documents must be uploaded directly.");
-        error.statusCode = 400;
-        throw error;
-      }
-      finalFileUrl = trustedCloudinaryUrl(finalFileUrl);
-    }
+    const computedFileName =
+      fileName || `${documentType.toLowerCase()}_doc`;
 
-    if (!finalFileUrl) {
-      const error = new Error("fileUrl or uploaded file is required");
-      error.statusCode = 400;
-      throw error;
-    }
-
-    const newDoc = await prisma.employeeDocument.create({
-      data: {
-        organizationId,
-        employeeId,
-        documentType,
-        title: title ? title.trim() : null,
-        fileName: computedFileName.trim(),
-        fileUrl: finalFileUrl.trim(),
-        fileSize: computedFileSize,
-        mimeType: computedMimeType,
-        status: "PENDING",
-        expiryDate: expiryDate ? new Date(expiryDate) : null,
-      },
+    const stored = await storeDocument({
+      organizationId,
+      employeeId,
+      documentType,
+      fileBuffer,
+      rawFileUrl,
+      mimeType: computedMimeType,
     });
 
-    // Notify Admins or HR if uploaded by an employee
-    if (uploadedByUser && uploadedByUser.role === "EMPLOYEE") {
+    let newDocument;
+
+    try {
+      newDocument = await prisma.employeeDocument.create({
+        data: {
+          organizationId,
+          employeeId,
+          documentType,
+          title: title ? title.trim() : null,
+          fileName: computedFileName.trim(),
+          fileUrl: stored.fileUrl,
+          storageProvider: stored.storageProvider,
+          storageKey: stored.storageKey,
+          fileSize:
+            stored.fileSize ??
+            (fileSize ? Number(fileSize) : null),
+          mimeType: computedMimeType,
+          status: "PENDING",
+          expiryDate: expiryDate
+            ? new Date(expiryDate)
+            : null,
+        },
+      });
+    } catch (error) {
+      if (stored.storageProvider === "s3") {
+        await cleanupS3(
+          stored.storageKey,
+          organizationId,
+          "Database create failed"
+        );
+      }
+
+      throw error;
+    }
+
+    // Notify HR / admins after employee upload.
+    if (
+      uploadedByUser &&
+      uploadedByUser.role === "EMPLOYEE"
+    ) {
       try {
         const admins = await prisma.user.findMany({
           where: {
             organizationId,
-            role: { in: ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"] },
+            role: {
+              in: [
+                "SUPER_ADMIN",
+                "COMPANY_ADMIN",
+                "MANAGER",
+                "HR",
+              ],
+            },
           },
-          select: { id: true },
+          select: {
+            id: true,
+          },
         });
 
         for (const admin of admins) {
@@ -328,30 +738,46 @@ class EmployeeDocumentService {
             organizationId,
             userId: admin.id,
             title: "New Employee Document Uploaded",
-            message: `${employee.firstName} uploaded a new document (${documentType.replace(/_/g, " ")}) awaiting verification.`,
+            message: `${employee.firstName} uploaded a new document (${documentType.replace(
+              /_/g,
+              " "
+            )}) awaiting verification.`,
             type: "SYSTEM",
           });
         }
-      } catch (notifErr) {
-        console.warn("Failed to dispatch admin notification for document upload:", notifErr.message);
+      } catch (error) {
+        console.warn(
+          "Failed to notify admins:",
+          error.message
+        );
       }
     }
 
-    return newDoc;
+    return documentForResponse(newDocument);
   }
 
-  /**
-   * Replace or update an existing document
-   */
-  async replaceOrUpdateDocument(organizationId, employeeId, documentId, payload, fileBuffer, updatedByUser) {
+  // ----------------------------------------------
+  // Replace or update document
+  // ----------------------------------------------
+
+  async replaceOrUpdateDocument(
+    organizationId,
+    employeeId,
+    documentId,
+    payload,
+    fileBuffer,
+    updatedByUser
+  ) {
     const existing = await prisma.employeeDocument.findFirst({
-      where: { id: documentId, employeeId, organizationId },
+      where: {
+        id: documentId,
+        employeeId,
+        organizationId,
+      },
     });
 
     if (!existing) {
-      const error = new Error("Document not found");
-      error.statusCode = 404;
-      throw error;
+      throw httpError("Document not found.", 404);
     }
 
     const {
@@ -364,146 +790,285 @@ class EmployeeDocumentService {
       resetVerification = true,
     } = payload;
 
-    let finalFileUrl = existing.fileUrl;
-    let computedFileName = fileName || existing.fileName;
-    let computedMimeType = mimeType || existing.mimeType;
-    let computedFileSize = fileSize !== undefined ? Number(fileSize) : existing.fileSize;
+    const computedFileName =
+      fileName || existing.fileName;
 
-    // Handle replace file
-    if (fileBuffer) {
-      assertSniffedType({ buffer: fileBuffer, mimetype: computedMimeType });
-      try {
-        const uploadRes = await uploadBuffer(fileBuffer, {
-          folder: `workpulse/employees/${employeeId}/documents`,
-          resource_type: "auto",
-          type: isSensitiveDocumentType(existing.documentType) ? "authenticated" : "upload",
-        });
-        if (uploadRes && uploadRes.secure_url) {
-          finalFileUrl = uploadRes.secure_url;
-          computedFileSize = uploadRes.bytes || computedFileSize;
-        }
-        if (finalFileUrl === existing.fileUrl) throw new Error("Storage provider returned no file URL");
-      } catch (err) {
-        throw uploadFailure("Document replacement failed. Please try again.", err);
-      }
-    } else if (rawFileUrl && typeof rawFileUrl === "string" && rawFileUrl.startsWith("data:")) {
-      try {
-        const uploadRes = await uploadImage(rawFileUrl, {
-          folder: `workpulse/employees/${employeeId}/documents`,
-          resource_type: "auto",
-          type: isSensitiveDocumentType(existing.documentType) ? "authenticated" : "upload",
-        });
-        if (uploadRes && uploadRes.secure_url) {
-          finalFileUrl = uploadRes.secure_url;
-          computedFileSize = uploadRes.bytes || computedFileSize;
-        }
-        if (finalFileUrl === existing.fileUrl) throw new Error("Storage provider returned no file URL");
-      } catch (err) {
-        throw uploadFailure("Document replacement failed. Please try again.", err);
-      }
-    } else if (rawFileUrl && typeof rawFileUrl === "string") {
-      if (rawFileUrl.trim() !== existing.fileUrl) {
-        if (isSensitiveDocumentType(existing.documentType)) {
-          const error = new Error("Sensitive documents must be uploaded directly.");
-          error.statusCode = 400;
-          throw error;
-        }
-        finalFileUrl = trustedCloudinaryUrl(rawFileUrl);
-      }
+    const computedMimeType =
+      mimeType ||
+      existing.mimeType ||
+      "application/octet-stream";
+
+    const hasReplacement =
+      Boolean(fileBuffer) ||
+      (
+        typeof rawFileUrl === "string" &&
+        rawFileUrl.length > 0 &&
+        rawFileUrl !== existing.fileUrl
+      );
+
+    let stored = null;
+
+    if (hasReplacement) {
+      stored = await storeDocument({
+        organizationId,
+        employeeId,
+        documentType: existing.documentType,
+        fileBuffer,
+        rawFileUrl,
+        mimeType: computedMimeType,
+      });
     }
 
     const updateData = {
       fileName: computedFileName,
-      fileUrl: finalFileUrl,
-      fileSize: computedFileSize,
+      fileSize:
+        stored?.fileSize ??
+        (
+          fileSize !== undefined
+            ? Number(fileSize)
+            : existing.fileSize
+        ),
       mimeType: computedMimeType,
       updatedAt: new Date(),
     };
 
-    if (title !== undefined) updateData.title = title ? title.trim() : null;
-    if (expiryDate !== undefined) updateData.expiryDate = expiryDate ? new Date(expiryDate) : null;
+    if (stored) {
+      updateData.fileUrl = stored.fileUrl;
+      updateData.storageProvider =
+        stored.storageProvider;
+      updateData.storageKey = stored.storageKey;
+    }
 
-    // If file was replaced, reset status to PENDING for HR review
-    if (resetVerification && (fileBuffer || (rawFileUrl && rawFileUrl !== existing.fileUrl))) {
+    if (title !== undefined) {
+      updateData.title = title
+        ? title.trim()
+        : null;
+    }
+
+    if (expiryDate !== undefined) {
+      updateData.expiryDate = expiryDate
+        ? new Date(expiryDate)
+        : null;
+    }
+
+    if (hasReplacement && resetVerification) {
       updateData.status = "PENDING";
       updateData.rejectionReason = null;
       updateData.verifiedBy = null;
       updateData.verifiedAt = null;
     }
 
-    const updated = await prisma.employeeDocument.update({
-      where: { id: documentId },
-      data: updateData,
-    });
+    let updated;
 
-    return updated;
+    try {
+      // Avoid overwriting a document replaced by
+      // another request in the meantime.
+      const result = await prisma.employeeDocument.updateMany({
+        where: {
+          id: documentId,
+          employeeId,
+          organizationId,
+          storageProvider: existing.storageProvider,
+          storageKey: existing.storageKey,
+          fileUrl: existing.fileUrl,
+        },
+        data: updateData,
+      });
+
+      if (result.count !== 1) {
+        throw httpError(
+          "Document changed. Please retry.",
+          409
+        );
+      }
+
+      updated = await prisma.employeeDocument.findFirst({
+        where: {
+          id: documentId,
+          employeeId,
+          organizationId,
+        },
+      });
+    } catch (error) {
+      if (stored?.storageProvider === "s3") {
+        await cleanupS3(
+          stored.storageKey,
+          organizationId,
+          "Database replacement failed"
+        );
+      }
+
+      throw error;
+    }
+
+    // Remove previous S3 object only after DB update.
+    if (
+      stored &&
+      existing.storageProvider === "s3" &&
+      existing.storageKey &&
+      existing.storageKey !== stored.storageKey
+    ) {
+      await cleanupS3(
+        existing.storageKey,
+        organizationId,
+        "Old document replacement"
+      );
+    }
+
+    // Keep legacy Cloudinary files for migration/rollback.
+    return documentForResponse(updated);
   }
 
-  /**
-   * Delete an employee document
-   */
-  async deleteDocument(organizationId, employeeId, documentId) {
+  // ----------------------------------------------
+  // Delete employee document
+  // ----------------------------------------------
+
+  async deleteDocument(
+    organizationId,
+    employeeId,
+    documentId
+  ) {
     const existing = await prisma.employeeDocument.findFirst({
-      where: { id: documentId, employeeId, organizationId },
+      where: {
+        id: documentId,
+        employeeId,
+        organizationId,
+      },
     });
 
     if (!existing) {
-      const error = new Error("Document not found");
-      error.statusCode = 404;
-      throw error;
+      throw httpError("Document not found.", 404);
     }
 
-    await prisma.employeeDocument.delete({
-      where: { id: documentId },
+    const result = await prisma.employeeDocument.deleteMany({
+      where: {
+        id: documentId,
+        employeeId,
+        organizationId,
+        storageProvider: existing.storageProvider,
+        storageKey: existing.storageKey,
+        fileUrl: existing.fileUrl,
+      },
     });
 
-    return { success: true, message: "Document deleted successfully" };
+    if (result.count !== 1) {
+      throw httpError(
+        "Document changed. Please retry.",
+        409
+      );
+    }
+
+    if (
+      existing.storageProvider === "s3" &&
+      existing.storageKey
+    ) {
+      await cleanupS3(
+        existing.storageKey,
+        organizationId,
+        "Deleted document cleanup"
+      );
+    }
+
+    return {
+      success: true,
+      message: "Document deleted successfully",
+    };
   }
 
-  /**
-   * HR / Admin: Verify or Reject Document
-   */
-  async verifyDocument(organizationId, employeeId, documentId, { status, rejectionReason, reviewerName, reviewerId }) {
-    if (!["VERIFIED", "REJECTED", "PENDING"].includes(status)) {
-      const error = new Error("Status must be VERIFIED, REJECTED, or PENDING");
-      error.statusCode = 400;
-      throw error;
+  // ----------------------------------------------
+  // Verify / reject document
+  // ----------------------------------------------
+
+  async verifyDocument(
+    organizationId,
+    employeeId,
+    documentId,
+    {
+      status,
+      rejectionReason,
+      reviewerName,
+      reviewerId,
+    }
+  ) {
+    if (
+      !["VERIFIED", "REJECTED", "PENDING"].includes(status)
+    ) {
+      throw httpError(
+        "Status must be VERIFIED, REJECTED or PENDING.",
+        400
+      );
     }
 
     const existing = await prisma.employeeDocument.findFirst({
-      where: { id: documentId, employeeId, organizationId },
+      where: {
+        id: documentId,
+        employeeId,
+        organizationId,
+      },
       include: {
         employee: {
-          include: { user: true },
+          include: {
+            user: true,
+          },
         },
       },
     });
 
     if (!existing) {
-      const error = new Error("Document not found");
-      error.statusCode = 404;
-      throw error;
+      throw httpError("Document not found.", 404);
     }
 
     const updated = await prisma.employeeDocument.update({
-      where: { id: documentId },
+      where: {
+        id: documentId,
+      },
       data: {
         status,
-        rejectionReason: status === "REJECTED" ? (rejectionReason ? rejectionReason.trim() : "Document rejected by HR") : null,
-        verifiedBy: status === "VERIFIED" ? (reviewerName || "HR Admin") : null,
-        verifiedAt: status === "VERIFIED" ? new Date() : null,
+        rejectionReason:
+          status === "REJECTED"
+            ? (
+                rejectionReason
+                  ? rejectionReason.trim()
+                  : "Document rejected by HR"
+              )
+            : null,
+        verifiedBy:
+          status === "VERIFIED"
+            ? reviewerName || "HR Admin"
+            : null,
+        verifiedAt:
+          status === "VERIFIED"
+            ? new Date()
+            : null,
       },
     });
 
-    // Notify employee of verification outcome
     if (existing.employee?.user?.id) {
-      const notifTitle = status === "VERIFIED" ? "Document Verified" : status === "REJECTED" ? "Document Rejected" : "Document Under Review";
+      const notifTitle =
+        status === "VERIFIED"
+          ? "Document Verified"
+          : status === "REJECTED"
+            ? "Document Rejected"
+            : "Document Under Review";
+
       const notifMessage =
         status === "VERIFIED"
-          ? `Your ${existing.documentType.replace(/_/g, " ")} document has been verified and approved.`
+          ? `Your ${existing.documentType.replace(
+              /_/g,
+              " "
+            )} document has been verified and approved.`
           : status === "REJECTED"
-          ? `Your ${existing.documentType.replace(/_/g, " ")} document was rejected. Reason: ${rejectionReason || "Please re-upload a clear copy."}`
-          : `Your ${existing.documentType.replace(/_/g, " ")} status was set to pending.`;
+            ? `Your ${existing.documentType.replace(
+                /_/g,
+                " "
+              )} document was rejected. Reason: ${
+                rejectionReason ||
+                "Please re-upload a clear copy."
+              }`
+            : `Your ${existing.documentType.replace(
+                /_/g,
+                " "
+              )} status was set to pending.`;
 
       try {
         await notificationService.createNotification({
@@ -513,58 +1078,89 @@ class EmployeeDocumentService {
           message: notifMessage,
           type: "SYSTEM",
         });
-      } catch (err) {
-        console.warn("Failed to notify employee:", err.message);
+      } catch (error) {
+        console.warn(
+          "Failed to notify employee:",
+          error.message
+        );
       }
     }
 
-    return updated;
+    return documentForResponse(updated);
   }
 
-  /**
-   * Send document expiry reminder (manual trigger or cron trigger)
-   */
-  async sendExpiryReminder(organizationId, employeeId, documentId) {
-    const doc = await prisma.employeeDocument.findFirst({
-      where: { id: documentId, employeeId, organizationId },
+  // ----------------------------------------------
+  // Document expiry reminder
+  // ----------------------------------------------
+
+  async sendExpiryReminder(
+    organizationId,
+    employeeId,
+    documentId
+  ) {
+    const document = await prisma.employeeDocument.findFirst({
+      where: {
+        id: documentId,
+        employeeId,
+        organizationId,
+      },
       include: {
-        employee: { include: { user: true } },
+        employee: {
+          include: {
+            user: true,
+          },
+        },
       },
     });
 
-    if (!doc) {
-      const error = new Error("Document not found");
-      error.statusCode = 404;
-      throw error;
+    if (!document) {
+      throw httpError("Document not found.", 404);
     }
 
-    if (!doc.expiryDate) {
-      const error = new Error("Document has no expiry date set");
-      error.statusCode = 400;
-      throw error;
+    if (!document.expiryDate) {
+      throw httpError(
+        "Document has no expiry date set.",
+        400
+      );
     }
 
-    const expDate = new Date(doc.expiryDate);
-    const dateFormatted = expDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+    const expiry = new Date(document.expiryDate);
 
-    // Mark reminder as sent
+    const formattedDate = expiry.toLocaleDateString(
+      "en-IN",
+      {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      }
+    );
+
     await prisma.employeeDocument.update({
-      where: { id: documentId },
-      data: { expiryReminderSent: true },
+      where: {
+        id: documentId,
+      },
+      data: {
+        expiryReminderSent: true,
+      },
     });
 
-    // Send notification to employee
-    if (doc.employee?.user?.id) {
+    if (document.employee?.user?.id) {
       await notificationService.createNotification({
         organizationId,
-        userId: doc.employee.user.id,
-        title: "⚠️ Document Expiry Reminder",
-        message: `Your ${doc.documentType.replace(/_/g, " ")} document expires on ${dateFormatted}. Please submit an updated renewal copy to avoid compliance flags.`,
+        userId: document.employee.user.id,
+        title: "Document Expiry Reminder",
+        message: `Your ${document.documentType.replace(
+          /_/g,
+          " "
+        )} document expires on ${formattedDate}. Please submit an updated copy.`,
         type: "SYSTEM",
       });
     }
 
-    return { success: true, message: `Expiry reminder sent for ${doc.documentType} (Expires: ${dateFormatted})` };
+    return {
+      success: true,
+      message: `Expiry reminder sent for ${document.documentType} (Expires: ${formattedDate})`,
+    };
   }
 }
 

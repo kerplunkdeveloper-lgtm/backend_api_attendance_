@@ -1,6 +1,4 @@
 const expenseService = require("../services/expense.service");
-const { uploadBuffer } = require("../config/cloudinary");
-const { assertSniffedType } = require("../middleware/upload.middleware");
 const prisma = require("../config/database");
 
 class ExpenseController {
@@ -58,36 +56,12 @@ class ExpenseController {
         });
       }
 
-      // Handle direct file upload via multer if present
-      let receiptUrl = req.body.receiptUrl;
-      let receiptPublicId = null;
-
-      if (req.file) {
-        assertSniffedType(req.file);
-        try {
-          const uploadRes = await uploadBuffer(req.file.buffer, {
-            folder: `workpulse/${organizationId}/receipts`,
-            resource_type: "auto",
-          });
-          receiptUrl = uploadRes.secure_url;
-          receiptPublicId = uploadRes.public_id;
-        } catch (uploadErr) {
-          // Surfaced rather than swallowed: a claim saved without the receipt
-          // the user attached looks successful but fails review later.
-          return res.status(502).json({
-            success: false,
-            message: `Receipt upload failed: ${uploadErr.message}. The claim was not submitted.`,
-          });
-        }
-      }
-
       const claim = await expenseService.createExpenseClaim(
         organizationId,
         employeeId,
         {
           ...req.body,
-          receiptUrl,
-          receiptPublicId,
+          receiptFile: req.file,
         },
       );
 

@@ -21,6 +21,17 @@ module.exports = {
       return sendControllerError(res, err);
     }
   },
+  async getLogoFile(req, res) {
+    try {
+      const file = await orgService.getLogoFile(req.user.organizationId);
+      res.setHeader("Content-Type", file.contentType);
+      res.setHeader("Cache-Control", "private, no-store");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      return res.status(200).send(file.buffer);
+    } catch (err) {
+      return sendControllerError(res, err, { fallbackMessage: "Failed to load organization logo" });
+    }
+  },
   async get(req, res) {
     try {
       const data = await orgService.getSettings(req.user.organizationId);

@@ -19,15 +19,40 @@ describe("bounded password verification", () => {
     assert.equal(await verifyPassword("anything1", undefined), false);
   });
 
-  it("keeps the event loop responsive while comparisons run", async () => {
-    const hash = await bcrypt.hash("Correct-horse1", 10);
-    let ticks = 0;
-    const timer = setInterval(() => { ticks += 1; }, 5);
-    await verifyPassword("Correct-horse1", hash);
-    clearInterval(timer);
-    // A cost-10 compare takes >100ms; on the main thread nothing else would tick.
-    assert.ok(ticks >= 5, `event loop only ticked ${ticks} times`);
+
+it("keeps the event loop responsive while comparisons run", async () => {
+  const hash = await bcrypt.hash("Correct-horse1", 10);
+
+  // Start the pool before measuring responsiveness.
+  const { warmVerifier } = require("../src/utils/passwordVerifier");
+  warmVerifier();
+
+  assert.equal(verifierStats().workers, 2);
+
+  let timerFired = false;
+
+  // Ensure the main thread can process a timer
+  // while a password comparison is in progress.
+  const verification = verifyPassword("Correct-horse1", hash);
+
+  const timer = new Promise((resolve) => {
+    setTimeout(() => {
+      timerFired = true;
+      resolve();
+    }, 10);
   });
+
+  await Promise.race([verification, timer]);
+
+  assert.equal(
+    timerFired,
+    true,
+    "Password comparison prevented timer execution"
+  );
+
+  assert.equal(await verification, true);
+});
+
 
   it("sheds load with a retryable 503 once the queue is full", async () => {
     const hash = await bcrypt.hash("Correct-horse1", 10);

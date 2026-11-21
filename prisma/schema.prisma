@@ -72,21 +72,23 @@ enum SubscriptionStatus {
 }
 
 model Organization {
-  id        String    @id @default(uuid())
-  name      String
-  email     String?
-  phone     String?
+  id                  String    @id @default(uuid())
+  name                String
+  email               String?
+  phone               String?
   // IANA zone (e.g. "Asia/Kolkata"). Attendance calendar dates, shift start/end
   // comparisons and report boundaries are all resolved in this zone rather than
   // the server's, so the same data reads correctly wherever the API is deployed.
-  timezone  String    @default("Asia/Kolkata")
-  currency  String    @default("INR")
-  address   String?
-  taxId     String?
-  logoUrl   String?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
+  timezone            String    @default("Asia/Kolkata")
+  currency            String    @default("INR")
+  address             String?
+  taxId               String?
+  logoUrl             String?
+  logoStorageProvider String    @default("cloudinary")
+  logoStorageKey      String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  deletedAt           DateTime?
 
   subscriptionPlan      SubscriptionPlan   @default(FREE_TRIAL)
   subscriptionStatus    SubscriptionStatus @default(TRIALING)
@@ -135,7 +137,7 @@ model Organization {
   permissionRequests   PermissionRequest[]
   notifications        Notification[]
   pushSubscriptions    PushSubscription[]
-  fcmTokens             FcmToken[]
+  fcmTokens            FcmToken[]
   announcements        Announcement[]
   auditLogs            AuditLog[]
   employeeDevices      EmployeeDevice[]
@@ -145,7 +147,7 @@ model Organization {
   attendancePolicy     AttendancePolicy?
   shiftOverrides       ShiftOverride[]
   overtimeRequests     OvertimeRequest[]
-  overtimeAllocations   OvertimeAllocation[]
+  overtimeAllocations  OvertimeAllocation[]
   employeeInvites      EmployeeInvite[]
   employeeDocuments    EmployeeDocument[]
   employeeExits        EmployeeExit[]
@@ -459,8 +461,8 @@ model OvertimeRequest {
   approvedMinutes  Int?
   plannedStartTime String?
   plannedEndTime   String?
-  otCheckIn       DateTime?
-  otCheckOut      DateTime?
+  otCheckIn        DateTime?
+  otCheckOut       DateTime?
   reason           String?
   status           RequestStatus @default(PENDING)
   reviewedBy       String?
@@ -481,33 +483,33 @@ model OvertimeRequest {
 // Monthly employee choice for approved overtime. Only cashMinutes is sent to
 // payroll; the other approved minutes become employee entitlements.
 model OvertimeAllocation {
-  id                String        @id @default(uuid())
-  organizationId    String
-  employeeId        String
-  month             Int
-  year              Int
-  approvedMinutes   Int           @default(0)
-  permissionMinutes Int           @default(0)
-  leaveMinutes      Int           @default(0)
-  compOffMinutes    Int           @default(0)
-  cashMinutes       Int           @default(0)
-  status            RequestStatus @default(PENDING)
-  employeeNote      String?
-  reviewNote        String?
-  reviewedBy        String?
-  reviewedAt        DateTime?
-  lockedAt          DateTime?
+  id                       String        @id @default(uuid())
+  organizationId           String
+  employeeId               String
+  month                    Int
+  year                     Int
+  approvedMinutes          Int           @default(0)
+  permissionMinutes        Int           @default(0)
+  leaveMinutes             Int           @default(0)
+  compOffMinutes           Int           @default(0)
+  cashMinutes              Int           @default(0)
+  status                   RequestStatus @default(PENDING)
+  employeeNote             String?
+  reviewNote               String?
+  reviewedBy               String?
+  reviewedAt               DateTime?
+  lockedAt                 DateTime?
   // Cumulative entitlements already approved/credited. These stay intact while
   // a later claim is pending review, so payroll never loses the prior cash balance.
   settledPermissionMinutes Int?
   settledLeaveMinutes      Int?
   settledCompOffMinutes    Int?
   settledCashMinutes       Int?
-  createdAt         DateTime      @default(now())
-  updatedAt         DateTime      @updatedAt
+  createdAt                DateTime      @default(now())
+  updatedAt                DateTime      @updatedAt
 
-  organization      Organization  @relation(fields: [organizationId], references: [id])
-  employee          Employee      @relation(fields: [employeeId], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id])
+  employee     Employee     @relation(fields: [employeeId], references: [id])
 
   @@unique([employeeId, month, year])
   @@index([organizationId, month, year, status])
@@ -518,37 +520,37 @@ model OvertimeAllocation {
 // stay separate in JSON so each item can be reviewed without creating duplicate
 // expense/OT records before HR approves the settlement.
 model ShootSettlement {
-  id                      String         @id @default(uuid())
-  organizationId          String
-  employeeId              String
-  shootRequestId          String
-  attendanceId            String?
-  shootDate               DateTime       @db.Date
-  shootStart              DateTime?
-  shootEnd                DateTime?
-  travelStart             DateTime?
-  travelEnd               DateTime?
-  returnedNextDay         Boolean        @default(false)
-  shootMinutes            Int            @default(0)
-  travelMinutes           Int            @default(0)
-  shootOvertimeMinutes    Int            @default(0)
-  travelOvertimeMinutes   Int            @default(0)
-  totalDutyMinutes        Int            @default(0)
-  recoveryLeaveEligible   Boolean        @default(false)
-  recoveryLeaveRequested  Boolean        @default(false)
-  recoveryLeaveStatus     RequestStatus?
-  recoveryLeaveDate       DateTime?      @db.Date
-  allowances              Json?
-  expenses                Json?
-  employeeNote            String?
-  hrNote                  String?
-  approvedShootMinutes    Int?
-  approvedShootOtMinutes  Int?
-  approvedTravelOtMinutes Int?
-  approvedTravelOtAmount  Decimal?       @db.Decimal(10, 2)
-  approvedAllowanceAmount Decimal?       @db.Decimal(10, 2)
-  approvedExpenseAmount   Decimal?       @db.Decimal(10, 2)
-  overtimePay             Decimal?       @db.Decimal(10, 2)
+  id                       String         @id @default(uuid())
+  organizationId           String
+  employeeId               String
+  shootRequestId           String
+  attendanceId             String?
+  shootDate                DateTime       @db.Date
+  shootStart               DateTime?
+  shootEnd                 DateTime?
+  travelStart              DateTime?
+  travelEnd                DateTime?
+  returnedNextDay          Boolean        @default(false)
+  shootMinutes             Int            @default(0)
+  travelMinutes            Int            @default(0)
+  shootOvertimeMinutes     Int            @default(0)
+  travelOvertimeMinutes    Int            @default(0)
+  totalDutyMinutes         Int            @default(0)
+  recoveryLeaveEligible    Boolean        @default(false)
+  recoveryLeaveRequested   Boolean        @default(false)
+  recoveryLeaveStatus      RequestStatus?
+  recoveryLeaveDate        DateTime?      @db.Date
+  allowances               Json?
+  expenses                 Json?
+  employeeNote             String?
+  hrNote                   String?
+  approvedShootMinutes     Int?
+  approvedShootOtMinutes   Int?
+  approvedTravelOtMinutes  Int?
+  approvedTravelOtAmount   Decimal?       @db.Decimal(10, 2)
+  approvedAllowanceAmount  Decimal?       @db.Decimal(10, 2)
+  approvedExpenseAmount    Decimal?       @db.Decimal(10, 2)
+  overtimePay              Decimal?       @db.Decimal(10, 2)
   overtimeStatus           RequestStatus  @default(PENDING)
   overtimeReviewNote       String?
   overtimeReviewedBy       String?
@@ -561,12 +563,12 @@ model ShootSettlement {
   travelOvertimeReviewNote String?
   travelOvertimeReviewedBy String?
   travelOvertimeReviewedAt DateTime?
-  status                  RequestStatus  @default(PENDING)
-  payrollStatus           String         @default("NOT_READY") // NOT_READY, READY, PROCESSED
-  reviewedBy              String?
-  reviewedAt              DateTime?
-  createdAt               DateTime       @default(now())
-  updatedAt               DateTime       @updatedAt
+  status                   RequestStatus  @default(PENDING)
+  payrollStatus            String         @default("NOT_READY") // NOT_READY, READY, PROCESSED
+  reviewedBy               String?
+  reviewedAt               DateTime?
+  createdAt                DateTime       @default(now())
+  updatedAt                DateTime       @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
@@ -649,6 +651,7 @@ model User {
   passwordHash       String
   role               UserRole
   avatarUrl          String?
+  avatarStorageKey   String?
   mustChangePassword Boolean   @default(false) // true for new invited employees
   isActive           Boolean   @default(true) // false = account disabled
   lastLoginAt        DateTime?
@@ -705,21 +708,22 @@ model SsoLoginCode {
 }
 
 model Employee {
-  id             String         @id @default(uuid())
-  organizationId String
-  userId         String?        @unique
-  employeeCode   String
-  firstName      String
-  lastName       String?
-  phone          String?
-  avatarUrl      String?
-  status         EmployeeStatus @default(ACTIVE)
-  branchId       String?
-  departmentId   String?
-  shiftId        String?
+  id               String         @id @default(uuid())
+  organizationId   String
+  userId           String?        @unique
+  employeeCode     String
+  firstName        String
+  lastName         String?
+  phone            String?
+  avatarUrl        String?
+  avatarStorageKey String?
+  status           EmployeeStatus @default(ACTIVE)
+  branchId         String?
+  departmentId     String?
+  shiftId          String?
   // Allows this employee to punch in/out outside the shift clock window.
   // The permission is set by HR/Manager when assigning a shift.
-  flexiblePunching Boolean @default(false)
+  flexiblePunching Boolean        @default(false)
 
   // ── Core HR profile ───────────────────────────────────────────────────────
   // Previously collected on OnboardingCandidate and then dropped on conversion,
@@ -729,7 +733,7 @@ model Employee {
   // Month from which this employee starts earning paid leave in WorkPulse.
   // This is deliberately separate from the real-world joining date so leave
   // imported from a previous HR system is not consumed from the new policy.
-  paidLeaveStartDate    DateTime @default(now())
+  paidLeaveStartDate    DateTime  @default(now())
   dateOfBirth           DateTime?
   gender                String? // MALE, FEMALE
   bloodGroup            String? // A+, A-, B+, B-, AB+, AB-, O+, O-
@@ -807,21 +811,21 @@ model Employee {
 }
 
 model Shift {
-  id             String   @id @default(uuid())
-  organizationId String
-  name           String
-  startTime      String
-  endTime        String
-  graceMinutes   Int      @default(10)
-  breakMinutes   Int      @default(0) // Configured short-break allowance
-  lunchMinutes   Int      @default(0) // Configured lunch allowance
-  breakIncluded  Boolean  @default(true)
-  lunchIncluded  Boolean  @default(true)
-  workingDays    String   @default("1,2,3,4,5,6") // 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat (Sunday 0 is off)
-  flexiblePunching Boolean @default(false) // Assigned employees may punch outside shift hours
+  id                  String   @id @default(uuid())
+  organizationId      String
+  name                String
+  startTime           String
+  endTime             String
+  graceMinutes        Int      @default(10)
+  breakMinutes        Int      @default(0) // Configured short-break allowance
+  lunchMinutes        Int      @default(0) // Configured lunch allowance
+  breakIncluded       Boolean  @default(true)
+  lunchIncluded       Boolean  @default(true)
+  workingDays         String   @default("1,2,3,4,5,6") // 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat (Sunday 0 is off)
+  flexiblePunching    Boolean  @default(false) // Assigned employees may punch outside shift hours
   totalWorkingMinutes Int? // Total company hours including configured pauses, for flexible shifts
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
   organization   Organization    @relation(fields: [organizationId], references: [id])
   employees      Employee[]
@@ -848,15 +852,15 @@ model Attendance {
   checkInLocation   String?
   checkOutLocation  String?
 
-  status          AttendanceStatus @default(PRESENT)
-  workingMinutes  Int              @default(0)
-  breakMinutes    Int              @default(0)
-  lunchMinutes    Int              @default(0)
-  lateMinutes     Int              @default(0)
-  earlyMinutes    Int              @default(0)
-  overtimeMinutes Int              @default(0)
-  wfhNote         String? // Note for WFH check-ins
-  securityReviewStatus String  @default("CLEAR") // CLEAR, PENDING, APPROVED, REJECTED, FALSE_POSITIVE
+  status               AttendanceStatus @default(PRESENT)
+  workingMinutes       Int              @default(0)
+  breakMinutes         Int              @default(0)
+  lunchMinutes         Int              @default(0)
+  lateMinutes          Int              @default(0)
+  earlyMinutes         Int              @default(0)
+  overtimeMinutes      Int              @default(0)
+  wfhNote              String? // Note for WFH check-ins
+  securityReviewStatus String           @default("CLEAR") // CLEAR, PENDING, APPROVED, REJECTED, FALSE_POSITIVE
   securityReviewNote   String?
   securityReviewedBy   String?
   securityReviewedAt   DateTime?
@@ -943,24 +947,24 @@ model LeaveType {
 }
 
 model LeaveRequest {
-  id             String        @id @default(uuid())
+  id             String         @id @default(uuid())
   organizationId String
   employeeId     String
   leaveTypeId    String
-  startDate      DateTime      @db.Date
-  endDate        DateTime      @db.Date
-  totalDays      Decimal       @default(1.0) @db.Decimal(4, 1)
+  startDate      DateTime       @db.Date
+  endDate        DateTime       @db.Date
+  totalDays      Decimal        @default(1.0) @db.Decimal(4, 1)
   halfDayPeriod  HalfDayPeriod?
   reason         String
-  status         RequestStatus @default(PENDING)
+  status         RequestStatus  @default(PENDING)
   reviewedBy     String?
   reviewNote     String?
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id])
-  employee     Employee     @relation(fields: [employeeId], references: [id])
-  leaveType    LeaveType    @relation(fields: [leaveTypeId], references: [id])
+  organization   Organization         @relation(fields: [organizationId], references: [id])
+  employee       Employee             @relation(fields: [employeeId], references: [id])
+  leaveType      LeaveType            @relation(fields: [leaveTypeId], references: [id])
   changeRequests LeaveChangeRequest[]
 
   @@index([organizationId, status])
@@ -1116,51 +1120,51 @@ model SalaryStructure {
 }
 
 model Payslip {
-  id                   String    @id @default(uuid())
-  organizationId       String
-  employeeId           String
-  month                Int
-  year                 Int
-  workingDays          Int
-  presentDays          Decimal   @db.Decimal(5, 1)
-  paidLeaveDays        Decimal   @default(0) @db.Decimal(5, 1)
-  unpaidLeaveDays      Decimal   @default(0) @db.Decimal(5, 1)
-  overtimeHours        Decimal   @default(0) @db.Decimal(6, 2)
-  baseSalary           Decimal   @db.Decimal(10, 2)
-  hra                  Decimal   @default(0) @db.Decimal(10, 2)
-  transport            Decimal   @default(0) @db.Decimal(10, 2)
-  special              Decimal   @default(0) @db.Decimal(10, 2)
-  otherAllowance       Decimal   @default(0) @db.Decimal(10, 2)
-  allowancesTotal      Decimal   @db.Decimal(10, 2)
-  overtimePay          Decimal   @db.Decimal(10, 2)
-  grossSalary          Decimal   @default(0) @db.Decimal(10, 2)
-  unpaidLeaveDeduction Decimal   @default(0) @db.Decimal(10, 2)
-  hoursShortfallDeduction Decimal @default(0) @db.Decimal(10, 2)
-  lateDeduction        Decimal   @default(0) @db.Decimal(10, 2)
-  pfDeduction          Decimal   @default(0) @db.Decimal(10, 2)
-  esiDeduction         Decimal   @default(0) @db.Decimal(10, 2)
-  ptDeduction          Decimal   @default(0) @db.Decimal(10, 2)
-  statutoryDeductions  Decimal   @default(0) @db.Decimal(10, 2)
-  tdsDeduction         Decimal   @default(0) @db.Decimal(10, 2)
-  deductionsTotal      Decimal   @db.Decimal(10, 2)
-  netSalary            Decimal   @db.Decimal(10, 2)
-  reimbursements       Decimal   @default(0) @db.Decimal(10, 2)
+  id                       String    @id @default(uuid())
+  organizationId           String
+  employeeId               String
+  month                    Int
+  year                     Int
+  workingDays              Int
+  presentDays              Decimal   @db.Decimal(5, 1)
+  paidLeaveDays            Decimal   @default(0) @db.Decimal(5, 1)
+  unpaidLeaveDays          Decimal   @default(0) @db.Decimal(5, 1)
+  overtimeHours            Decimal   @default(0) @db.Decimal(6, 2)
+  baseSalary               Decimal   @db.Decimal(10, 2)
+  hra                      Decimal   @default(0) @db.Decimal(10, 2)
+  transport                Decimal   @default(0) @db.Decimal(10, 2)
+  special                  Decimal   @default(0) @db.Decimal(10, 2)
+  otherAllowance           Decimal   @default(0) @db.Decimal(10, 2)
+  allowancesTotal          Decimal   @db.Decimal(10, 2)
+  overtimePay              Decimal   @db.Decimal(10, 2)
+  grossSalary              Decimal   @default(0) @db.Decimal(10, 2)
+  unpaidLeaveDeduction     Decimal   @default(0) @db.Decimal(10, 2)
+  hoursShortfallDeduction  Decimal   @default(0) @db.Decimal(10, 2)
+  lateDeduction            Decimal   @default(0) @db.Decimal(10, 2)
+  pfDeduction              Decimal   @default(0) @db.Decimal(10, 2)
+  esiDeduction             Decimal   @default(0) @db.Decimal(10, 2)
+  ptDeduction              Decimal   @default(0) @db.Decimal(10, 2)
+  statutoryDeductions      Decimal   @default(0) @db.Decimal(10, 2)
+  tdsDeduction             Decimal   @default(0) @db.Decimal(10, 2)
+  deductionsTotal          Decimal   @db.Decimal(10, 2)
+  netSalary                Decimal   @db.Decimal(10, 2)
+  reimbursements           Decimal   @default(0) @db.Decimal(10, 2)
   shootSettlementBreakdown Json?
-  dailyPayroll          Json?
-  loanRecovery         Decimal   @default(0) @db.Decimal(10, 2)
-  periodStart          DateTime? @db.Date
-  periodEnd            DateTime? @db.Date
-  permissionDeduction  Decimal   @default(0) @db.Decimal(10, 2)
-  breakDeduction       Decimal   @default(0) @db.Decimal(10, 2)
-  lunchDeduction       Decimal   @default(0) @db.Decimal(10, 2)
-  pauseDeduction       Decimal   @default(0) @db.Decimal(10, 2)
-  status               String    @default("DRAFT") // DRAFT, PENDING_APPROVAL, APPROVED, DISBURSED, REJECTED
-  approvedBy           String?
-  approvedAt           DateTime?
-  disbursedAt          DateTime?
-  remarks              String?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
+  dailyPayroll             Json?
+  loanRecovery             Decimal   @default(0) @db.Decimal(10, 2)
+  periodStart              DateTime? @db.Date
+  periodEnd                DateTime? @db.Date
+  permissionDeduction      Decimal   @default(0) @db.Decimal(10, 2)
+  breakDeduction           Decimal   @default(0) @db.Decimal(10, 2)
+  lunchDeduction           Decimal   @default(0) @db.Decimal(10, 2)
+  pauseDeduction           Decimal   @default(0) @db.Decimal(10, 2)
+  status                   String    @default("DRAFT") // DRAFT, PENDING_APPROVAL, APPROVED, DISBURSED, REJECTED
+  approvedBy               String?
+  approvedAt               DateTime?
+  disbursedAt              DateTime?
+  remarks                  String?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
 
   organization Organization   @relation(fields: [organizationId], references: [id])
   employee     Employee       @relation(fields: [employeeId], references: [id])
@@ -1320,7 +1324,7 @@ model Announcement {
 }
 
 model AuditLog {
-  id             String   @id @default(uuid())
+  id             String    @id @default(uuid())
   organizationId String
   userId         String?
   action         String // CREATE, UPDATE, DELETE, APPROVE, REJECT
@@ -1333,13 +1337,13 @@ model AuditLog {
   deviceId       String?
   deviceName     String?
   eventType      String?
-  riskLevel      String?  // LOW, MEDIUM, HIGH
-  reviewStatus   String?  // NOT_REQUIRED, PENDING, APPROVED, REJECTED, FALSE_POSITIVE
+  riskLevel      String? // LOW, MEDIUM, HIGH
+  reviewStatus   String? // NOT_REQUIRED, PENDING, APPROVED, REJECTED, FALSE_POSITIVE
   reviewedBy     String?
   reviewNote     String?
   reviewedAt     DateTime?
   attendanceId   String?
-  createdAt      DateTime @default(now())
+  createdAt      DateTime  @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id])
 
@@ -1480,7 +1484,7 @@ model OnboardingDocument {
   candidateId     String
   documentType    DocumentType
   fileName        String
-  fileUrl         String
+  fileUrl         String?
   fileSize        Int?
   mimeType        String?
   status          DocumentVerificationStatus @default(PENDING)
@@ -1489,6 +1493,8 @@ model OnboardingDocument {
   verifiedAt      DateTime?
   createdAt       DateTime                   @default(now())
   updatedAt       DateTime                   @updatedAt
+  storageProvider String                     @default("cloudinary")
+  storageKey      String?
 
   candidate OnboardingCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
 
@@ -1512,23 +1518,25 @@ enum ExpenseStatus {
 }
 
 model ExpenseClaim {
-  id              String          @id @default(uuid())
-  organizationId  String
-  employeeId      String
-  category        ExpenseCategory
-  amount          Decimal         @db.Decimal(10, 2)
-  date            DateTime        @db.Date
-  title           String
-  description     String?
-  receiptUrl      String?
-  receiptPublicId String?
-  status          ExpenseStatus   @default(PENDING)
-  reviewedBy      String?
-  reviewNote      String?
-  reviewedAt      DateTime?
-  payslipId       String?
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  id                     String          @id @default(uuid())
+  organizationId         String
+  employeeId             String
+  category               ExpenseCategory
+  amount                 Decimal         @db.Decimal(10, 2)
+  date                   DateTime        @db.Date
+  title                  String
+  description            String?
+  receiptUrl             String?
+  receiptPublicId        String?
+  receiptStorageProvider String          @default("cloudinary")
+  receiptStorageKey      String?
+  status                 ExpenseStatus   @default(PENDING)
+  reviewedBy             String?
+  reviewNote             String?
+  reviewedAt             DateTime?
+  payslipId              String?
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id])
   employee     Employee     @relation(fields: [employeeId], references: [id])
@@ -1595,6 +1603,8 @@ model EmployeeDocument {
   expiryReminderSent Boolean                    @default(false)
   createdAt          DateTime                   @default(now())
   updatedAt          DateTime                   @updatedAt
+  storageProvider    String                     @default("cloudinary")
+  storageKey         String?
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)

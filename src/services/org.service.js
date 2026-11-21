@@ -1,5 +1,7 @@
 const prisma = require("../config/database");
+const { organizationLogoUrl } = require("../utils/privateMediaUrls");
 const { uploadBuffer } = require("../config/cloudinary");
+const { uploadBuffer: uploadS3Buffer, getFileContent, deleteObject: deleteS3Object } = require("../config/s3");
 const { assertRealImage } = require("../middleware/upload.middleware");
 const ssoService = require("./sso.service");
 const { isValidTimeZone } = require("../utils/datetime");
@@ -26,7 +28,7 @@ const presentOrganization = (organization) => {
   const { ssoClientSecretCiphertext, ...safe } = organization;
   const storedAccess = organization.hrAccess && typeof organization.hrAccess === "object" ? organization.hrAccess : {};
   const hrAccess = Object.fromEntries(HR_ACCESS_AREAS.map((area) => [area, storedAccess[area] === undefined ? true : storedAccess[area] === true]));
-  return { ...safe, hrAccess, roleAccess: normalizeRoleAccess(storedAccess.ROLE_ACCESS), sso: ssoService.getConfiguration(organization) };
+  return { ...safe, logoUrl: organizationLogoUrl(safe), hrAccess, roleAccess: normalizeRoleAccess(storedAccess.ROLE_ACCESS), sso: ssoService.getConfiguration(organization) };
 };
 
 async function getSettings(organizationId) {
@@ -94,6 +96,8 @@ async function updateSettings(organizationId, payload, actor = {}) {
       throw Object.assign(new Error("Logo must be an https link or an uploaded image."), { statusCode: 400 });
     }
     data.logoUrl = url;
+    data.logoStorageProvider = "cloudinary";
+    data.logoStorageKey = null;
   }
   const updated = await prisma.organization.update({
     where: { id: organizationId },
@@ -113,7 +117,20 @@ async function updateSettings(organizationId, payload, actor = {}) {
 async function uploadLogo(organizationId, file) {
   if (!file?.buffer) throw Object.assign(new Error("Choose an image to upload."), { statusCode: 400 });
   assertRealImage(file); // real image bytes, not just a claimed type
+  const useS3 = String(process.env.STORAGE_PROVIDER || "").toLowerCase() === "s3";
+  const current = await prisma.organization.findUnique({ where: { id: organizationId }, select: { logoStorageKey: true } });
   let result;
+  if (useS3) {
+    result = await uploadS3Buffer(file.buffer, { organizationId, folder: "branding", contentType: file.mimetype || "image/png" });
+    try {
+      const updated = await prisma.organization.update({ where: { id: organizationId }, data: { logoUrl: null, logoStorageProvider: "s3", logoStorageKey: result.key }, include: { subscription: true } });
+      if (current?.logoStorageKey) await deleteS3Object(current.logoStorageKey, organizationId).catch(() => {});
+      return presentOrganization(updated);
+    } catch (error) {
+      await deleteS3Object(result.key, organizationId).catch(() => {});
+      throw error;
+    }
+  }
   try {
     result = await uploadBuffer(file.buffer, { folder: `workpulse/${organizationId}/branding`, resource_type: "image" });
   } catch (cause) {
@@ -123,15 +140,30 @@ async function uploadLogo(organizationId, file) {
   }
   const updated = await prisma.organization.update({
     where: { id: organizationId },
-    data: { logoUrl: result.secure_url || result.url },
+    data: { logoUrl: result.secure_url || result.url, logoStorageProvider: "cloudinary", logoStorageKey: null },
     include: { subscription: true },
   });
   return presentOrganization(updated);
 }
 
 async function removeLogo(organizationId) {
-  const updated = await prisma.organization.update({ where: { id: organizationId }, data: { logoUrl: null }, include: { subscription: true } });
+  const current = await prisma.organization.findUnique({ where: { id: organizationId }, select: { logoStorageKey: true } });
+  if (current?.logoStorageKey) await deleteS3Object(current.logoStorageKey, organizationId).catch(() => {});
+  const updated = await prisma.organization.update({ where: { id: organizationId }, data: { logoUrl: null, logoStorageKey: null }, include: { subscription: true } });
   return presentOrganization(updated);
+}
+
+async function getLogoFile(organizationId) {
+  const organization = await prisma.organization.findUnique({
+    where: { id: organizationId },
+    select: { logoStorageKey: true },
+  });
+  if (!organization?.logoStorageKey) {
+    const error = new Error("Organization logo not found");
+    error.statusCode = 404;
+    throw error;
+  }
+  return getFileContent(organization.logoStorageKey, organizationId);
 }
 
 async function getOfferLetterTemplate(organizationId) {
@@ -165,4 +197,4 @@ async function updateExitDocumentTemplates(organizationId, payload) {
   return templates;
 }
 
-module.exports = { getSettings, updateSettings, uploadLogo, removeLogo, getOfferLetterTemplate, updateOfferLetterTemplate, getExitDocumentTemplates, updateExitDocumentTemplates };
+module.exports = { getSettings, updateSettings, uploadLogo, removeLogo, getLogoFile, getOfferLetterTemplate, updateOfferLetterTemplate, getExitDocumentTemplates, updateExitDocumentTemplates };

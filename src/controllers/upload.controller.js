@@ -1,10 +1,19 @@
-const { uploadImage, uploadBuffer } = require("../config/cloudinary");
-const { assertSniffedType } = require("../middleware/upload.middleware");
-const { sendControllerError } = require("../utils/controllerError");
 
-// Clients may pick a sub-folder but not an arbitrary path — everything is
-// rooted under the caller's own organization so one tenant can never write
-// into, or overwrite, another tenant's assets.
+const cloudinary = require("../config/cloudinary");
+
+const {
+  uploadBuffer: uploadToS3,
+  getDownloadUrl,
+} = require("../config/s3");
+
+const {
+  assertSniffedType,
+} = require("../middleware/upload.middleware");
+
+const {
+  sendControllerError,
+} = require("../utils/controllerError");
+
 const ALLOWED_SUBFOLDERS = [
   "uploads",
   "avatars",
@@ -15,75 +24,172 @@ const ALLOWED_SUBFOLDERS = [
 ];
 
 const ACCEPTED_DATA_URI =
-  /^data:(image\/(jpeg|png|webp|gif)|application\/pdf);base64,/i;
+  /^data:(image\/(?:jpeg|png|webp|gif)|application\/pdf);base64,([A-Za-z0-9+/]+={0,2})$/i;
 
-const resolveFolder = (organizationId, requested) => {
-  const sub = ALLOWED_SUBFOLDERS.includes(requested) ? requested : "uploads";
-  return `workpulse/${organizationId}/${sub}`;
-};
+const MAX_FILE_BYTES = 10 * 1024 * 1024;
 
-const toResponse = (result) => ({
-  url: result.secure_url,
-  publicId: result.public_id,
-  format: result.format,
-  bytes: result.bytes,
-  width: result.width,
-  height: result.height,
-});
+function resolveFolder(requested) {
+  return ALLOWED_SUBFOLDERS.includes(requested)
+    ? requested
+    : "uploads";
+}
+
+function parseDataUri(value) {
+  const match = ACCEPTED_DATA_URI.exec(value);
+
+  if (!match) {
+    const error = new Error(
+      "Invalid data URI. Use JPEG, PNG, WebP, GIF or PDF."
+    );
+    error.statusCode = 415;
+    throw error;
+  }
+
+  const contentType = match[1].toLowerCase();
+  const buffer = Buffer.from(match[2], "base64");
+
+  if (
+    buffer.length === 0 ||
+    buffer.length > MAX_FILE_BYTES
+  ) {
+    const error = new Error("Invalid file size or file exceeds 10 MB.");
+    error.statusCode = 413;
+    throw error;
+  }
+
+  assertSniffedType({
+    buffer,
+    mimetype: contentType,
+  });
+
+  return { buffer, contentType };
+}
+
+async function uploadS3(buffer, {
+  organizationId,
+  folder,
+  contentType,
+}) {
+  const result = await uploadToS3(buffer, {
+    organizationId,
+    folder,
+    contentType,
+  });
+
+  const temporaryUrl = await getDownloadUrl(result.key);
+
+  return {
+    provider: "s3",
+    bucket: result.bucket,
+    key: result.key,
+
+    // Temporary URL for immediate preview only.
+    // Never persist this URL to the database.
+    url: temporaryUrl,
+    urlExpiresIn: 300,
+
+    // Transitional compatibility field.
+    // For S3 this is an object key, not a Cloudinary ID.
+    publicId: result.key,
+
+    format: contentType.split("/")[1],
+    bytes: result.bytes,
+    width: null,
+    height: null,
+  };
+}
+
+function cloudinaryResponse(result) {
+  return {
+    provider: "cloudinary",
+    url: result.secure_url,
+    publicId: result.public_id,
+    format: result.format,
+    bytes: result.bytes,
+    width: result.width,
+    height: result.height,
+  };
+}
 
 class UploadController {
-  /**
-   * Upload a file to Cloudinary.
-   * Accepts either a multipart file (field 'image' or 'file') or a base64 data URI.
-   */
   async uploadImage(req, res) {
     try {
-      const folder = resolveFolder(req.user.organizationId, req.body.folder);
+      const organizationId = req.user?.organizationId;
+
+      if (!organizationId) {
+        return res.status(403).json({
+          success: false,
+          message: "Organization access required.",
+        });
+      }
+
+      const folder = resolveFolder(req.body?.folder);
+      let buffer;
+      let contentType;
+      let cloudinarySource;
 
       if (req.file) {
         assertSniffedType(req.file);
-        const result = await uploadBuffer(req.file.buffer, {
-          folder,
-          resource_type: "auto",
-        });
+        buffer = req.file.buffer;
+        contentType = req.file.mimetype;
+      } else {
+        const value =
+          req.body?.image ||
+          req.body?.fileUrl ||
+          req.body?.file;
 
-        return res.status(200).json({
-          success: true,
-          message: "File uploaded successfully",
-          data: toResponse(result),
-        });
-      }
-
-      const fileData = req.body.image || req.body.fileUrl || req.body.file;
-      if (fileData) {
-        if (typeof fileData !== "string" || !ACCEPTED_DATA_URI.test(fileData)) {
-          return res.status(415).json({
+        if (typeof value !== "string") {
+          return res.status(400).json({
             success: false,
-            message:
-              "Inline uploads must be a base64 data URI of type image/jpeg, image/png, image/webp, image/gif or application/pdf.",
+            message: "No file provided.",
           });
         }
 
-        const result = await uploadImage(fileData, {
-          folder,
-          resource_type: "auto",
-        });
-
-        return res.status(200).json({
-          success: true,
-          message: "File uploaded successfully",
-          data: toResponse(result),
-        });
+        const parsed = parseDataUri(value);
+        buffer = parsed.buffer;
+        contentType = parsed.contentType;
+        cloudinarySource = value;
       }
 
-      return res.status(400).json({
-        success: false,
-        message:
-          "No file provided. Upload a file or supply a base64 data URI string.",
+      let result;
+
+      if (process.env.STORAGE_PROVIDER === "s3") {
+        result = await uploadS3(buffer, {
+          organizationId,
+          folder,
+          contentType,
+        });
+      } else {
+        const options = {
+          folder: `workpulse/${organizationId}/${folder}`,
+          resource_type: "auto",
+        };
+
+        const uploaded = cloudinarySource
+          ? await cloudinary.uploadImage(
+              cloudinarySource,
+              options
+            )
+          : await cloudinary.uploadBuffer(
+              buffer,
+              options
+            );
+
+        result = cloudinaryResponse(uploaded);
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: "File uploaded successfully",
+        data: result,
       });
     } catch (error) {
-      console.error("Cloudinary upload error:", error);
-      return sendControllerError(res, error, { fallbackStatus: 500, fallbackMessage: "Failed to upload file" });
+      console.error("Storage upload failed:", error);
+
+      return sendControllerError(res, error, {
+        fallbackStatus: 500,
+        fallbackMessage: "Failed to upload file",
+      });
     }
   }
 }

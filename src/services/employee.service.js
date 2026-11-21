@@ -18,6 +18,7 @@ const prisma = require("../config/database");
 const emailService = require("./email.service");
 const { generateTempPassword, resolveAssignableRole, assertRoleAssignment } = require("../utils/password");
 const { resolveAvatarUrl } = require("../utils/avatar");
+const { presentEmployeeImage } = require("../utils/privateMediaUrls");
 const { assertSeatAvailable, assertBranchAvailable } = require("./entitlement.service");
 const { isPaidPlan } = require("../config/plans");
 const { getNextEmployeeCode, organizationPrefix } = require("../utils/employeeCode");
@@ -66,7 +67,7 @@ const withoutSensitiveEmployeeFields = (employee) => {
   if (!employee) return employee;
   const safe = { ...employee };
   for (const field of SENSITIVE_EMPLOYEE_FIELDS) delete safe[field];
-  return safe;
+  return presentEmployeeImage(safe);
 };
 
 // HR (the MANAGER role) maintains the full employee profile, including identity and bank details.
@@ -493,7 +494,7 @@ const getEmployeeById = async (organizationId, employeeId, actorRole = "EMPLOYEE
 
   // Admins and HR open the full profile (it feeds the edit form); the route already excludes plain employees.
   return ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"].includes(actorRole)
-    ? employee
+    ? presentEmployeeImage(employee)
     : withoutSensitiveEmployeeFields(employee);
 };
 
