@@ -4,6 +4,13 @@ const { mockPrisma } = require("./helpers/mockPrisma");
 
 let leaveRows = [];
 let lastLeaveWhere = null;
+const payrollEmployee = {
+  id: "employee-99",
+  employeeCode: "EMP-99",
+  firstName: "Salary",
+  lastName: "Test",
+  department: { name: "Finance" },
+};
 
 mockPrisma({
   leaveRequest: {
@@ -12,9 +19,18 @@ mockPrisma({
       return leaveRows;
     },
   },
+  employee: {
+    findFirst: async () => payrollEmployee,
+  },
+  payslip: {
+    findFirst: async () => ({ month: 11, year: 2026, grossSalary: 100000, deductionsTotal: 10000, netSalary: 90000, status: "DISBURSED" }),
+  },
+  salaryStructure: {
+    findUnique: async () => ({ monthlyCtc: 100000, baseSalary: 50000, hra: 25000 }),
+  },
 });
 
-const { getTodayLeaveSummary, isClearlyOutOfScope } = require("../src/services/ai.service");
+const { getTodayLeaveSummary, getAuthorizedEmployeePayrollSummary, isClearlyOutOfScope } = require("../src/services/ai.service");
 
 const employee = (id, status = "APPROVED") => ({
   status,
@@ -79,5 +95,17 @@ describe("AI role-based today leave summary", () => {
     assert.equal(isClearlyOutOfScope("Tell me a joke"), true);
     assert.equal(isClearlyOutOfScope("How many people are on leave today?"), false);
     assert.equal(isClearlyOutOfScope("Calculate 2 + 2"), true);
+  });
+
+  it("allows HR to retrieve salary by employee code but blocks managers", async () => {
+    const result = await getAuthorizedEmployeePayrollSummary(user("HR"), { employeeCode: "EMP-99" });
+
+    assert.equal(result.employee.employeeCode, "EMP-99");
+    assert.equal(result.payslip.netSalary, 90000);
+    assert.equal(result.salaryStructure.monthlyCtc, 100000);
+    await assert.rejects(() => getAuthorizedEmployeePayrollSummary(user("MANAGER", "dept-7"), { employeeCode: "EMP-99" }), (error) => {
+      assert.equal(error.statusCode, 403);
+      return true;
+    });
   });
 });
