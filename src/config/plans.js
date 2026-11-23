@@ -189,6 +189,7 @@ const SUBSCRIPTION_PLANS = [
       "Connect to Your Own Software (API)",
       "Custom Roles & Team Permissions",
       "Dedicated Priority Support",
+      "Clocked AI Assistant for HRMS",
     ],
     popular: false,
   },

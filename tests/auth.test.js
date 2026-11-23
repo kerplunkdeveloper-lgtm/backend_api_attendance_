@@ -139,6 +139,33 @@ describe("auth", () => {
     assert.equal(refreshTokenWrites, 1);
   });
 
+  it("allows a verified SUPER_ADMIN to sign in and issue a session", async () => {
+    const password = "Password123";
+    prisma.user.findMany = async () => [{
+      id: "platform-owner",
+      email: "owner@workpulse.example",
+      passwordHash: await bcrypt.hash(password, 4),
+      emailVerifiedAt: new Date(),
+      role: "SUPER_ADMIN",
+      organizationId: "platform-org",
+      isActive: true,
+      organization: {
+        id: "platform-org",
+        deletedAt: null,
+        subscriptionStatus: "ACTIVE",
+        subscriptionPlan: "ENTERPRISE",
+      },
+      employee: null,
+    }];
+    prisma.refreshToken.create = async ({ data }) => data;
+
+    const result = await authService.login("owner@workpulse.example", password, "web");
+
+    assert.equal(result.user.role, "SUPER_ADMIN");
+    assert.ok(result.accessToken);
+    assert.ok(result.refreshToken);
+  });
+
   it("keeps browser refresh tokens out of JSON responses", async () => {
     const originalLogin = authService.login;
     authService.login = async () => ({

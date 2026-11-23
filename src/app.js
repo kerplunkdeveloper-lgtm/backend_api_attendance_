@@ -47,6 +47,7 @@ const billingRoutes = require("./routes/billing.routes");
 const billingAdminRoutes = require("./routes/billing-admin.routes");
 const platformAdminRoutes = require("./routes/platform-admin.routes");
 const chatRoutes = require("./routes/chat.routes");
+const aiRoutes = require("./routes/ai.routes");
 const biometricRoutes = require("./routes/biometric.routes");
 const orgRoutes = require("./routes/org.routes");
 const loanRoutes = require("./routes/loan.routes");
@@ -64,7 +65,7 @@ const {
 } = require("./middleware/requestSecurity.middleware");
 
 const app = express();const API_ROUTE_GROUPS = [
-  ["auth", "/api/auth"], ["departments", "/api/departments"], ["branches", "/api/branches"], ["employees", "/api/employees"], ["shifts", "/api/shifts"], ["attendance", "/api/attendance"], ["corrections", "/api/attendance/corrections"], ["day-off-work", "/api/attendance/day-off-work"], ["shoot-requests", "/api/attendance/shoot-requests"], ["leaves", "/api/leaves"], ["work-from-home", "/api/work-from-home"], ["permissions", "/api/permissions"], ["company-leaves", "/api/company-leaves"], ["payroll", "/api/payroll"], ["reports", "/api/reports"], ["notifications", "/api/notifications"], ["devices", "/api/devices"], ["audit-logs", "/api/audit-logs"], ["holidays", "/api/holidays"], ["onboarding", "/api/onboarding"], ["upload", "/api/upload"], ["expenses", "/api/expenses"], ["policy", "/api/policy"], ["compoff", "/api/compoff"], ["overtime", "/api/overtime"], ["shift-overrides", "/api/shift-overrides"], ["offboarding", "/api/offboarding"], ["assets", "/api/assets"], ["billing", "/api/billing"], ["admin-billing", "/api/admin/billing"], ["platform-admin", "/api/admin/platform"], ["chat", "/api/chat"], ["biometric", "/api/biometric"], ["organization", "/api/organization"], ["loans", "/api/loans"], ["announcements", "/api/announcements"], ["appraisals", "/api/appraisals"], ["api-keys", "/api/api-keys"], ["webhooks", "/api/webhooks"],
+  ["auth", "/api/auth"], ["departments", "/api/departments"], ["branches", "/api/branches"], ["employees", "/api/employees"], ["shifts", "/api/shifts"], ["attendance", "/api/attendance"], ["corrections", "/api/attendance/corrections"], ["day-off-work", "/api/attendance/day-off-work"], ["shoot-requests", "/api/attendance/shoot-requests"], ["leaves", "/api/leaves"], ["work-from-home", "/api/work-from-home"], ["permissions", "/api/permissions"], ["company-leaves", "/api/company-leaves"], ["payroll", "/api/payroll"], ["reports", "/api/reports"], ["notifications", "/api/notifications"], ["devices", "/api/devices"], ["audit-logs", "/api/audit-logs"], ["holidays", "/api/holidays"], ["onboarding", "/api/onboarding"], ["upload", "/api/upload"], ["expenses", "/api/expenses"], ["policy", "/api/policy"], ["compoff", "/api/compoff"], ["overtime", "/api/overtime"], ["shift-overrides", "/api/shift-overrides"], ["offboarding", "/api/offboarding"], ["assets", "/api/assets"], ["billing", "/api/billing"], ["admin-billing", "/api/admin/billing"], ["platform-admin", "/api/admin/platform"], ["chat", "/api/chat"], ["ai", "/api/ai"], ["biometric", "/api/biometric"], ["organization", "/api/organization"], ["loans", "/api/loans"], ["announcements", "/api/announcements"], ["appraisals", "/api/appraisals"], ["api-keys", "/api/api-keys"], ["webhooks", "/api/webhooks"],
 ];
 
 
@@ -197,6 +198,7 @@ app.use("/api/billing", billingRoutes);
 app.use("/api/admin/billing", billingAdminRoutes);
 app.use("/api/admin/platform", platformAdminRoutes);
 app.use("/api/chat", chatRoutes);
+app.use("/api/ai", aiRoutes);
 app.use("/api/biometric", biometricRoutes);
 app.use("/api/organization", orgRoutes);
 app.use("/api/loans", loanRoutes);
@@ -244,6 +246,7 @@ app.use("/overtime-allocations", overtimeAllocationRoutes);
 app.use("/shift-overrides", shiftOverrideRoutes);
 app.use("/billing", billingRoutes);
 app.use("/chat", chatRoutes);
+app.use("/ai", aiRoutes);
 app.use("/biometric", biometricRoutes);
 app.use("/organization", orgRoutes);
 app.use("/loans", loanRoutes);

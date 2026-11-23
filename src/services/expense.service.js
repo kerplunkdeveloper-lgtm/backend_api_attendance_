@@ -449,11 +449,7 @@ class ExpenseService {
 
     return updatedClaim;
   }
-
-  /**
-   * 5. Delete a Pending Claim (Employee can cancel before review)
-   */
-  async deleteExpenseClaim(organizationId, employeeId, claimId, isAdmin = false) {
+async deleteExpenseClaim(organizationId, employeeId, claimId, isAdmin = false) {
     const where = { id: claimId, organizationId };
     if (!isAdmin && employeeId) {
       where.employeeId = employeeId;
@@ -468,8 +464,13 @@ class ExpenseService {
       throw error;
     }
 
-    if (claim.status !== "PENDING") {
-      const error = new Error("Only pending claims can be cancelled.");
+    const canDeleteApproved = isAdmin && claim.status === "APPROVED" && !claim.payslipId;
+    if (claim.status !== "PENDING" && !canDeleteApproved) {
+      const error = new Error(
+        claim.status === "PAID" || claim.payslipId
+          ? "This expense claim is already bundled into payroll and cannot be deleted."
+          : "Only pending claims or unbundled approved claims can be deleted.",
+      );
       error.statusCode = 400;
       throw error;
     }
