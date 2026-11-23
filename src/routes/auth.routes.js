@@ -15,7 +15,7 @@ const { imageUploader, handleUploadErrors } = require("../middleware/upload.midd
 const { protectCookieMutation } = require("../middleware/requestSecurity.middleware");
 
 const router = express.Router();
-const avatarUpload = imageUploader(6);
+const avatarUpload = imageUploader();
 const avatarFields = avatarUpload.fields([
   { name: "image", maxCount: 1 },
   { name: "file", maxCount: 1 },

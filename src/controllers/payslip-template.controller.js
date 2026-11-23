@@ -1,5 +1,6 @@
 const payslipTemplateService = require("../services/payslip-template.service");
 const { sendControllerError } = require("../utils/controllerError");
+const { assertStorageAvailable, addStorageObject } = require("../services/storage-quota.service");
 
 class PayslipTemplateController {
   async getPresets(req, res) {
@@ -63,17 +64,23 @@ class PayslipTemplateController {
           .json({ success: false, message: "No image file provided" });
       }
 
-      // Convert uploaded file to base64 Data URI for immediate reliable cross-environment rendering
-      const mime = req.file.mimetype || "image/png";
-      const base64 = req.file.buffer.toString("base64");
-      const dataUri = `data:${mime};base64,${base64}`;
+      await assertStorageAvailable(req.user.organizationId, req.file.size || req.file.buffer.length);
+
+      const cloudinary = require("../config/cloudinary");
+      const uploaded = await cloudinary.uploadBuffer(req.file.buffer, {
+        folder: `workpulse/${req.user.organizationId}/payslip-assets`,
+        resource_type: "image",
+        transformation: [{ width: 1200, height: 1200, crop: "limit", quality: "auto", fetch_format: "auto" }],
+      });
+      const assetUrl = uploaded.secure_url || uploaded.url;
+      await addStorageObject({ organizationId: req.user.organizationId, provider: "cloudinary", storageKey: uploaded.public_id, bytes: uploaded.bytes || req.file.buffer.length, mimeType: req.file.mimetype, purpose: "payslip-assets" });
 
       const { assetType } = req.body; // 'logo' or 'signature'
       const updateData = {};
       if (assetType === "signature") {
-        updateData.signatureImageUrl = dataUri;
+        updateData.signatureImageUrl = assetUrl;
       } else {
-        updateData.logoUrl = dataUri;
+        updateData.logoUrl = assetUrl;
       }
 
       const updated = await payslipTemplateService.upsertOrganizationTemplate(
@@ -84,7 +91,7 @@ class PayslipTemplateController {
       return res.status(200).json({
         success: true,
         message: `${assetType === "signature" ? "Authorized Signature" : "Company Logo"} uploaded successfully`,
-        data: { url: dataUri, template: updated },
+        data: { url: assetUrl, template: updated },
       });
     } catch (err) {
       return sendControllerError(res, err, { fallbackStatus: 500 });

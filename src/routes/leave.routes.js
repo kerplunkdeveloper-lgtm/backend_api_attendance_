@@ -33,6 +33,18 @@ router.post(
   leaveController.carryForward,
 );
 router.get("/balances", leaveController.getLeaveBalances);
+router.get(
+  "/balances/team",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
+  leaveController.getTeamLeaveBalances,
+);
+// Compatibility alias for older browser bundles that used the noun-first path.
+// Keep the canonical route above for new clients.
+router.get(
+  "/team-balances",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
+  leaveController.getTeamLeaveBalances,
+);
 router.get("/conflicts", leaveController.getDepartmentConflicts);
 router.get(
   "/employees/:employeeId/balances",

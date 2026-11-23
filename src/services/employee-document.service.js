@@ -20,6 +20,7 @@ const {
   uploadBuffer: uploadToS3,
   deleteObject: deleteFromS3,
 } = require("../config/s3");
+const { assertStorageAvailable, addStorageObject, removeStorageObject } = require("./storage-quota.service");
 
 // --------------------------------------------------
 // Helpers
@@ -292,7 +293,7 @@ async function storeDocument({
   return {
     fileUrl: result.secure_url,
     storageProvider: "cloudinary",
-    storageKey: null,
+    storageKey: result.public_id || null,
     fileSize: result.bytes || null,
   };
 }
@@ -675,6 +676,8 @@ class EmployeeDocumentService {
       mimeType: computedMimeType,
     });
 
+    if (stored.fileSize) await assertStorageAvailable(organizationId, stored.fileSize);
+
     let newDocument;
 
     try {
@@ -698,6 +701,9 @@ class EmployeeDocumentService {
             : null,
         },
       });
+      if (stored.storageKey && stored.fileSize) {
+        await addStorageObject({ organizationId, provider: stored.storageProvider, storageKey: stored.storageKey, bytes: stored.fileSize, mimeType: computedMimeType, purpose: "documents" });
+      }
     } catch (error) {
       if (stored.storageProvider === "s3") {
         await cleanupS3(
@@ -860,6 +866,8 @@ class EmployeeDocumentService {
 
     let updated;
 
+    if (stored?.fileSize) await assertStorageAvailable(organizationId, stored.fileSize);
+
     try {
       // Avoid overwriting a document replaced by
       // another request in the meantime.
@@ -902,6 +910,10 @@ class EmployeeDocumentService {
     }
 
     // Remove previous S3 object only after DB update.
+    if (stored?.storageKey && stored.fileSize) {
+      await addStorageObject({ organizationId, provider: stored.storageProvider, storageKey: stored.storageKey, bytes: stored.fileSize, mimeType: computedMimeType, purpose: "documents" });
+    }
+
     if (
       stored &&
       existing.storageProvider === "s3" &&
@@ -967,6 +979,10 @@ class EmployeeDocumentService {
         organizationId,
         "Deleted document cleanup"
       );
+    }
+
+    if (existing.storageKey) {
+      await removeStorageObject({ organizationId, provider: existing.storageProvider, storageKey: existing.storageKey });
     }
 
     return {

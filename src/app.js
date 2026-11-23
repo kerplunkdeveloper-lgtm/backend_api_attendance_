@@ -135,8 +135,8 @@ app.use(
 app.use(cookieParser());
 app.use("/api/billing/webhook", express.raw({ type: "application/json" }), billingWebhookRoutes);
 app.use("/billing/webhook", express.raw({ type: "application/json" }), billingWebhookRoutes);
-app.use(express.json({ limit: "5mb" }));
-app.use(express.urlencoded({ extended: true, limit: "5mb" }));
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(rejectUnsafePayload);
 const slowApiThresholdMs = Math.max(100, Number(process.env.SLOW_API_THRESHOLD_MS) || 1000);
 app.use(
@@ -219,6 +219,7 @@ app.use("/attendance", attendanceRoutes);
 // Alpha's reverse proxy forwards requests after stripping the /api prefix.
 // Keep the feature routers mounted at both their canonical API paths and the
 // legacy /attendance paths used by older browser bundles.
+app.use("/attendance/day-off-work", dayOffWorkRoutes);
 app.use("/attendance/shoot-requests", shootRequestRoutes);
 app.use("/attendance/shoot-settlements", shootSettlementRoutes);
 app.use("/attendance/permissions", permissionRoutes);

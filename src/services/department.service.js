@@ -65,7 +65,7 @@ const getDepartments = async (organizationId) => {
       where: { organizationId },
       include: {
         _count: {
-          select: { employees: true },
+          select: { employees: { where: { deletedAt: null } } },
         },
         designations: { select: { id: true, name: true }, orderBy: { name: "asc" } },
       },
@@ -74,7 +74,7 @@ const getDepartments = async (organizationId) => {
     // How many people hold each title, counted from the designation written on their profile.
     prisma.employee.groupBy({
       by: ["departmentId", "designation"],
-      where: { organizationId, departmentId: { not: null }, designation: { not: null } },
+      where: { organizationId, deletedAt: null, departmentId: { not: null }, designation: { not: null } },
       _count: { _all: true },
     }),
   ]);
@@ -101,6 +101,7 @@ const getDepartmentById = async (organizationId, departmentId) => {
     where: { id: departmentId, organizationId },
     include: {
       employees: {
+        where: { deletedAt: null },
         select: {
           id: true,
           firstName: true,
@@ -110,7 +111,7 @@ const getDepartmentById = async (organizationId, departmentId) => {
         },
       },
       _count: {
-        select: { employees: true },
+        select: { employees: { where: { deletedAt: null } } },
       },
     },
   });

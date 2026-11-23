@@ -9,6 +9,7 @@ const whatsappService = require("./whatsapp.service");
 const notificationService = require("./notification.service");
 const policyService = require("./policy.service");
 const webhookService = require("./webhook.service");
+const { presentEmployeeImage } = require("../utils/privateMediaUrls");
 
 // HR has the same employee-leave management access as a manager. Approval-chain
 // rules still keep requests raised by HR/admin accounts admin-only.
@@ -18,6 +19,65 @@ const ADMIN_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"];
 const BLOCKING_STATUSES = ["PENDING", "APPROVED"];
 const OT_LEAVE_CODE = "OTL";
 const isOtLeaveType = (leaveType) => String(leaveType?.code || "").toUpperCase() === OT_LEAVE_CODE;
+
+// Keep the leave history reads limited to columns that have existed since the
+// original leave schema. Prisma's `include: true` selects every column and
+// makes an older database return 500 when a newer optional field is absent.
+const leaveChangeRequestReadSelect = {
+  id: true,
+  organizationId: true,
+  leaveRequestId: true,
+  employeeId: true,
+  oldStartDate: true,
+  oldEndDate: true,
+  newStartDate: true,
+  newEndDate: true,
+  reason: true,
+  status: true,
+  requestedBy: true,
+  reviewedBy: true,
+  reviewNote: true,
+  reviewedAt: true,
+  createdAt: true,
+  updatedAt: true,
+  leaveRequest: {
+    select: {
+      id: true,
+      organizationId: true,
+      employeeId: true,
+      leaveTypeId: true,
+      startDate: true,
+      endDate: true,
+      totalDays: true,
+      halfDayPeriod: true,
+      reason: true,
+      status: true,
+      reviewedBy: true,
+      reviewNote: true,
+      createdAt: true,
+      updatedAt: true,
+      leaveType: {
+        select: {
+          id: true,
+          organizationId: true,
+          name: true,
+          code: true,
+          daysAllowed: true,
+          isPaid: true,
+        },
+      },
+    },
+  },
+  employee: {
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      employeeCode: true,
+      department: { select: { name: true } },
+    },
+  },
+};
 
 const toDateKey = (date) => new Date(date).toISOString().split("T")[0];
 
@@ -446,11 +506,19 @@ class LeaveService {
   async getMyLeaveChangeRequests(userId, organizationId) {
     const employee = await prisma.employee.findFirst({ where: { userId, organizationId }, select: { id: true } });
     if (!employee) return [];
-    return prisma.leaveChangeRequest.findMany({ where: { organizationId, employeeId: employee.id }, include: { leaveRequest: { include: { leaveType: true } } }, orderBy: { createdAt: "desc" } });
+    return prisma.leaveChangeRequest.findMany({
+      where: { organizationId, employeeId: employee.id },
+      select: leaveChangeRequestReadSelect,
+      orderBy: { createdAt: "desc" },
+    });
   }
 
   async getAllLeaveChangeRequests(organizationId, status = "PENDING") {
-    return prisma.leaveChangeRequest.findMany({ where: { organizationId, ...(status !== "ALL" ? { status } : {}) }, include: { leaveRequest: { include: { leaveType: true } }, employee: { select: { id: true, firstName: true, lastName: true, employeeCode: true, department: { select: { name: true } } } } }, orderBy: { createdAt: "desc" } });
+    return prisma.leaveChangeRequest.findMany({
+      where: { organizationId, ...(status !== "ALL" ? { status } : {}) },
+      select: leaveChangeRequestReadSelect,
+      orderBy: { createdAt: "desc" },
+    });
   }
 
   async reviewLeaveDateChange(requestId, organizationId, reviewerUserId, data, reviewerRole = "COMPANY_ADMIN") {
@@ -741,7 +809,36 @@ class LeaveService {
     return await prisma.leaveRequest.findMany({
       take: 500, // safety cap: a person's own history can grow for years
       where: { employeeId: employee.id, organizationId },
-      include: { leaveType: true },
+      // Keep this read compatible with older leave databases. `include: true`
+      // selects every LeaveType column, so adding an unrelated column could
+      // make the whole Leave menu return HTTP 500 until that database was
+      // migrated. These are the only fields the leave history needs.
+      select: {
+        id: true,
+        organizationId: true,
+        employeeId: true,
+        leaveTypeId: true,
+        startDate: true,
+        endDate: true,
+        totalDays: true,
+        halfDayPeriod: true,
+        reason: true,
+        status: true,
+        reviewedBy: true,
+        reviewNote: true,
+        createdAt: true,
+        updatedAt: true,
+        leaveType: {
+          select: {
+            id: true,
+            organizationId: true,
+            name: true,
+            code: true,
+            daysAllowed: true,
+            isPaid: true,
+          },
+        },
+      },
       orderBy: { createdAt: "desc" },
     });
   }
@@ -750,7 +847,7 @@ class LeaveService {
    * 6. Get All Leave Requests (Manager & Admin)
    */
   async getAllLeaveRequests(organizationId, query = {}, reviewerRole = "COMPANY_ADMIN") {
-    const { status, employeeId, page = 1, limit = 50 } = query;
+    const { status, employeeId, year = new Date().getFullYear(), page = 1, limit = 50 } = query;
     const where = { organizationId, ...visibleToReviewer(reviewerRole) };
 
     if (status && status !== "ALL") {
@@ -773,6 +870,8 @@ class LeaveService {
               firstName: true,
               lastName: true,
               employeeCode: true,
+              avatarUrl: true,
+              avatarStorageKey: true,
               user: { select: { email: true } },
             },
           },
@@ -784,7 +883,129 @@ class LeaveService {
       prisma.leaveRequest.count({ where }),
     ]);
 
-    return { records, total, page: curPage, totalPages: Math.ceil(total / take) };
+    const employeeIds = [...new Set(records.map((record) => record.employeeId).filter(Boolean))];
+    const balanceSummary = await this.getApprovalBalanceSummary(organizationId, employeeIds, year);
+
+    return {
+      records: records.map((record) => {
+        const leaveBalance = balanceSummary.get(record.employeeId) || {
+          year: new Date().getFullYear(),
+          paidRemainingDays: 0,
+          unpaidRemainingDays: 0,
+        };
+        return {
+          ...record,
+          employee: presentEmployeeImage(record.employee),
+          leaveBalance,
+          paidLeaveRemainingDays: leaveBalance.paidRemainingDays,
+          unpaidLeaveRemainingDays: leaveBalance.unpaidRemainingDays,
+        };
+      }),
+      total,
+      page: curPage,
+      totalPages: Math.ceil(total / take),
+    };
+  }
+
+  /**
+   * Compact paid/unpaid balances for the approvals inbox.
+   * Uses batched queries instead of loading balances once per table row.
+   * Pending requests are reserved, matching the employee balance screen.
+   */
+  async getApprovalBalanceSummary(organizationId, employeeIds, year = new Date().getFullYear()) {
+    if (!employeeIds.length) return new Map();
+
+    const targetYear = Number.parseInt(year, 10) || new Date().getFullYear();
+    const yearStart = new Date(Date.UTC(targetYear, 0, 1));
+    const yearEnd = new Date(Date.UTC(targetYear, 11, 31, 23, 59, 59, 999));
+    const [leaveTypes, balances, pending] = await Promise.all([
+      this.getLeaveTypes(organizationId),
+      prisma.leaveBalance.findMany({
+        where: { organizationId, employeeId: { in: employeeIds }, year: targetYear },
+        select: { employeeId: true, leaveTypeId: true, allocatedDays: true, usedDays: true },
+      }),
+      // Keep this as one batched read rather than one balance request per row.
+      // A few deployed Prisma clients do not expose groupBy consistently.
+      prisma.leaveRequest.findMany({
+        where: {
+          organizationId,
+          employeeId: { in: employeeIds },
+          status: "PENDING",
+          startDate: { gte: yearStart },
+          endDate: { lte: yearEnd },
+        },
+        select: { employeeId: true, leaveTypeId: true, totalDays: true },
+      }),
+    ]);
+
+    const balanceByKey = new Map(balances.map((balance) => [
+      `${balance.employeeId}:${balance.leaveTypeId}`,
+      balance,
+    ]));
+    const pendingByKey = new Map();
+    for (const row of pending) {
+      const key = `${row.employeeId}:${row.leaveTypeId}`;
+      pendingByKey.set(key, (pendingByKey.get(key) || 0) + Number(row.totalDays || 0));
+    }
+    const summary = new Map();
+
+    for (const employeeId of employeeIds) {
+      let paidRemainingDays = 0;
+      let unpaidRemainingDays = 0;
+      const remainingByCode = {};
+      for (const type of leaveTypes) {
+        const balance = balanceByKey.get(`${employeeId}:${type.id}`);
+        const allocated = Number(balance?.allocatedDays ?? type.daysAllowed ?? 0);
+        const used = Number(balance?.usedDays ?? 0);
+        const pendingDays = pendingByKey.get(`${employeeId}:${type.id}`) || 0;
+        const remaining = Math.max(0, allocated - used - pendingDays);
+        if (type.code) remainingByCode[String(type.code).toUpperCase()] = remaining;
+        if (type.isPaid) paidRemainingDays += remaining;
+        else unpaidRemainingDays += remaining;
+      }
+      summary.set(employeeId, {
+        year: targetYear,
+        paidRemainingDays,
+        unpaidRemainingDays,
+        // Keep the summary extensible: the UI must show only the leave types
+        // configured for this organization, not a hardcoded CL/SL pair.
+        remainingByLeaveType: remainingByCode,
+      });
+    }
+    return summary;
+  }
+
+  async getTeamLeaveBalanceSummaries(organizationId, year = new Date().getFullYear()) {
+    const employees = await prisma.employee.findMany({
+      where: {
+        organizationId,
+        deletedAt: null,
+        status: { in: [...WORKING_STATUSES] },
+        // Company/platform admin accounts are workspace owners, not leave
+        // eligible workforce members. Some older records have an Employee row
+        // and an employee code, so filtering only by employeeCode is not safe.
+        user: { role: { notIn: ["SUPER_ADMIN", "COMPANY_ADMIN"] } },
+      },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        employeeCode: true,
+        branchId: true,
+        branch: { select: { id: true, name: true } },
+      },
+      orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
+    });
+    const summaries = await this.getApprovalBalanceSummary(organizationId, employees.map((employee) => employee.id), year);
+    return employees.map((employee) => ({
+      employee,
+      ...(summaries.get(employee.id) || {
+        year: Number(year) || new Date().getFullYear(),
+        paidRemainingDays: 0,
+        unpaidRemainingDays: 0,
+        remainingByLeaveType: {},
+      }),
+    }));
   }
 
   /**

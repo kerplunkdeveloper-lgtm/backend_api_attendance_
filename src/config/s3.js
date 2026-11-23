@@ -87,14 +87,27 @@ async function uploadBuffer(
     crypto.randomUUID(),
   ].join("/");
 
-  await s3.send(
-    new PutObjectCommand({
-      Bucket: BUCKET,
-      Key: key,
-      Body: buffer,
-      ContentType: contentType,
-    })
-  );
+  try {
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: BUCKET,
+        Key: key,
+        Body: buffer,
+        ContentType: contentType,
+      })
+    );
+  } catch (error) {
+    if (error?.name === "CredentialsProviderError" || error?.code === "CredentialsProviderError") {
+      const storageError = new Error(
+        "S3 storage is not configured. Set AWS credentials or attach an IAM role to the server."
+      );
+      storageError.statusCode = 503;
+      storageError.code = "S3_CREDENTIALS_MISSING";
+      storageError.cause = error;
+      throw storageError;
+    }
+    throw error;
+  }
 
   return {
     bucket: BUCKET,

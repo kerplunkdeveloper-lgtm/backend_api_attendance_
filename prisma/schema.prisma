@@ -95,6 +95,7 @@ model Organization {
   trialEndsAt           DateTime?
   subscriptionExpiresAt DateTime?
   maxEmployees          Int                @default(10)
+  storageUsedBytes      Decimal            @default(0) @db.Decimal(20, 0)
   subscription          Subscription?
 
   // ── Plan Unlock Code (sent via email after registration/payment) ──────────
@@ -179,6 +180,23 @@ model Organization {
   dayOffWorkRequests   DayOffWorkRequest[]
   shootRequests        ShootRequest[]
   workFromHomeRequests WorkFromHomeRequest[]
+  storageObjects       StorageObject[]
+}
+
+model StorageObject {
+  id             String   @id @default(uuid())
+  organizationId String
+  provider       String
+  storageKey     String
+  bytes          Int
+  mimeType       String?
+  purpose        String   @default("upload")
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, purpose])
+  @@unique([provider, storageKey])
 }
 
 // ─── Working on a day off (weekly off, holiday, company leave) ───────────────
@@ -263,7 +281,6 @@ model ShootRequest {
   participants ShootRequestParticipant[]
   settlements  ShootSettlement[]
 
-  @@unique([employeeId, date])
   @@index([organizationId, status, date])
   @@index([employeeId, date])
 }
@@ -800,7 +817,8 @@ model Employee {
   dayOffWorkRequests       DayOffWorkRequest[]
   biometricCredentials     BiometricCredential[]
 
-  @@unique([organizationId, employeeCode])
+  // Employee codes are unique only among live records. The database migration
+  // enforces this with a partial unique index so soft-deleted codes can be reused.
   @@index([organizationId])
   @@index([organizationId, status])
   @@index([personalEmail])

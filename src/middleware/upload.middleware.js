@@ -1,4 +1,5 @@
 const multer = require("multer");
+const { UPLOAD_POLICY } = require("../config/upload-policy");
 
 const IMAGE_MIME_TYPES = [
   "image/jpeg",
@@ -137,13 +138,16 @@ const handleUploadErrors = (err, req, res, next) => {
   return next(err);
 };
 
-const imageUploader = (maxMb = 10) =>
-  createUploader({ allowed: IMAGE_MIME_TYPES, maxBytes: maxMb * 1024 * 1024 });
-
-const documentUploader = (maxMb = 15) =>
+const imageUploader = (maxMb = null) =>
   createUploader({
-    allowed: [...IMAGE_MIME_TYPES, ...DOCUMENT_MIME_TYPES],
-    maxBytes: maxMb * 1024 * 1024,
+    allowed: UPLOAD_POLICY.avatar.allowed,
+    maxBytes: maxMb == null ? UPLOAD_POLICY.avatar.maxBytes : maxMb * 1024 * 1024,
+  });
+
+const documentUploader = (maxMb = null) =>
+  createUploader({
+    allowed: UPLOAD_POLICY.document.allowed,
+    maxBytes: maxMb == null ? UPLOAD_POLICY.document.maxBytes : maxMb * 1024 * 1024,
   });
 
 module.exports = {

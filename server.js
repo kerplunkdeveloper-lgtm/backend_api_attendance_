@@ -3,6 +3,7 @@ require("dotenv").config();
 const app = require("./src/app");
 const prisma = require("./src/config/database");
 const notificationService = require("./src/services/notification.service");
+const auditService = require("./src/services/audit.service");
 const { disconnectRedis } = require("./src/config/redis");
 const { warmVerifier, shutdownVerifier } = require("./src/utils/passwordVerifier");
 
@@ -18,6 +19,9 @@ warmVerifier();
  * Defaults to on outside production to keep local development unchanged.
  */
 function startBackgroundScheduler() {
+  // Audit retention is always enabled. It is leader-locked, so it remains
+  // safe when more than one API process is running.
+  auditService.startRetentionScheduler();
   const flag = process.env.ENABLE_SCHEDULER;
   const enabled = flag === undefined ? process.env.NODE_ENV !== "production" : flag === "true";
 
