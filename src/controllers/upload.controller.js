@@ -26,7 +26,9 @@ const ALLOWED_SUBFOLDERS = [
 const ACCEPTED_DATA_URI =
   /^data:(image\/(?:jpeg|png|webp|gif)|application\/pdf);base64,([A-Za-z0-9+/]+={0,2})$/i;
 
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
+const { UPLOAD_POLICY } = require("../config/upload-policy");
+const { assertStorageAvailable, addStorageObject } = require("../services/storage-quota.service");
+const MAX_FILE_BYTES = UPLOAD_POLICY.document.maxBytes;
 
 function resolveFolder(requested) {
   return ALLOWED_SUBFOLDERS.includes(requested)
@@ -153,6 +155,8 @@ class UploadController {
 
       let result;
 
+      await assertStorageAvailable(organizationId, buffer.length);
+
       if (process.env.STORAGE_PROVIDER === "s3") {
         result = await uploadS3(buffer, {
           organizationId,
@@ -177,6 +181,15 @@ class UploadController {
 
         result = cloudinaryResponse(uploaded);
       }
+
+      await addStorageObject({
+        organizationId,
+        provider: result.provider,
+        storageKey: result.key || result.publicId,
+        bytes: result.bytes || buffer.length,
+        mimeType: contentType,
+        purpose: folder,
+      });
 
       return res.status(200).json({
         success: true,

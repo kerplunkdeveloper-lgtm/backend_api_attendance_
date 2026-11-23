@@ -29,12 +29,9 @@ class ShootRequestService {
     if (!requestedIds.includes(requester.id)) requestedIds.unshift(requester.id);
     const employees = await prisma.employee.findMany({ where: { id: { in: requestedIds }, organizationId, deletedAt: null, status: "ACTIVE" }, select: { id: true, firstName: true, lastName: true, userId: true, user: { select: { role: true } } } });
     if (employees.length !== requestedIds.length) throw fail("One or more selected employees are not active in this organization.", 400);
-    const existing = await prisma.shootRequest.findUnique({ where: { employeeId_date: { employeeId: requester.id, date } } });
-    if (existing?.status === "PENDING") throw fail("A shoot request for this date is already pending.", 409);
-    if (existing?.status === "APPROVED") throw fail("A shoot request for this date is already approved.", 409);
     const data = { organizationId, employeeId: requester.id, date, shootName, location, startTime, endTime, note: note || null, status: "PENDING", reviewedBy: null, reviewNote: null, reviewedAt: null, cancellationRequested: false, cancellationRequestedBy: null, cancellationRequestedAt: null, cancellationReviewNote: null };
     const request = await prisma.$transaction(async (tx) => {
-      const row = existing ? await tx.shootRequest.update({ where: { id: existing.id }, data }) : await tx.shootRequest.create({ data });
+      const row = await tx.shootRequest.create({ data });
       await tx.shootRequestParticipant.deleteMany({ where: { shootRequestId: row.id } });
       await tx.shootRequestParticipant.createMany({ data: requestedIds.map((employeeId) => ({ shootRequestId: row.id, employeeId })) });
       return tx.shootRequest.findUnique({ where: { id: row.id }, include: { participants: { include: { employee: { select: { id: true, firstName: true, lastName: true } } } } } });
@@ -47,6 +44,30 @@ class ShootRequestService {
       type: "APPROVAL",
     });
     return request;
+  }
+
+  async update(id, userId, organizationId, body = {}) {
+    const existing = await prisma.shootRequest.findFirst({ where: { id, organizationId }, include: { employee: { select: { userId: true } } } });
+    if (!existing) throw fail("Shoot request not found.", 404);
+    if (existing.employee?.userId !== userId) throw fail("Only the requester can edit this shoot request.", 403);
+    if (existing.status !== "PENDING") throw fail("Only pending shoot requests can be edited. Use Add another shoot for an approved shoot.", 409);
+    const date = await getShootDate(organizationId, new Date(body.date));
+    if (!body.date || Number.isNaN(date.getTime())) throw fail("A valid shoot date is required.");
+    const shootName = clean(body.shootName, 120), location = clean(body.location, 180), note = clean(body.note);
+    const startTime = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(body.startTime || "")) ? String(body.startTime) : "00:00";
+    const endTime = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(body.endTime || "")) ? String(body.endTime) : "23:59";
+    if (!shootName || !location) throw fail("Shoot name and location are required.");
+    if (endTime <= startTime) throw fail("Shoot end time must be after start time.");
+    const requestedIds = Array.isArray(body.employeeIds) ? [...new Set(body.employeeIds.map(String).filter(Boolean))] : [existing.employeeId];
+    if (!requestedIds.includes(existing.employeeId)) requestedIds.unshift(existing.employeeId);
+    const employees = await prisma.employee.findMany({ where: { id: { in: requestedIds }, organizationId, deletedAt: null, status: "ACTIVE" }, select: { id: true } });
+    if (employees.length !== requestedIds.length) throw fail("One or more selected employees are not active in this organization.");
+    return prisma.$transaction(async (tx) => {
+      const row = await tx.shootRequest.update({ where: { id }, data: { date, shootName, location, startTime, endTime, note: note || null } });
+      await tx.shootRequestParticipant.deleteMany({ where: { shootRequestId: id } });
+      await tx.shootRequestParticipant.createMany({ data: requestedIds.map((employeeId) => ({ shootRequestId: id, employeeId })) });
+      return tx.shootRequest.findUnique({ where: { id: row.id }, include: { participants: { include: { employee: { select: { id: true, firstName: true, lastName: true } } } } } });
+    });
   }
 
   async participants(organizationId) {

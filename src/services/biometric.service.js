@@ -7,13 +7,23 @@ function rawKey() {
   return `wp_bio_${crypto.randomBytes(24).toString("hex")}`;
 }
 
-function normalizeCardUid(value) {
-  return String(value || "").trim().toUpperCase();
-}
-
 function normalizeCredentialType(value) {
   const type = String(value || "CARD_UID").trim().toUpperCase();
   return ["CARD_UID", "NFC_UID", "BIOMETRIC_USER_ID"].includes(type) ? type : "CARD_UID";
+}
+
+// Card readers commonly emit the same UID as `04 a1-b2:c3`, `04A1B2C3`,
+// or with a trailing line break. Store one canonical representation so a
+// mapped card is still found regardless of the reader/connector format.
+function normalizeCredentialValue(value, credentialType = "CARD_UID") {
+  const text = String(value ?? "").trim().toUpperCase();
+  if (!text) return "";
+  return credentialType === "BIOMETRIC_USER_ID" ? text : text.replace(/[\s:-]/g, "");
+}
+
+function normalizedEventId(value) {
+  const text = String(value ?? "").trim();
+  return text ? text.slice(0, 200) : null;
 }
 
 async function createDevice(organizationId, { name, location }) {
@@ -70,8 +80,8 @@ async function listCredentials(organizationId) {
 }
 
 async function assignCard(organizationId, { employeeId, cardUid, cardId, credentialValue, credentialType, label }) {
-  const value = normalizeCardUid(cardUid || cardId || credentialValue);
   const type = normalizeCredentialType(credentialType);
+  const value = normalizeCredentialValue(cardUid || cardId || credentialValue, type);
   if (!employeeId || !value) {
     const err = new Error("Employee and card ID are required");
     err.statusCode = 400;
@@ -120,15 +130,15 @@ async function resolveDevice(apiKey) {
   return null;
 }
 
-async function ingestPunch({ apiKey, employeeCode, cardUid, cardId, badgeId, credentialValue, credentialType, punchType, timestamp }) {
+async function ingestPunch({ apiKey, employeeCode, cardUid, cardId, badgeId, credentialValue, credentialType, punchType, timestamp, eventId }) {
   const device = await resolveDevice(apiKey);
   if (!device) {
     const err = new Error("Invalid biometric device key");
     err.statusCode = 401;
     throw err;
   }
-  const normalizedCard = normalizeCardUid(cardUid || cardId || badgeId || credentialValue);
   const normalizedType = normalizeCredentialType(credentialType);
+  const normalizedCard = normalizeCredentialValue(cardUid || cardId || badgeId || credentialValue, normalizedType);
   const employee = normalizedCard
     ? (await prisma.biometricCredential.findFirst({
         where: { organizationId: device.organizationId, credentialType: normalizedType, cardUid: normalizedCard, isActive: true, employee: { deletedAt: null, status: { in: ["ACTIVE", "PROBATION", "NOTICE_PERIOD"] } } },
@@ -148,10 +158,35 @@ async function ingestPunch({ apiKey, employeeCode, cardUid, cardId, badgeId, cre
     throw err;
   }
 
+  const normalizedEvent = normalizedEventId(eventId);
+  const durableEventId = normalizedEvent
+    ? `${device.organizationId}:${employee.userId || "anon"}:${normalizedEvent}`
+    : null;
+  if (durableEventId && prisma.attendanceEvent?.findFirst) {
+    const previous = await prisma.attendanceEvent.findFirst({
+      where: { clientEventId: durableEventId },
+      include: { attendance: true },
+    });
+    if (previous) {
+      return {
+        punch: previous.type === "CHECK_OUT" ? "OUT" : "IN",
+        attendance: previous.attendance,
+        deviceId: device.id,
+        duplicate: true,
+      };
+    }
+  }
+
   let type = String(punchType || "TOGGLE").toUpperCase();
   if (type === "TOGGLE") {
-    const status = await attendanceService.getTodayStatus(employee.userId, device.organizationId, "EMPLOYEE");
-    type = status.clockedIn ? "OUT" : "IN";
+    // Some employee records intentionally have no login user. Resolving the
+    // status by userId made every toggle from those cards become an IN.
+    const openAttendance = attendanceService.findOpenAttendance
+      ? await attendanceService.findOpenAttendance(employee.id, device.organizationId, new Date())
+      : await attendanceService.getTodayStatus(employee.userId, device.organizationId, "EMPLOYEE");
+    type = openAttendance?.clockedIn !== undefined
+      ? (openAttendance.clockedIn ? "OUT" : "IN")
+      : (openAttendance?.checkIn && !openAttendance?.checkOut ? "OUT" : "IN");
   }
   if (type !== "IN" && type !== "OUT") {
     const err = new Error("punchType must be IN, OUT, or TOGGLE");
@@ -173,6 +208,7 @@ async function ingestPunch({ apiKey, employeeCode, cardUid, cardId, badgeId, cre
     skipGeofence: true,
     source: "BIOMETRIC",
     workMode: "OFFICE",
+    clientEventId: normalizedEvent,
   };
 
   if (type === "OUT") {

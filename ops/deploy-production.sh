@@ -46,6 +46,9 @@ set -a
 source "$ENV_FILE"
 set +a
 [[ -n "${DATABASE_URL:-}" ]] || { echo 'DATABASE_URL missing in production env'; exit 6; }
+[[ "${STORAGE_PROVIDER:-}" == "s3" ]] || { echo 'Production STORAGE_PROVIDER must be s3'; exit 6; }
+[[ -n "${AWS_REGION:-}" ]] || { echo 'AWS_REGION missing in production env'; exit 6; }
+[[ -n "${S3_BUCKET_NAME:-${AWS_S3_BUCKET:-}}" ]] || { echo 'S3 bucket missing in production env'; exit 6; }
 PGPASS="$WORKDIR/pgpass"
 export DATABASE_URL PGPASS
 python3 - <<'PY'

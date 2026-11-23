@@ -488,9 +488,10 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
   assertLocationCaptured({ latitude, longitude, action: "in", skip: skipGeofence || source === "BIOMETRIC" || (isOnBehalf(employee, userId) && ADMIN_ROLES.includes(actorRole)) });
 
   let punchNote = note;
+  let approvedShoot = null;
 
   if (workMode === "SHOOT") {
-    const approvedShoot = await shootRequestService.getApprovedForDate(employee.id, organizationId, today);
+    approvedShoot = await shootRequestService.getApprovedForDate(employee.id, organizationId, today);
     if (!approvedShoot) {
       const error = new Error("An approved Shoot Request is required for this date before punching in.");
       error.statusCode = 403;
@@ -561,6 +562,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
     actorRole,
     onBehalf: isOnBehalf(employee, userId),
     source,
+    approvedShoot,
     dayOff: companyLeave
       ? { kind: "COMPANY_LEAVE", title: companyLeave.title }
       : holidayRow
@@ -1118,7 +1120,30 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
 
   const isFullDayLeave = Boolean(approvedLeave && !approvedLeave.halfDayPeriod);
   const isNonWorkingDay = isOffDay || Boolean(holiday) || isFullDayLeave;
+  // Only look up a shoot exception when the date would otherwise be blocked.
+  // The guard also keeps older test/mocked Prisma clients compatible.
+  const approvedShoot = isNonWorkingDay && prisma.shootRequest
+    ? await shootRequestService.getApprovedForDate(employee.id, organizationId, attendanceDate)
+    : null;
   assertHalfDayPunchWindow({ approvedLeave, shift, at: checkOutTime, timezone, action: "CHECK_OUT", employee, userId, actorRole });
+  await assertDayOffWorkApproved({
+    employee,
+    organizationId,
+    today: attendanceDate,
+    at: checkOutTime,
+    timezone,
+    actorRole,
+    onBehalf: isOnBehalf(employee, userId),
+    source,
+    approvedShoot,
+    dayOff: companyLeave
+      ? { kind: "COMPANY_LEAVE", title: companyLeave.title }
+      : holidayRow
+        ? { kind: "HOLIDAY", title: holidayRow.name }
+        : isOffDay
+          ? { kind: "WEEK_OFF", title: weekdayName(attendanceDate, timezone) }
+          : null,
+  });
 
   // Auto-close either kind of pause at checkout and keep break/lunch totals separate.
   const activePauseStart = attendance.events?.[0];
@@ -1743,9 +1768,13 @@ const dayOffMessage = (dayOff, at, timezone) => {
  * Punching is closed on a weekly off, holiday or company leave unless HR or an admin approved work for
  * that date. Admins marking someone else's attendance and biometric devices are not blocked.
  */
-const assertDayOffWorkApproved = async ({ employee, organizationId, today, at, timezone, dayOff, actorRole, onBehalf, source }) => {
+const assertDayOffWorkApproved = async ({ employee, organizationId, today, at, timezone, dayOff, actorRole, onBehalf, source, approvedShoot }) => {
   if (!dayOff) return null;
   if (source === "BIOMETRIC" || (onBehalf && ADMIN_ROLES.includes(actorRole))) return null;
+  // An approved shoot is itself an authorization to work on the date. This is
+  // especially important when the shoot falls on a weekly off or holiday;
+  // requiring a second, generic day-off-work approval blocks valid shoot punches.
+  if (approvedShoot) return approvedShoot;
   const approved = await prisma.dayOffWorkRequest.findFirst({
     where: { employeeId: employee.id, date: today, status: "APPROVED" },
     select: { id: true, reasonType: true },
@@ -1845,7 +1874,7 @@ const getTodayStatus = async (userId, organizationId, role = "EMPLOYEE") => {
   const dayOff = personalLeaveDay
     ? { ...personalLeaveDay, workRequest: null }
     : dayOffBase
-    ? { kind: dayOffBase.kind, title: dayOffBase.title, reason: dayOffBase.reason, isPaid: dayOffBase.isPaid, workRequest: dayOffBase.kind === "PERSONAL_LEAVE" ? null : workRequest || null, canPunch: dayOffBase.kind !== "PERSONAL_LEAVE" && workRequest?.status === "APPROVED" }
+    ? { kind: dayOffBase.kind, title: dayOffBase.title, reason: dayOffBase.reason, isPaid: dayOffBase.isPaid, workRequest: dayOffBase.kind === "PERSONAL_LEAVE" ? null : workRequest || null, canPunch: dayOffBase.kind !== "PERSONAL_LEAVE" && (workRequest?.status === "APPROVED" || Boolean(approvedShoot)) }
     : null;
 
   const activeShift = attendance?.shift || (await resolveShift(employee, organizationId, now));

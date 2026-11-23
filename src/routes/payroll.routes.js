@@ -8,10 +8,33 @@ const {
   authorizeRoles,
   requireFeature,
 } = require("../middleware/auth.middleware");
+const { UPLOAD_POLICY } = require("../config/upload-policy");
+const { assertRealImage } = require("../middleware/upload.middleware");
 
-const upload = multer({
+const assetUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 8 * 1024 * 1024 }, // 8MB limit for logos, signatures, or templates
+  limits: { fileSize: UPLOAD_POLICY.templateAsset.maxBytes, files: 1 },
+  fileFilter: (req, file, cb) => {
+    if (!UPLOAD_POLICY.templateAsset.allowed.includes(file.mimetype)) {
+      const error = new Error("Only JPG, PNG or WEBP images are allowed for payroll branding.");
+      error.statusCode = 415;
+      return cb(error);
+    }
+    cb(null, true);
+  },
+});
+
+const htmlUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: UPLOAD_POLICY.htmlTemplate.maxBytes, files: 1 },
+  fileFilter: (req, file, cb) => {
+    if (!UPLOAD_POLICY.htmlTemplate.allowed.includes(file.mimetype)) {
+      const error = new Error("Only HTML template files are allowed.");
+      error.statusCode = 415;
+      return cb(error);
+    }
+    cb(null, true);
+  },
 });
 
 const router = express.Router();
@@ -153,7 +176,10 @@ router.post(
 router.post(
   "/templates/upload-asset",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
-  upload.single("file"),
+  assetUpload.single("file"),
+  (req, res, next) => {
+    try { if (req.file) assertRealImage(req.file); next(); } catch (error) { next(error); }
+  },
   payslipTemplateController.uploadAsset,
 );
 
@@ -161,8 +187,14 @@ router.post(
 router.post(
   "/templates/upload-html",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER"),
-  upload.single("file"),
+  htmlUpload.single("file"),
   payslipTemplateController.uploadHtmlTemplate,
 );
+
+router.use((err, req, res, next) => {
+  if (err?.code === "LIMIT_FILE_SIZE") return res.status(413).json({ success: false, message: "Uploaded file is too large." });
+  if (err?.statusCode === 415) return res.status(415).json({ success: false, message: err.message });
+  next(err);
+});
 
 module.exports = router;

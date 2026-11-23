@@ -1,5 +1,6 @@
 const prisma = require("../config/database");
 const { parsePagination } = require("../utils/pagination");
+const { runIfLeader } = require("../utils/jobLease");
 
 const parseDetails = (raw) => {
   if (!raw) return {};
@@ -29,6 +30,42 @@ const ownerFromDetails = (owner) => {
 };
 
 class AuditService {
+  /**
+   * Remove audit evidence older than the retention window. The cleanup is
+   * deliberately service-owned (rather than an API delete route), so users
+   * cannot erase security history manually.
+   */
+  async purgeExpiredLogs(retentionYears = 1) {
+    const years = Number.isFinite(Number(retentionYears)) && Number(retentionYears) > 0
+      ? Number(retentionYears)
+      : 1;
+    const cutoff = new Date();
+    cutoff.setUTCFullYear(cutoff.getUTCFullYear() - years);
+    const result = await prisma.auditLog.deleteMany({ where: { createdAt: { lt: cutoff } } });
+    if (result.count) console.log(`[AuditRetention] Deleted ${result.count} audit logs older than ${cutoff.toISOString()}`);
+    return { deleted: result.count, cutoff };
+  }
+
+  /** Run once a day; the JobLease keeps this safe with multiple API replicas. */
+  startRetentionScheduler() {
+    const retentionYears = Number(process.env.AUDIT_LOG_RETENTION_YEARS) || 1;
+    let running = false;
+    const tick = async () => {
+      if (running) return;
+      running = true;
+      try {
+        await runIfLeader("audit-log-retention", 25 * 60 * 60 * 1000, () => this.purgeExpiredLogs(retentionYears));
+      } catch (error) {
+        console.error("[AuditRetention] Cleanup failed:", error.message);
+      } finally {
+        running = false;
+      }
+    };
+    setTimeout(tick, 10_000);
+    setInterval(tick, 24 * 60 * 60 * 1000);
+    console.log(`[AuditRetention] Automatic cleanup enabled (${retentionYears} year retention)`);
+  }
+
   /**
    * Log an administrative or sensitive action
    */

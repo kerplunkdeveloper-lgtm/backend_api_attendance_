@@ -5,14 +5,18 @@ const {
   authorizeRoles,
 } = require("../middleware/auth.middleware");
 const {
-  documentUploader,
+  createUploader,
   handleUploadErrors,
 } = require("../middleware/upload.middleware");
+const { UPLOAD_POLICY } = require("../config/upload-policy");
 const { validate, schemas } = require("../middleware/validate.middleware");
 
 const router = express.Router();
 
-const upload = documentUploader(10);
+const upload = createUploader({
+  allowed: UPLOAD_POLICY.receipt.allowed,
+  maxBytes: UPLOAD_POLICY.receipt.maxBytes,
+});
 
 const receiptUpload = (req, res, next) => {
   upload.fields([

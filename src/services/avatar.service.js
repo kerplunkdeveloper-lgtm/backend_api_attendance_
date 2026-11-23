@@ -22,11 +22,13 @@ const {
 const {
   organizationWithSubscription,
 } = require("../utils/prismaSelects");
+const { assertStorageAvailable, addStorageObject } = require("./storage-quota.service");
 
 const ACCEPTED_DATA_URI =
   /^data:image\/(jpeg|png|webp|gif);base64,/i;
 
-const MAX_AVATAR_BYTES = 6 * 1024 * 1024;
+const { UPLOAD_POLICY } = require("../config/upload-policy");
+const MAX_AVATAR_BYTES = UPLOAD_POLICY.avatar.maxBytes;
 
 const folderFor = (organizationId) =>
   `workpulse/${organizationId}/avatars`;
@@ -86,7 +88,7 @@ function decodeInlineImage(value) {
     !buffer.length ||
     buffer.length > MAX_AVATAR_BYTES
   ) {
-    throw httpError("Avatar must be 6 MB or smaller.");
+    throw httpError("Avatar must be 2 MB or smaller.");
   }
 
   const file = {
@@ -109,7 +111,7 @@ function validateImage(file) {
     !file.buffer.length ||
     file.buffer.length > MAX_AVATAR_BYTES
   ) {
-    throw httpError("Avatar must be 6 MB or smaller.");
+    throw httpError("Avatar must be 2 MB or smaller.");
   }
 
   if (
@@ -211,6 +213,7 @@ async function cleanupUploadedAvatar(input, organizationId) {
 
 async function uploadS3Avatar(file, organizationId) {
   validateImage(file);
+  await assertStorageAvailable(organizationId, file.size || file.buffer.length);
 
   try {
     const uploaded = await uploadToS3(file.buffer, {
@@ -226,6 +229,7 @@ async function uploadS3Avatar(file, organizationId) {
     return {
       provider: "s3",
       key: uploaded.key,
+      bytes: uploaded.bytes || file.buffer.length,
     };
   } catch (cause) {
     throw httpError(
@@ -256,10 +260,13 @@ const uploadAvatarFile = async (req) => {
     validateImage(file);
 
     if (isS3Enabled()) {
-      return uploadS3Avatar(file, organizationId);
+      const uploaded = await uploadS3Avatar(file, organizationId);
+      await addStorageObject({ organizationId, provider: "s3", storageKey: uploaded.key, bytes: uploaded.bytes || file.buffer.length, mimeType: file.mimetype, purpose: "avatars" });
+      return uploaded;
     }
 
     try {
+      await assertStorageAvailable(organizationId, file.size || file.buffer.length);
       const result = await uploadBuffer(file.buffer, {
         folder: folderFor(organizationId),
         resource_type: "image",
@@ -268,6 +275,8 @@ const uploadAvatarFile = async (req) => {
       if (!toUrl(result)) {
         throw new Error("Cloudinary returned no URL");
       }
+
+      await addStorageObject({ organizationId, provider: "cloudinary", storageKey: result.public_id, bytes: result.bytes || file.buffer.length, mimeType: file.mimetype, purpose: "avatars" });
 
       return toUrl(result);
     } catch (cause) {
@@ -292,11 +301,12 @@ const uploadAvatarFile = async (req) => {
   ) {
     if (isS3Enabled()) {
       const image = decodeInlineImage(inline);
-
-      return uploadS3Avatar(
+      const uploaded = await uploadS3Avatar(
         image,
         organizationId
       );
+      await addStorageObject({ organizationId, provider: "s3", storageKey: uploaded.key, bytes: uploaded.bytes || image.buffer.length, mimeType: image.mimetype, purpose: "avatars" });
+      return uploaded;
     }
 
     decodeInlineImage(inline);
@@ -310,6 +320,8 @@ const uploadAvatarFile = async (req) => {
       if (!toUrl(result)) {
         throw new Error("Cloudinary returned no URL");
       }
+
+      await addStorageObject({ organizationId, provider: "cloudinary", storageKey: result.public_id, bytes: result.bytes || 0, mimeType: `image/${result.format || "png"}`, purpose: "avatars" });
 
       return toUrl(result);
     } catch (cause) {

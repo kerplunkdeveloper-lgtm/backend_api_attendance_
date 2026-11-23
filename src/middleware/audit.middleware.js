@@ -56,6 +56,7 @@ const resolveEntity = (path) => {
 
 const resolveAction = (method, path) => {
   const lower = path.toLowerCase();
+  if (lower.includes("/bulk-delete")) return "DELETE";
   if (lower.includes("/review") || lower.includes("/approve")) return "APPROVE";
   if (lower.includes("/reject")) return "REJECT";
   if (lower.includes("/cancel")) return "CANCEL";

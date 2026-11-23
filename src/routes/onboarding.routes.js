@@ -7,7 +7,7 @@ const {
 } = require("../middleware/auth.middleware");
 const { documentUploader, handleUploadErrors } = require("../middleware/upload.middleware");
 
-const portalUpload = documentUploader(10);
+const portalUpload = documentUploader();
 
 // ==========================================
 // PUBLIC CANDIDATE PORTAL ROUTES

@@ -4,6 +4,7 @@ const { authenticate, authorizeRoles } = require("../middleware/auth.middleware"
 const router = express.Router();
 router.use(authenticate);
 router.post("/", controller.create);
+router.patch("/:id", controller.update);
 router.get("/participants", controller.participants);
 router.get("/my", controller.mine);
 const reviewers = authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR");

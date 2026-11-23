@@ -230,13 +230,8 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN",
   const finalEmployeeCode =
     employeeCode?.trim() || await getNextEmployeeCode(organizationId, prisma, userRole, org.name, profile.dateOfJoining);
 
-  const existingCode = await prisma.employee.findUnique({
-    where: {
-      organizationId_employeeCode: {
-        organizationId,
-        employeeCode: finalEmployeeCode,
-      },
-    },
+  const existingCode = await prisma.employee.findFirst({
+    where: { organizationId, employeeCode: finalEmployeeCode, deletedAt: null },
   });
 
   if (existingCode) {
@@ -614,7 +609,7 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
   // Check the code here so a duplicate is a clear message, not an opaque database error.
   if (employeeCode && employeeCode.trim() !== employee.employeeCode) {
     const clash = await prisma.employee.findFirst({
-      where: { organizationId, employeeCode: employeeCode.trim(), NOT: { id: employeeId } },
+      where: { organizationId, employeeCode: employeeCode.trim(), deletedAt: null, NOT: { id: employeeId } },
       select: { id: true },
     });
     if (clash) throw Object.assign(new Error(`Employee code '${employeeCode.trim()}' is already taken in this organization`), { statusCode: 409 });
@@ -1356,7 +1351,7 @@ const bulkImportEmployees = async (organizationId, employeesList, actorRole = "C
       select: { email: true },
     }),
     prisma.employee.findMany({
-      where: { organizationId, employeeCode: { in: parsed.map((r) => r.rawCode).filter(Boolean) } },
+      where: { organizationId, employeeCode: { in: parsed.map((r) => r.rawCode).filter(Boolean) }, deletedAt: null },
       select: { employeeCode: true },
     }),
   ]);

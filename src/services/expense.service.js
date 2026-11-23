@@ -5,6 +5,7 @@ const { uploadBuffer: uploadS3Buffer, getDownloadUrl, deleteObject: deleteS3Obje
 const { assertSniffedType } = require("../middleware/upload.middleware");
 const { assertCanReview, visibleToReviewer } = require("../utils/approvalChain");
 const webhookService = require("./webhook.service");
+const { assertStorageAvailable, addStorageObject } = require("./storage-quota.service");
 
 const VALID_CATEGORIES = [
   "TRAVEL",
@@ -137,13 +138,14 @@ class ExpenseService {
     }
 
     const useS3 = String(process.env.STORAGE_PROVIDER || "").toLowerCase() === "s3";
+    const allowLocalStorageFallback = process.env.NODE_ENV !== "production";
     let finalReceiptUrl = receiptUrl || null;
     let receiptPublicId = null;
     let receiptStorageKey = null;
     let receiptStorageProvider = useS3 ? "s3" : "cloudinary";
     let uploadedS3Key = null;
 
-    const maxReceiptBytes = 10 * 1024 * 1024;
+    const maxReceiptBytes = require("../config/upload-policy").UPLOAD_POLICY.receipt.maxBytes;
     const allowedReceiptTypes = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
     const uploadReceiptToS3 = async (buffer, contentType) => {
       if (buffer.length > maxReceiptBytes) throw Object.assign(new Error("Receipt must be 10 MB or smaller."), { statusCode: 400 });
@@ -153,15 +155,29 @@ class ExpenseService {
       receiptStorageKey = result.key;
       finalReceiptUrl = null;
     };
+    const isMissingS3Credentials = (error) =>
+      error?.code === "S3_CREDENTIALS_MISSING" ||
+      error?.code === "CredentialsProviderError" ||
+      error?.name === "CredentialsProviderError";
+    const uploadReceiptToCloudinary = async (buffer) => {
+      const uploadRes = await uploadCloudinaryBuffer(buffer, { folder: `workpulse/${organizationId}/receipts`, resource_type: "auto" });
+      receiptStorageProvider = "cloudinary";
+      finalReceiptUrl = uploadRes.secure_url || uploadRes.url;
+      receiptPublicId = uploadRes.public_id;
+      receiptStorageKey = receiptPublicId;
+    };
 
     if (receiptFile?.buffer) {
+      await assertStorageAvailable(organizationId, receiptFile.size || receiptFile.buffer.length);
       assertSniffedType(receiptFile);
-      if (useS3) await uploadReceiptToS3(receiptFile.buffer, receiptFile.mimetype);
-      else {
-        const uploadRes = await uploadCloudinaryBuffer(receiptFile.buffer, { folder: `workpulse/${organizationId}/receipts`, resource_type: "auto" });
-        finalReceiptUrl = uploadRes.secure_url || uploadRes.url;
-        receiptPublicId = uploadRes.public_id;
-      }
+      if (useS3) {
+        try { await uploadReceiptToS3(receiptFile.buffer, receiptFile.mimetype); }
+        catch (error) {
+          if (!isMissingS3Credentials(error)) throw error;
+          if (!allowLocalStorageFallback) throw error;
+          await uploadReceiptToCloudinary(receiptFile.buffer);
+        }
+      } else await uploadReceiptToCloudinary(receiptFile.buffer);
     }
 
     const sourceData = receiptData || receiptUrl;
@@ -175,11 +191,19 @@ class ExpenseService {
         const match = sourceData.match(/^data:([^;,]+);base64,(.+)$/i);
         if (!match) throw new Error("Invalid receipt data");
         const buffer = Buffer.from(match[2], "base64");
-        if (useS3) await uploadReceiptToS3(buffer, match[1]);
+        if (useS3) {
+          try { await uploadReceiptToS3(buffer, match[1]); }
+          catch (error) {
+            if (!isMissingS3Credentials(error)) throw error;
+            if (!allowLocalStorageFallback) throw error;
+            await uploadReceiptToCloudinary(buffer);
+          }
+        }
         else {
           const uploadRes = await uploadImage(sourceData, { folder: `workpulse/expenses/${organizationId}`, resource_type: "auto" });
           finalReceiptUrl = uploadRes.secure_url || uploadRes.url;
           receiptPublicId = uploadRes.public_id;
+          receiptStorageKey = receiptPublicId;
         }
       } catch (cloudErr) {
         const error = new Error("Receipt upload failed. Please retry.");
@@ -223,6 +247,10 @@ class ExpenseService {
     } catch (error) {
       if (uploadedS3Key) await deleteS3Object(uploadedS3Key, organizationId).catch(() => {});
       throw error;
+    }
+
+    if (receiptStorageKey && (receiptFile?.size || receiptFile?.buffer?.length)) {
+      await addStorageObject({ organizationId, provider: receiptStorageProvider, storageKey: receiptStorageKey, bytes: receiptFile.size || receiptFile.buffer.length, mimeType: receiptFile.mimetype, purpose: "receipts" });
     }
 
     void require("./notification.service").notifyReviewersOfRequest({

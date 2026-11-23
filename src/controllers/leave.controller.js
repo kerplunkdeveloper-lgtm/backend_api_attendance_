@@ -40,6 +40,13 @@ class LeaveController {
     } catch (err) { return fail(res, err); }
   }
 
+  async getTeamLeaveBalances(req, res) {
+    try {
+      const result = await leaveService.getTeamLeaveBalanceSummaries(req.user.organizationId, req.query.year);
+      return res.status(200).json({ success: true, data: result });
+    } catch (err) { return fail(res, err); }
+  }
+
   async getDepartmentConflicts(req, res) {
     try {
       const employeeId = req.query.employeeId || req.user.employee?.id;

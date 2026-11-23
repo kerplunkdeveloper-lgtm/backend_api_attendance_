@@ -6,6 +6,7 @@ const {
 const { uploadBuffer } = require("../config/cloudinary");
 const { uploadBuffer: uploadS3Buffer, getFileContent, deleteObject: deleteS3Object } = require("../config/s3");
 const { assertRealImage } = require("../middleware/upload.middleware");
+const { assertStorageAvailable, addStorageObject } = require("./storage-quota.service");
 const ssoService = require("./sso.service");
 const { isValidTimeZone } = require("../utils/datetime");
 const { DEFAULT_OFFER_LETTER_TEMPLATE, normalizeOfferLetterTemplate } = require("../utils/offerLetterTemplate");
@@ -120,6 +121,7 @@ async function updateSettings(organizationId, payload, actor = {}) {
 async function uploadLogo(organizationId, file) {
   if (!file?.buffer) throw Object.assign(new Error("Choose an image to upload."), { statusCode: 400 });
   assertRealImage(file); // real image bytes, not just a claimed type
+  await assertStorageAvailable(organizationId, file.size || file.buffer.length);
   const useS3 = String(process.env.STORAGE_PROVIDER || "").toLowerCase() === "s3";
   const current = await prisma.organization.findUnique({ where: { id: organizationId }, select: { logoStorageKey: true } });
   let result;
@@ -127,6 +129,7 @@ async function uploadLogo(organizationId, file) {
     result = await uploadS3Buffer(file.buffer, { organizationId, folder: "branding", contentType: file.mimetype || "image/png" });
     try {
       const updated = await prisma.organization.update({ where: { id: organizationId }, data: { logoUrl: null, logoStorageProvider: "s3", logoStorageKey: result.key }, include: { subscription: true } });
+      await addStorageObject({ organizationId, provider: "s3", storageKey: result.key, bytes: result.bytes || file.buffer.length, mimeType: file.mimetype, purpose: "branding" });
       if (current?.logoStorageKey) await deleteS3Object(current.logoStorageKey, organizationId).catch(() => {});
       return presentOrganization(updated);
     } catch (error) {
@@ -146,6 +149,7 @@ async function uploadLogo(organizationId, file) {
     data: { logoUrl: result.secure_url || result.url, logoStorageProvider: "cloudinary", logoStorageKey: null },
     include: { subscription: true },
   });
+  await addStorageObject({ organizationId, provider: "cloudinary", storageKey: result.public_id, bytes: result.bytes || file.buffer.length, mimeType: file.mimetype, purpose: "branding" });
   return presentOrganization(updated);
 }
 

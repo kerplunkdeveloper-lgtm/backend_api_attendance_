@@ -32,10 +32,14 @@ async function createCycle(organizationId, payload) {
       status: "OPEN",
     },
   });
+  const employeeFilter = payload.employeeId
+    ? { id: String(payload.employeeId), organizationId, status: { in: WORKING_STATUSES } }
+    : { organizationId, status: { in: WORKING_STATUSES } };
   const employees = await prisma.employee.findMany({
-    where: { organizationId, status: { in: WORKING_STATUSES } },
+    where: employeeFilter,
     select: { id: true },
   });
+  if (payload.employeeId && !employees.length) fail("Selected employee is not an active employee in this organization.", 400);
   if (employees.length) {
     await prisma.appraisalReview.createMany({
       data: employees.map((e) => ({
@@ -63,7 +67,7 @@ async function getCycle(organizationId, id) {
     include: {
       reviews: {
         include: {
-          employee: { select: { firstName: true, lastName: true, employeeCode: true } },
+          employee: { select: { id: true, firstName: true, lastName: true, employeeCode: true } },
         },
       },
     },
@@ -128,7 +132,7 @@ async function submitManager(organizationId, userId, reviewId, payload) {
       managerComments: payload.managerComments != null ? String(payload.managerComments) : review.managerComments,
       status: "COMPLETED",
     },
-    include: { employee: { select: { firstName: true, lastName: true, employeeCode: true } }, cycle: true },
+    include: { employee: { select: { id: true, firstName: true, lastName: true, employeeCode: true } }, cycle: true },
   });
 }
 

@@ -12,7 +12,7 @@ const {
 } = require("../middleware/upload.middleware");
 
 const router = express.Router();
-const avatarUpload = imageUploader(6);
+const avatarUpload = imageUploader();
 const avatarFields = avatarUpload.fields([
   { name: "image", maxCount: 1 },
   { name: "file", maxCount: 1 },
@@ -126,7 +126,7 @@ router.delete(
   employeeController.remove,
 );
 
-const upload = documentUploader(15);
+const upload = documentUploader();
 
 // Invite employee by email — auto-creates account + sends credentials via email
 router.post(

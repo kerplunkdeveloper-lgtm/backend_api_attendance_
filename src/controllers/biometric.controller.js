@@ -65,6 +65,7 @@ module.exports = {
         credentialType: req.body.credentialType,
         punchType: req.body.punchType,
         timestamp: req.body.timestamp,
+        eventId: req.body.eventId || req.body.transactionId || req.body.event_id || req.body.id,
       });
       return res.json({ success: true, data });
     } catch (err) {

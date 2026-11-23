@@ -13,6 +13,7 @@ const { assertSeatAvailable } = require("./entitlement.service");
 const { normalizeIndianPhone } = require("../utils/phone");
 const { getNextEmployeeCode } = require("../utils/employeeCode");
 const { releaseDeletedEmployeeEmail } = require("../utils/releaseDeletedAccountEmail");
+const { assertStorageAvailable, addStorageObject } = require("./storage-quota.service");
 
 // The onboarding database enum predates the employee-document enum. Accept the
 // names used by the current portal and persist the values supported by
@@ -431,6 +432,7 @@ class OnboardingService {
     let storageKey = null;
     let uploadedS3Key = null;
     if (file?.buffer) {
+      await assertStorageAvailable(candidate.organizationId, file.size || file.buffer.length);
       const { assertSniffedType } = require("../middleware/upload.middleware");
       assertSniffedType(file);
       if (useS3) {
@@ -444,6 +446,7 @@ class OnboardingService {
       } else {
         const uploadRes = await uploadBuffer(file.buffer, { folder: `workpulse/onboarding/${candidate.organizationId}/${candidate.id}`, resource_type: "auto", type: isSensitiveDocumentType(cleanType) ? "authenticated" : "upload" });
         fileUrl = uploadRes.secure_url;
+        storageKey = uploadRes.public_id || null;
         fileName = fileName || file.originalname || "document";
         fileSize = file.size || uploadRes.bytes;
         mimeType = file.mimetype || uploadRes.format;
@@ -522,6 +525,10 @@ class OnboardingService {
       if (uploadedS3Key) await deleteS3Object(uploadedS3Key, candidate.organizationId).catch(() => {});
       throw error;
     });
+
+    if (storageKey && fileSize) {
+      await addStorageObject({ organizationId: candidate.organizationId, provider: storageProvider, storageKey, bytes: Number(fileSize), mimeType, purpose: "onboarding" });
+    }
 
     // Advance to HR review only once the profile is in. A document alone must not skip the profile step.
     if (candidate.status === "PROFILE_SUBMITTED") {
