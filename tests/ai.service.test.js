@@ -14,7 +14,7 @@ mockPrisma({
   },
 });
 
-const { getTodayLeaveSummary } = require("../src/services/ai.service");
+const { getTodayLeaveSummary, isClearlyOutOfScope } = require("../src/services/ai.service");
 
 const employee = (id, status = "APPROVED") => ({
   status,
@@ -73,5 +73,11 @@ describe("AI role-based today leave summary", () => {
       assert.equal(error.statusCode, 403);
       return true;
     });
+  });
+
+  it("keeps unrelated requests inside the Clocked HRMS profile", () => {
+    assert.equal(isClearlyOutOfScope("Tell me a joke"), true);
+    assert.equal(isClearlyOutOfScope("How many people are on leave today?"), false);
+    assert.equal(isClearlyOutOfScope("Calculate 2 + 2"), true);
   });
 });
