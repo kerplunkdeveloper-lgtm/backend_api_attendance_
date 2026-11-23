@@ -9,9 +9,41 @@ const num = (v) => Number(v || 0);
 const adminRoles = ["SUPER_ADMIN", "COMPANY_ADMIN", "HR"];
 const isAdmin = (u) => adminRoles.includes(u.role);
 
+function providerFailure(error) {
+  const providerStatus = Number(error?.status);
+  let code = "AI_PROVIDER_ERROR";
+  let message = "The AI provider is temporarily unavailable. Please try again.";
+  let statusCode = 502;
+
+  if (providerStatus === 401) {
+    code = "AI_PROVIDER_AUTH_ERROR";
+    message = "The backend AI provider key was rejected. Check the server configuration.";
+    statusCode = 503;
+  } else if (providerStatus === 429) {
+    code = "AI_PROVIDER_RATE_LIMIT";
+    message = "The AI provider rate limit was reached. Please try again shortly.";
+    statusCode = 429;
+  } else if (providerStatus >= 400 && providerStatus < 500) {
+    code = "AI_PROVIDER_REQUEST_ERROR";
+  }
+
+  return Object.assign(new Error(message), {
+    statusCode,
+    code,
+    expose: true,
+    providerStatus: Number.isInteger(providerStatus) ? providerStatus : undefined,
+    providerRequestId: error?.requestID || error?.request_id || undefined,
+    cause: error,
+  });
+}
+
 function assertEnabled() {
-  if (String(process.env.AI_ASSISTANT_ENABLED).toLowerCase() !== "true") throw fail("AI Assistant is disabled for this environment.", 503);
-  if (!process.env.OPENAI_API_KEY) throw fail("AI Assistant is not configured on the backend.", 503);
+  if (String(process.env.AI_ASSISTANT_ENABLED).toLowerCase() !== "true") {
+    throw Object.assign(fail("AI Assistant is disabled for this environment.", 503), { code: "AI_ASSISTANT_DISABLED", expose: true });
+  }
+  if (!process.env.OPENAI_API_KEY) {
+    throw Object.assign(fail("AI Assistant is not configured on the backend.", 503), { code: "AI_PROVIDER_NOT_CONFIGURED", expose: true });
+  }
 }
 
 function assertAIPlan(user) {
@@ -114,7 +146,11 @@ async function chat({ user, conversationId, message, selectedEmployeeId }) {
   const history = await prisma.aIMessage.findMany({ where: { conversationId: conversation.id }, orderBy: { createdAt: "desc" }, take: 12, select: { role: true, content: true } });
   let input = history.reverse().map((m) => ({ role: m.role, content: m.content })); let response;
   for (let loop = 0; loop < MAX_TOOL_LOOPS; loop += 1) {
-    response = await new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 30000, maxRetries: 2 }).responses.create({ model: process.env.OPENAI_MODEL || "gpt-5-mini", instructions: `${prompt(user)}${selectedEmployeeId ? ` The user selected authorized employee ID ${selectedEmployeeId}. If the user asks about that employee, use getAuthorizedEmployeeSnapshot with exactly that ID.` : " No employee is selected; do not infer or choose another employee."}`, input, tools: toolsFor(user), store: false, max_output_tokens: 900 });
+    try {
+      response = await new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 30000, maxRetries: 2 }).responses.create({ model: process.env.OPENAI_MODEL || "gpt-5-mini", instructions: `${prompt(user)}${selectedEmployeeId ? ` The user selected authorized employee ID ${selectedEmployeeId}. If the user asks about that employee, use getAuthorizedEmployeeSnapshot with exactly that ID.` : " No employee is selected; do not infer or choose another employee."}`, input, tools: toolsFor(user), store: false, max_output_tokens: 900 });
+    } catch (error) {
+      throw providerFailure(error);
+    }
     const calls = (response.output || []).filter((item) => item.type === "function_call"); if (!calls.length) break;
     for (const call of calls) {
       let args; try { args = JSON.parse(call.arguments || "{}"); } catch { throw fail("Invalid tool request from assistant.", 502); }
