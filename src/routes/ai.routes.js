@@ -1,0 +1,14 @@
+const express = require("express");
+const controller = require("../controllers/ai.controller");
+const { authenticate, authorizeRoles } = require("../middleware/auth.middleware");
+const router = express.Router();
+router.use(authenticate);
+router.post("/chat", controller.chat);
+router.get("/people", controller.people);
+router.get("/conversations", controller.conversations);
+router.get("/conversations/:id", controller.messages);
+router.delete("/conversations/:id", controller.removeConversation);
+router.get("/knowledge/documents", controller.knowledge);
+router.post("/knowledge/documents", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"), controller.createKnowledge);
+router.delete("/knowledge/documents/:id", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"), controller.removeKnowledge);
+module.exports = router;

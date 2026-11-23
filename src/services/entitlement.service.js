@@ -237,6 +237,16 @@ const assertFeature = (org, flag, label) => {
   }
 };
 
+const assertEnterpriseAI = (org) => {
+  const plan = String(org?.subscription?.plan || org?.subscriptionPlan || "").toUpperCase();
+  if (plan !== "ENTERPRISE") {
+    const err = new Error("Clocked AI Assistant is available on the Enterprise plan only.");
+    err.statusCode = 403;
+    err.code = "AI_ENTERPRISE_ONLY";
+    throw err;
+  }
+};
+
 const privateAvatarUrl = (employeeId) => employeeId
   ? `/api/employees/${encodeURIComponent(String(employeeId))}/avatar-file`
   : "/api/auth/avatar-file";
@@ -307,6 +317,7 @@ module.exports = {
   assertSeatAvailable,
   assertBranchAvailable,
   assertFeature,
+  assertEnterpriseAI,
   presentAuthUser,
   SEAT_STATUSES,
 };

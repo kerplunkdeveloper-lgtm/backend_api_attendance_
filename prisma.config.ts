@@ -21,17 +21,6 @@ const dbUrl = normalizeDatabaseUrl(
   process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || "",
 );
 
-// Neon branch checkouts provide DATABASE_URL_UNPOOLED. Prefer it so schema
-// commands cannot accidentally keep using a stale DIRECT_URL from another
-// branch or environment.
-const directUrl = process.env.TEST_DATABASE_URL
-  ? dbUrl
-  : process.env.DATABASE_URL_UNPOOLED
-  ? normalizeDatabaseUrl(process.env.DATABASE_URL_UNPOOLED)
-  : process.env.DIRECT_URL
-    ? normalizeDatabaseUrl(process.env.DIRECT_URL)
-    : dbUrl;
-
 if (!dbUrl) {
   throw new Error(
     "DATABASE_URL is required before running Prisma commands."
@@ -46,7 +35,9 @@ export default defineConfig({
   },
 
   datasource: {
-    // Migrations should use the direct (non-pooled) Neon endpoint when set.
-    url: directUrl,
+    // Keep schema changes on the same canonical database as runtime traffic
+    // and production preflight. Secondary direct/unpooled variables can point
+    // at a different branch and must not silently split the deployment.
+    url: dbUrl,
   },
 });

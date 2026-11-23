@@ -6,13 +6,10 @@ const { Client } = require("pg");
 const REQUIRED_MIGRATION = "20261012190000_oidc_sso";
 let client;
 
-// Keep verification on the same direct database route used by prisma.config.ts
-// for migrations. A pooled/runtime URL can point at a different branch or
-// expose a different search_path in production.
-const migrationDatabaseUrl =
-  process.env.DATABASE_URL_UNPOOLED ||
-  process.env.DIRECT_URL ||
-  process.env.DATABASE_URL;
+// Verify the same canonical database URL used by the running API. Production
+// has previously supplied a stale/unrelated unpooled URL; checking that URL
+// after a successful migration made healthy releases fail preflight.
+const migrationDatabaseUrl = process.env.DATABASE_URL;
 
 async function main() {
   if (process.env.NODE_ENV !== "production") {
