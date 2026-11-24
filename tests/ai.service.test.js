@@ -28,9 +28,14 @@ mockPrisma({
   salaryStructure: {
     findUnique: async () => ({ monthlyCtc: 100000, baseSalary: 50000, hra: 25000 }),
   },
+  leaveType: {
+    findMany: async () => [{ id: "leave-type-1", name: "Casual Leave", code: "CL", isPaid: true, daysAllowed: 12 }],
+  },
 });
 
-const { getTodayLeaveSummary, getAuthorizedEmployeePayrollSummary, isClearlyOutOfScope } = require("../src/services/ai.service");
+const { getTodayLeaveSummary, getAuthorizedEmployeePayrollSummary, getApplicationNavigation, isClearlyOutOfScope } = require("../src/services/ai.service");
+const { reviewApproval } = require("../src/services/ai-approval.service");
+const { applyLeave, applyPermission } = require("../src/services/ai-request.service");
 
 const employee = (id, status = "APPROVED") => ({
   status,
@@ -107,5 +112,46 @@ describe("AI role-based today leave summary", () => {
       assert.equal(error.statusCode, 403);
       return true;
     });
+  });
+
+  it("returns exact role-aware menu steps for a shoot request", () => {
+    const result = getApplicationNavigation(user("EMPLOYEE"), "Where do I apply for a shoot request?");
+
+    assert.equal(result.available, true);
+    assert.deepEqual(result.menu, ["Leaves", "Shoot requests"]);
+    assert.equal(result.href, "/leaves");
+    assert.match(result.steps.join(" "), /Send for approval/);
+    assert.match(result.steps.join(" "), /Attendance/);
+  });
+
+  it("requires an explicit confirmation before an AI approval can mutate a request", async () => {
+    const result = await reviewApproval(user("HR"), { type: "leave", requestId: "leave-1", status: "APPROVED" });
+
+    assert.equal(result.requiresConfirmation, true);
+    assert.equal(result.requestId, "leave-1");
+    assert.match(result.message, /CONFIRM/);
+  });
+
+  it("does not expose approval actions to ordinary employees", async () => {
+    await assert.rejects(
+      () => reviewApproval(user("EMPLOYEE"), { type: "leave", requestId: "leave-1", status: "APPROVED", confirmation: "CONFIRM" }),
+      (error) => error.statusCode === 403,
+    );
+  });
+
+  it("previews a self-service leave request before submitting it", async () => {
+    const result = await applyLeave(user("EMPLOYEE"), { leaveType: "CL", startDate: "2026-12-01", endDate: "2026-12-02", reason: "Personal work" });
+
+    assert.equal(result.requiresConfirmation, true);
+    assert.equal(result.preview.leaveType.code, "CL");
+    assert.match(result.message, /CONFIRM/);
+  });
+
+  it("previews a self-service permission request before submitting it", async () => {
+    const result = await applyPermission(user("EMPLOYEE"), { date: "2026-12-01", hours: 2, reason: "Bank work" });
+
+    assert.equal(result.requiresConfirmation, true);
+    assert.equal(result.preview.requestType, "PERMISSION");
+    assert.match(result.message, /CONFIRM/);
   });
 });

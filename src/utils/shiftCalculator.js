@@ -160,9 +160,12 @@ const evaluateAttendanceAgainstShift = (
   // Completing the productive target does not erase a late arrival. The monthly
   // late-coming policy must still see this day so rules such as 3 late arrivals
   // = 1 LOP can be applied during payroll.
-  const status = workingMinutes < halfDayThreshold
-    ? "HALF_DAY"
-    : workingMinutes < fullDayThresholdMinutes
+  // A completed partial punch is paid proportionally to the time actually
+  // worked.  HALF_DAY is reserved for an explicit half-day attendance/leave
+  // decision; it must not turn a 30-minute session into an automatic 0.5-day
+  // salary deduction.  Payroll already calculates SHORT_HOURS as:
+  // workedMinutes / requiredProductiveMinutes * dailySalary.
+  const status = workingMinutes > 0 && workingMinutes < fullDayThresholdMinutes
     ? "SHORT_HOURS"
     : lateMinutes > 0
     ? "LATE"
