@@ -67,12 +67,15 @@ const loginErrorResponse = (error) => {
 
 const getCookieOptions = (role) => {
   const isHttps = process.env.NODE_ENV === "production";
+  const maxAge = require("../utils/sessionPolicy").getSessionMaxAgeMs(role);
   return {
     httpOnly: true,
     secure: isHttps,
     sameSite: isHttps ? "none" : "lax",
     path: "/",
-    maxAge: require("../utils/sessionPolicy").getSessionMaxAgeMs(role),
+    // Express/cookie rejects Infinity. Super Admin refresh tokens are already
+    // persisted with the long-lived fallback, so omit maxAge for that cookie.
+    ...(Number.isFinite(maxAge) ? { maxAge } : {}),
   };
 };
 
