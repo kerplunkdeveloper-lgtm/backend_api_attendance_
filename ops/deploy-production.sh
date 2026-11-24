@@ -10,7 +10,6 @@ RELEASES="$APP_ROOT/.releases"
 CURRENT="$APP_ROOT/current"
 ENV_FILE=/home/ubuntu/workpulse-prod.env
 PM2_NAME=workpulse-production-api
-HEALTH_URL=http://127.0.0.1:5000/api/health
 
 [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid commit SHA'; exit 2; }
 [[ -f "$ENV_FILE" ]] || { echo 'Production env file missing'; exit 3; }
@@ -45,6 +44,8 @@ ln -s "$ENV_FILE" "$RELEASE/.env"
 set -a
 source "$ENV_FILE"
 set +a
+HEALTH_PORT="${PORT:-5000}"
+HEALTH_URL="http://127.0.0.1:${HEALTH_PORT}/api/health"
 [[ -n "${DATABASE_URL:-}" ]] || { echo 'DATABASE_URL missing in production env'; exit 6; }
 [[ "${STORAGE_PROVIDER:-}" == "s3" ]] || { echo 'Production STORAGE_PROVIDER must be s3'; exit 6; }
 [[ -n "${AWS_REGION:-}" ]] || { echo 'AWS_REGION missing in production env'; exit 6; }
@@ -81,7 +82,11 @@ mv -Tf "$CURRENT.next" "$CURRENT"
 restart_from() {
   local dir="$1"
   pm2 delete "$PM2_NAME" >/dev/null 2>&1 || true
-  (set -a; source "$ENV_FILE"; set +a; cd "$dir" && pm2 start npm --name "$PM2_NAME" -- start)
+  # Dependencies, Prisma client, and migrations are prepared before the
+  # release is switched. Start Node directly so PM2 does not report an npm
+  # wrapper as online while the second generate/migrate sequence is still
+  # running and delaying the health endpoint.
+  (set -a; source "$ENV_FILE"; set +a; pm2 start "$dir/server.js" --name "$PM2_NAME" --cwd "$dir")
 }
 SWITCHED=1
 rollback_on_error() {
@@ -103,8 +108,8 @@ rollback_on_error() {
 }
 trap rollback_on_error ERR
 restart_from "$RELEASE"
-for _ in $(seq 1 30); do
-  if curl --fail --silent --show-error "$HEALTH_URL" >/dev/null 2>&1; then
+for _ in $(seq 1 60); do
+  if curl --fail --silent --show-error --connect-timeout 2 --max-time 5 "$HEALTH_URL" >/dev/null 2>&1; then
     pm2 save
     find "$RELEASES" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | tail -n +6 | cut -d' ' -f2- | while IFS= read -r old; do [[ "$old" == "$CURRENT" ]] || rm -rf -- "$old"; done
     SWITCHED=0
@@ -115,7 +120,10 @@ for _ in $(seq 1 30); do
   sleep 2
 done
 
-echo 'Backend health check failed; restoring previous application release'
+echo "Backend health check failed at ${HEALTH_URL}; recent process output:" >&2
+pm2 describe "$PM2_NAME" >&2 || true
+pm2 logs "$PM2_NAME" --lines 80 --nostream >&2 || true
+echo 'Restoring previous application release' >&2
 trap - ERR
 pm2 delete "$PM2_NAME" >/dev/null 2>&1 || true
 if [[ -n "$PREVIOUS" && -d "$PREVIOUS" ]]; then

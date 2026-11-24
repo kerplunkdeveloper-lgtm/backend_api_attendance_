@@ -17,8 +17,8 @@ function sendControllerError(res, error, { fallbackStatus = 400, fallbackMessage
   }
   return res.status(status).json({
     success: false,
-    message: status >= 500 ? "Internal Server Error" : error?.message || fallbackMessage,
-    ...(error?.code && status < 500 ? { code: error.code } : {}),
+    message: status >= 500 && error?.expose !== true ? "Internal Server Error" : error?.message || fallbackMessage,
+    ...(error?.code && (status < 500 || error?.expose === true) ? { code: error.code } : {}),
     ...(res.req?.requestId ? { requestId: res.req.requestId } : {}),
   });
 }
