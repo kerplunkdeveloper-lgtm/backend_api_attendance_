@@ -20,6 +20,7 @@ const {
 } = require("../utils/reminderWindows");
 
 const END_OF_DAY_MINUTES = 23 * 60;
+const NOTIFICATION_RETENTION_MS = 24 * 60 * 60 * 1000;
 const isEndOfDay = (now, timeZone) => getLocalMinutesOfDay(now, timeZone) >= END_OF_DAY_MINUTES;
 
 /**
@@ -226,9 +227,11 @@ class NotificationService {
     });
     const today = getLocalDateOnly(new Date(), zoneOf({ organization }));
     const todayStart = getLocalMidnightInstant(today, zoneOf({ organization }));
+    const notificationExpiry = new Date(Date.now() - NOTIFICATION_RETENTION_MS);
     const visibleWhere = {
       userId,
       organizationId,
+      createdAt: { gte: notificationExpiry },
       OR: [
         { type: { not: "CELEBRATION" } },
         { type: "CELEBRATION", createdAt: { gte: todayStart } },
@@ -279,15 +282,14 @@ class NotificationService {
     });
   }
 
-  /** Keep the current month and remove all older notification history. */
+  /** Keep only the last 24 hours of notification history. */
   async cleanupOldNotifications() {
     if (typeof prisma.notification.deleteMany !== "function") return 0;
-    const now = new Date();
-    const startOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const notificationExpiry = new Date(Date.now() - NOTIFICATION_RETENTION_MS);
     const result = await prisma.notification.deleteMany({
-      where: { createdAt: { lt: startOfMonth } },
+      where: { createdAt: { lt: notificationExpiry } },
     });
-    if (result.count > 0) console.log(`[NotificationCleanup] Removed ${result.count} notifications before ${startOfMonth.toISOString()}`);
+    if (result.count > 0) console.log(`[NotificationCleanup] Removed ${result.count} notifications older than 24 hours.`);
     return result.count;
   }
 

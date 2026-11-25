@@ -245,6 +245,9 @@ app.use("/overtime", overtimeRoutes);
 app.use("/overtime-allocations", overtimeAllocationRoutes);
 app.use("/shift-overrides", shiftOverrideRoutes);
 app.use("/billing", billingRoutes);
+// Backward-compatible alias for older platform-owner clients that omitted the
+// /api prefix. Keep the same authentication, role, and 2FA guards.
+app.use("/admin/platform", platformAdminRoutes);
 app.use("/chat", chatRoutes);
 app.use("/ai", aiRoutes);
 app.use("/biometric", biometricRoutes);
