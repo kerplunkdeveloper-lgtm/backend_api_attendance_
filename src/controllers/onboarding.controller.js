@@ -198,6 +198,32 @@ class OnboardingController {
     }
   }
 
+  async markJoined(req, res, next) {
+    try {
+      const result = await onboardingService.adminApproveAndActivate(
+        req.user.organizationId,
+        req.params.id,
+        req.user.id,
+        { ...(req.body || {}), actorRole: req.user.role, actualJoiningDate: req.body?.actualJoiningDate },
+      );
+      res.status(200).json({ success: true, message: "Candidate marked as joined and employee account activated", data: result });
+    } catch (err) { next(err); }
+  }
+
+  async rescheduleJoining(req, res, next) {
+    try {
+      const result = await onboardingService.rescheduleJoining(req.user.organizationId, req.params.id, req.user.id, req.body || {});
+      res.status(200).json({ success: true, message: "Joining date rescheduled successfully", data: result });
+    } catch (err) { next(err); }
+  }
+
+  async markNoShow(req, res, next) {
+    try {
+      const result = await onboardingService.markNoShow(req.user.organizationId, req.params.id, req.user.id, req.body || {});
+      res.status(200).json({ success: true, message: "Candidate marked as no-show", data: result });
+    } catch (err) { next(err); }
+  }
+
   /**
    * POST /api/onboarding/:id/admin-approve-offer - Admin Approval & Generate Offer Letter
    */

@@ -287,9 +287,14 @@ const presentAuthUser = (user) => {
         }
       : null,
     employee: presentEmployeeImage(user.employee) || null,
-    avatarUrl: user.employee?.avatarStorageKey
-      ? employeeAvatarUrl(user.employee)
-      : (user.avatarUrl || user.employee?.avatarUrl || null),
+    // Older accounts may have the private avatar key on User only. Prefer the
+    // employee route when an employee exists; otherwise use the authenticated
+    // user avatar route. Never expose the raw storage key to the client.
+    avatarUrl: user.avatarStorageKey
+      ? privateAvatarUrl(user.employee?.id || null)
+      : (user.employee?.avatarStorageKey
+        ? employeeAvatarUrl(user.employee)
+        : (user.avatarUrl || user.employee?.avatarUrl || null)),
     planLocked: org?.planLocked ?? false,
     mustChangePassword: user.mustChangePassword ?? false,
     emailVerifiedAt: user.emailVerifiedAt || null,

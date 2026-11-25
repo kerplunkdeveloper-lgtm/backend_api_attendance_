@@ -1,10 +1,10 @@
 /* Public API paths only: raw S3 keys must never be sent to the browser as image URLs. */
 const employeeAvatarUrl = (employee) => {
   if (!employee) return null;
-  if (employee.avatarStorageKey && employee.id) {
+  if ((employee.avatarStorageKey || employee.user?.avatarStorageKey) && employee.id) {
     return `/api/employees/${encodeURIComponent(String(employee.id))}/avatar-file`;
   }
-  return employee.avatarUrl || null;
+  return employee.avatarUrl || employee.user?.avatarUrl || null;
 };
 
 const organizationLogoUrl = (organization) => {
@@ -17,6 +17,14 @@ const organizationLogoUrl = (organization) => {
 const presentEmployeeImage = (employee) => {
   if (!employee) return employee;
   const { avatarStorageKey, ...safe } = employee;
+  if (safe.user && typeof safe.user === "object") {
+    const { avatarStorageKey: userAvatarStorageKey, ...safeUser } = safe.user;
+    safe.user = { ...safeUser };
+    if (userAvatarStorageKey && !avatarStorageKey) {
+      safe.avatarUrl = employeeAvatarUrl(employee);
+      safe.user.avatarUrl = safe.avatarUrl;
+    }
+  }
   return { ...safe, avatarUrl: employeeAvatarUrl(employee) };
 };
 

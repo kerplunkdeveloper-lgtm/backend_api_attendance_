@@ -9,7 +9,6 @@ const { assertRealImage } = require("../middleware/upload.middleware");
 const { assertStorageAvailable, addStorageObject } = require("./storage-quota.service");
 const ssoService = require("./sso.service");
 const { isValidTimeZone } = require("../utils/datetime");
-const { DEFAULT_OFFER_LETTER_TEMPLATE, normalizeOfferLetterTemplate } = require("../utils/offerLetterTemplate");
 const { DEFAULT_EXIT_DOCUMENT_TEMPLATES, normalizeExitDocumentTemplates } = require("../utils/exitDocumentTemplate");
 const HR_ACCESS_AREAS = ["DASHBOARD", "ATTENDANCE", "EMPLOYEES", "ROLES", "APPROVALS", "ONBOARDING", "PAYROLL", "REPORTS", "AUDIT", "ANNOUNCEMENTS", "BRANCHES", "POLICIES", "SHOOTS"];
 const DEFAULT_HR_ACCESS = Object.fromEntries(HR_ACCESS_AREAS.map((area) => [area, true]));
@@ -173,24 +172,6 @@ async function getLogoFile(organizationId) {
   return getFileContent(organization.logoStorageKey, organizationId);
 }
 
-async function getOfferLetterTemplate(organizationId) {
-  const org = await prisma.organization.findUnique({ where: { id: organizationId }, select: { hrAccess: true } });
-  return normalizeOfferLetterTemplate(org?.hrAccess?.OFFER_LETTER_TEMPLATE || DEFAULT_OFFER_LETTER_TEMPLATE);
-}
-
-async function updateOfferLetterTemplate(organizationId, payload) {
-  const org = await prisma.organization.findUnique({ where: { id: organizationId }, select: { hrAccess: true } });
-  const hrAccess = org?.hrAccess && typeof org.hrAccess === "object" ? org.hrAccess : {};
-  const existing = normalizeOfferLetterTemplate(hrAccess.OFFER_LETTER_TEMPLATE || DEFAULT_OFFER_LETTER_TEMPLATE);
-  const template = normalizeOfferLetterTemplate({
-    ...(payload || {}),
-    version: existing.version + 1,
-    status: "ACTIVE",
-  });
-  await prisma.organization.update({ where: { id: organizationId }, data: { hrAccess: { ...hrAccess, OFFER_LETTER_TEMPLATE: template } } });
-  return template;
-}
-
 async function getExitDocumentTemplates(organizationId) {
   const org = await prisma.organization.findUnique({ where: { id: organizationId }, select: { hrAccess: true } });
   return normalizeExitDocumentTemplates(org?.hrAccess?.EXIT_DOCUMENT_TEMPLATES || DEFAULT_EXIT_DOCUMENT_TEMPLATES);
@@ -204,4 +185,4 @@ async function updateExitDocumentTemplates(organizationId, payload) {
   return templates;
 }
 
-module.exports = { getSettings, updateSettings, uploadLogo, removeLogo, getLogoFile, getOfferLetterTemplate, updateOfferLetterTemplate, getExitDocumentTemplates, updateExitDocumentTemplates };
+module.exports = { getSettings, updateSettings, uploadLogo, removeLogo, getLogoFile, getExitDocumentTemplates, updateExitDocumentTemplates };

@@ -20,6 +20,10 @@ const organizationSelect = {
   planActivatedAt: true,
   planLocked: true,
   logoUrl: true,
+  // Needed by presentOrganizationImage to turn private S3 branding into the
+  // authenticated /api/organization/logo-file route. The raw key is removed
+  // before the response leaves the server.
+  logoStorageKey: true,
   suspendedAt: true,
   requireAdminTwoFactor: true,
   subscription: { select: { id: true, organizationId: true, plan: true, status: true, billingCycle: true, price: true, maxEmployees: true, maxBranches: true, hasGeofence: true, hasPayroll: true, hasShiftPlanner: true, hasApiAccess: true, startDate: true, trialEndsAt: true, currentPeriodEnd: true, createdAt: true, updatedAt: true } },

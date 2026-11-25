@@ -691,6 +691,39 @@ class NotificationService {
     return { success: true, sentCount: sent };
   }
 
+  async sendJoiningDateReminders(now = new Date()) {
+    const organizations = await prisma.organization.findMany({ select: { id: true, name: true, logoUrl: true, timezone: true } });
+    let sentCount = 0;
+    for (const org of organizations) {
+      const timeZone = zoneOf({ organization: org });
+      if (getLocalMinutesOfDay(now, timeZone) < 9 * 60 + 30) continue;
+      const today = getLocalDateOnly(now, timeZone);
+      const candidates = await prisma.onboardingCandidate.findMany({
+        where: { organizationId: org.id, status: { in: ["PRE_JOINING", "JOINING_RESCHEDULED", "OFFER_ACCEPTED"] } },
+        select: { id: true, firstName: true, lastName: true, email: true, designation: true, token: true, expectedJoinDate: true, reminder7SentAt: true, reminder2SentAt: true, joiningDayReminderAt: true },
+      });
+      for (const candidate of candidates) {
+        const joinDay = new Date(Date.UTC(candidate.expectedJoinDate.getUTCFullYear(), candidate.expectedJoinDate.getUTCMonth(), candidate.expectedJoinDate.getUTCDate()));
+        const daysUntilJoining = Math.round((joinDay.getTime() - today.getTime()) / 86400000);
+        const reminderField = daysUntilJoining === 7 ? "reminder7SentAt" : daysUntilJoining === 2 ? "reminder2SentAt" : daysUntilJoining === 0 ? "joiningDayReminderAt" : null;
+        if (!reminderField || candidate[reminderField]) continue;
+        const delivery = await emailService.sendJoiningReminderEmail(candidate.email, `${candidate.firstName} ${candidate.lastName || ""}`.trim(), {
+          designation: candidate.designation,
+          joiningDate: candidate.expectedJoinDate,
+          daysUntilJoining,
+          onboardingUrl: `${process.env.FRONTEND_URL || "http://localhost:3000"}/onboarding/portal/${candidate.token}`,
+          companyName: org.name,
+          companyLogoUrl: org.logoUrl,
+        }).catch((error) => ({ success: false, error: error.message }));
+        if (delivery?.success !== false) {
+          await prisma.onboardingCandidate.update({ where: { id: candidate.id }, data: { [reminderField]: new Date() } });
+          sentCount += 1;
+        }
+      }
+    }
+    return { success: true, sentCount };
+  }
+
   /**
    * Publish today's birthdays and work anniversaries as one-day company announcements.
    * The scheduler is leader-locked, and the live announcement lookup makes this safe
@@ -801,6 +834,7 @@ class NotificationService {
       await this.cleanupOldNotifications();
       await this.sendDailyCelebrationAnnouncements();
       await this.sendUpcomingHolidayReminders();
+      await this.sendJoiningDateReminders();
       await this.sendMorningCheckInReminders(null, true);
       await this.sendEveningCheckOutReminders(null, true);
 

@@ -12,6 +12,7 @@ const helmet = require("helmet");
 const compression = require("compression");
 const morgan = require("morgan");
 const { isConfigured: cloudinaryConfigured } = require("./config/cloudinary");
+const { pingRedis } = require("./config/redis");
 
 const authRoutes = require("./routes/auth.routes");
 const departmentRoutes = require("./routes/department.routes");
@@ -314,6 +315,7 @@ const databaseHealthcheckTimeoutMs = Math.max(
 );
 app.get(["/api/db-status", "/api/ready"], async (req, res) => {
   let timeout;
+  const checks = { database: "error", redis: "not_required" };
   try {
     const prismaInstance = require("./config/database");
     await Promise.race([
@@ -328,14 +330,33 @@ app.get(["/api/db-status", "/api/ready"], async (req, res) => {
         }, databaseHealthcheckTimeoutMs);
       }),
     ]);
+    checks.database = "connected";
+
+    // Redis-backed rate limits, locks, and realtime fan-out must be shared by
+    // all replicas. Local development and tests intentionally remain usable
+    // without Redis; production readiness does not.
+    if (process.env.NODE_ENV === "production") {
+      const redis = await pingRedis();
+      checks.redis = redis.connected ? "connected" : "not_configured";
+      if (!redis.connected) {
+        return res.status(503).json({
+          success: false,
+          database: checks.database,
+          redis: checks.redis,
+          storage: cloudinaryConfigured ? "configured" : "not_configured",
+          reason: "Redis is required for production readiness.",
+        });
+      }
+    }
     res.json({
       success: true,
-      database: "connected",
+      database: checks.database,
+      redis: checks.redis,
       storage: cloudinaryConfigured ? "configured" : "not_configured",
     });
   } catch (err) {
     console.error("[readiness] database check failed:", err.message);
-    res.status(503).json({ success: false, database: "error" });
+    res.status(503).json({ success: false, ...checks });
   } finally {
     clearTimeout(timeout);
   }

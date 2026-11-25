@@ -1,5 +1,9 @@
 const { getTenantId } = require("../utils/tenantContext");
 
+if (process.env.NODE_ENV === "production" && String(process.env.TENANT_GUARD || "on").toLowerCase() !== "on") {
+  throw new Error("TENANT_GUARD must be on in production.");
+}
+
 /**
  * Every model with a required `organizationId` column. BillingEvent is left out
  * because its organization is nullable (provider events can arrive before the

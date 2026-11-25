@@ -491,6 +491,24 @@ class EmailService {
   }
 
   /** Candidate onboarding invitation with the secure portal link. */
+  async sendJoiningReminderEmail(to, candidateName, { designation, joiningDate, daysUntilJoining, onboardingUrl, companyName, companyLogoUrl } = {}) {
+    const safeName = escapeHtml(candidateName || "there");
+    const safeDesignation = escapeHtml(designation || "your new role");
+    const joinDate = joiningDate
+      ? new Date(joiningDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })
+      : "your confirmed joining date";
+    const timing = daysUntilJoining === 0 ? "today" : `in ${daysUntilJoining} days`;
+    const contentHtml = `
+      <p class="text">Hello <strong>${safeName}</strong>,</p>
+      <p class="text">This is a reminder that your joining date for <strong>${safeDesignation}</strong> is <strong>${escapeHtml(joinDate)}</strong> (${timing}).</p>
+      <div class="info-card"><div class="info-row"><span class="info-label">Joining date:</span><span class="info-value">${escapeHtml(joinDate)}</span></div><div class="info-row"><span class="info-label">Next step:</span><span class="info-value">Contact HR and be ready to complete your first-day joining process</span></div></div>
+      <p class="text">If you need to change the date, please contact your HR team before joining day.</p>
+    `;
+    const html = await this.buildHtmlTemplate({ title: "Joining date reminder", badge: "Pre-joining reminder", contentHtml, ctaText: "Open onboarding portal", ctaUrl: onboardingUrl, companyName, companyLogoUrl });
+    return this.sendEmail({ to, subject: `[Clocked] Joining reminder: ${safeDesignation}`, html });
+  }
+
+  /** Candidate onboarding invitation with the secure portal link. */
   async sendOnboardingInviteEmail(to, candidateName, { designation, expectedJoinDate, onboardingUrl, companyName, companyLogoUrl } = {}) {
     const safeCandidateName = escapeHtml(candidateName || "there");
     const safeDesignation = escapeHtml(designation || "your new role");

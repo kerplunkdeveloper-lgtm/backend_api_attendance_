@@ -26,6 +26,7 @@ const { resolvePunchLocation } = require("../utils/reverseGeocode");
 const shootRequestService = require("./shoot-request.service");
 const notificationService = require("./notification.service");
 const deviceService = require("./device.service");
+const { presentEmployeeImage } = require("../utils/privateMediaUrls");
 
 const formatLocalTime = (value, timezone = DEFAULT_TIMEZONE) =>
   new Date(value).toLocaleTimeString("en-IN", {
@@ -130,6 +131,14 @@ const withoutPunchLocation = (record) => {
     rest.events = rest.events.map(({ latitude, longitude, accuracy, ...event }) => event);
   }
   return rest;
+};
+
+// Attendance tables also render employee avatars. Normalize private S3 avatar
+// keys into the authenticated media route before returning any attendance
+// response, otherwise those rows silently fall back to initials.
+const presentAttendanceEmployeeImage = (record) => {
+  if (!record?.employee) return record;
+  return { ...record, employee: presentEmployeeImage(record.employee) };
 };
 
 /** Namespaces device/offline ids so two employees can reuse the same local key. */
@@ -2106,8 +2115,9 @@ const getAllAttendance = async (organizationId, query = {}) => {
             employeeCode: true,
             designation: true,
             avatarUrl: true,
+            avatarStorageKey: true,
             department: { select: { id: true, name: true } },
-            user: { select: { email: true, role: true } },
+            user: { select: { email: true, role: true, avatarUrl: true, avatarStorageKey: true } },
           },
         },
         branch: { select: { id: true, name: true } },
@@ -2121,7 +2131,9 @@ const getAllAttendance = async (organizationId, query = {}) => {
     prisma.attendance.count({ where: workforceWhere }),
   ]);
 
-  const visibleRecords = records.filter((record) => !NON_ATTENDANCE_ROLES.includes(record.employee?.user?.role));
+  const visibleRecords = records
+    .filter((record) => !NON_ATTENDANCE_ROLES.includes(record.employee?.user?.role))
+    .map(presentAttendanceEmployeeImage);
   return { records: visibleRecords, total, page: curPage, totalPages: Math.ceil(total / take) };
 };
 
@@ -2327,9 +2339,9 @@ const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, 
       include: {
         employee: {
           select: {
-            id: true, firstName: true, lastName: true, employeeCode: true, designation: true, avatarUrl: true,
+            id: true, firstName: true, lastName: true, employeeCode: true, designation: true, avatarUrl: true, avatarStorageKey: true,
             department: { select: { id: true, name: true } },
-            user: { select: { email: true, role: true } },
+            user: { select: { email: true, role: true, avatarUrl: true, avatarStorageKey: true } },
           },
         },
         branch: { select: { id: true, name: true, radiusMeters: true, ...(canSeeLocation ? { latitude: true, longitude: true } : {}) } },
@@ -2367,9 +2379,9 @@ const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, 
           ...(branchId && branchId !== "ALL" ? { branchId: String(branchId) } : {}),
         },
         select: {
-          id: true, firstName: true, lastName: true, employeeCode: true, designation: true, avatarUrl: true, branchId: true,
+          id: true, firstName: true, lastName: true, employeeCode: true, designation: true, avatarUrl: true, avatarStorageKey: true, branchId: true,
           department: { select: { id: true, name: true } },
-          user: { select: { email: true, role: true } },
+          user: { select: { email: true, role: true, avatarUrl: true, avatarStorageKey: true } },
           branch: { select: { id: true, name: true, radiusMeters: true, ...(canSeeLocation ? { latitude: true, longitude: true } : {}) } },
           shift: { select: { id: true, name: true, startTime: true, endTime: true, graceMinutes: true, workingDays: true } },
         },
@@ -2407,7 +2419,8 @@ const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, 
     }));
   }
 
-  const combined = status === "ABSENT" || status === "ALL" ? [...records, ...virtualAbsent] : records;
+  const combined = (status === "ABSENT" || status === "ALL" ? [...records, ...virtualAbsent] : records)
+    .map(presentAttendanceEmployeeImage);
   combined.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   const paged = mayAddVirtualAbsence ? combined.slice(skip, skip + take) : combined;
   const combinedTotal = total + virtualAbsent.length;

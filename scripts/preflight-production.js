@@ -3,7 +3,10 @@ require("dotenv").config();
 const { validateEnvironment } = require("../src/config/environment");
 const { Client } = require("pg");
 
-const REQUIRED_MIGRATION = "20261012190000_oidc_sso";
+const REQUIRED_MIGRATIONS = [
+  "20261012190000_oidc_sso",
+  "20261125120000_add_joining_lifecycle",
+];
 let client;
 
 // Verify the same canonical database URL used by the running API. Production
@@ -24,13 +27,15 @@ async function main() {
   });
   await client.connect();
   const result = await client.query(
-    'SELECT "migration_name" FROM public."_prisma_migrations" WHERE "migration_name" = $1 AND "finished_at" IS NOT NULL LIMIT 1',
-    [REQUIRED_MIGRATION],
+    'SELECT "migration_name" FROM public."_prisma_migrations" WHERE "migration_name" = ANY($1::text[]) AND "finished_at" IS NOT NULL',
+    [REQUIRED_MIGRATIONS],
   );
-  if (result.rows.length !== 1) {
-    throw new Error(`Database migration ${REQUIRED_MIGRATION} is not applied. Run prisma migrate deploy before serving traffic.`);
+  const applied = new Set(result.rows.map((row) => row.migration_name));
+  const missing = REQUIRED_MIGRATIONS.filter((name) => !applied.has(name));
+  if (missing.length) {
+    throw new Error(`Database migrations not applied: ${missing.join(", ")}. Run prisma migrate deploy before serving traffic.`);
   }
-  console.log(`Production preflight passed. Required migration applied: ${REQUIRED_MIGRATION}`);
+  console.log(`Production preflight passed. Required migrations applied: ${REQUIRED_MIGRATIONS.join(", ")}`);
 }
 
 main()
