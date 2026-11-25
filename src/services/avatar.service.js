@@ -1,5 +1,6 @@
 
 const prisma = require("../config/database");
+const { presentEmployeeImage } = require("../utils/privateMediaUrls");
 
 const {
   uploadImage,
@@ -527,10 +528,11 @@ const setEmployeeAvatar = async (
           email: true,
           role: true,
           avatarUrl: true,
+          avatarStorageKey: true,
         },
       },
     },
-  });
+  }).then((employee) => presentEmployeeImage(employee));
 };
 
 const getMyAvatarFile = async (userId, organizationId) => {

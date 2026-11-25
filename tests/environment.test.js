@@ -13,6 +13,7 @@ const required = {
   REFRESH_TOKEN_SECRET: "refresh-secret",
   RESET_PASSWORD_SECRET: "reset-secret",
   DIRECT_URL: "postgresql://user:pass@localhost:5432/workpulse",
+  REDIS_URL: "redis://localhost:6379",
   CLOUDINARY_CLOUD_NAME: "cloud",
   CLOUDINARY_API_KEY: "key",
   CLOUDINARY_API_SECRET: "secret",

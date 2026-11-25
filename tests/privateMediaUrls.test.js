@@ -18,6 +18,11 @@ test("private employee S3 avatar resolves to tenant-authorized API endpoint", ()
   assert.equal(presented.avatarUrl, "/api/employees/emp-1/avatar-file");
   assert.equal("avatarStorageKey" in presented, false);
 });
+test("employee media falls back to the linked user photo", () => {
+  const url = "https://res.cloudinary.com/example/image/upload/user-avatar.png";
+  assert.equal(employeeAvatarUrl({ id: "emp-2", avatarUrl: null, user: { avatarUrl: url } }), url);
+  assert.equal(employeeAvatarUrl({ id: "emp-2", avatarUrl: null, user: { avatarStorageKey: "organizations/org/avatars/key" } }), "/api/employees/emp-2/avatar-file");
+});
 test("legacy organization logo remains unchanged", () => {
   const url = "https://res.cloudinary.com/example/image/upload/logo.png";
   assert.equal(organizationLogoUrl({ id: "org-1", logoUrl: url, logoStorageKey: null }), url);

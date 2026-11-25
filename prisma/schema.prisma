@@ -201,8 +201,8 @@ model StorageObject {
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
-  @@index([organizationId, purpose])
   @@unique([provider, storageKey])
+  @@index([organizationId, purpose])
 }
 
 // ─── Working on a day off (weekly off, holiday, company leave) ───────────────
@@ -695,7 +695,7 @@ model User {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  organization            Organization       @relation(fields: [organizationId], references: [id])
+  organization            Organization          @relation(fields: [organizationId], references: [id])
   employee                Employee?
   notifications           Notification[]
   pushSubscriptions       PushSubscription[]
@@ -704,8 +704,8 @@ model User {
   chatMemberships         ChatMember[]
   chatMessages            ChatMessage[]
   ssoLoginCodes           SsoLoginCode[]
-  uploadedCompanyPolicies CompanyPolicy[]    @relation("CompanyPolicyUploadedBy")
-  updatedCompanyPolicies  CompanyPolicy[]    @relation("CompanyPolicyUpdatedBy")
+  uploadedCompanyPolicies CompanyPolicy[]       @relation("CompanyPolicyUploadedBy")
+  updatedCompanyPolicies  CompanyPolicy[]       @relation("CompanyPolicyUpdatedBy")
   aiConversations         AIConversation[]
   aiKnowledgeDocuments    AIKnowledgeDocument[] @relation("AIKnowledgeUploadedBy")
   aiToolAuditLogs         AIToolAuditLog[]
@@ -719,16 +719,16 @@ model User {
 }
 
 model AIConversation {
-  id             String      @id @default(uuid())
+  id             String    @id @default(uuid())
   organizationId String
   userId         String
   title          String?
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
   deletedAt      DateTime?
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   messages     AIMessage[]
   usageRecords AIUsageRecord[]
 
@@ -737,13 +737,13 @@ model AIConversation {
 }
 
 model AIMessage {
-  id             String          @id @default(uuid())
+  id             String   @id @default(uuid())
   conversationId String
   organizationId String
-  role           String          // user | assistant | system
-  content        String          @db.Text
+  role           String // user | assistant | system
+  content        String   @db.Text
   toolName       String?
-  createdAt      DateTime        @default(now())
+  createdAt      DateTime @default(now())
 
   conversation AIConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -753,17 +753,17 @@ model AIMessage {
 }
 
 model AIKnowledgeDocument {
-  id             String   @id @default(uuid())
+  id             String    @id @default(uuid())
   organizationId String?
   uploadedById   String?
   title          String
-  category       String   @default("GENERAL")
-  sourceType     String   @default("TEXT") // TEXT | MARKDOWN | PDF
+  category       String    @default("GENERAL")
+  sourceType     String    @default("TEXT") // TEXT | MARKDOWN | PDF
   fileName       String?
-  content        String   @db.Text
-  isPublished    Boolean  @default(false)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  content        String    @db.Text
+  isPublished    Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
   archivedAt     DateTime?
 
   organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -784,8 +784,8 @@ model AIUsageRecord {
   estimatedCost  Decimal  @default(0) @db.Decimal(12, 6)
   createdAt      DateTime @default(now())
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   conversation AIConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
 
   @@index([organizationId, createdAt])
@@ -1517,6 +1517,9 @@ enum OnboardingStatus {
   OFFER_GENERATED
   OFFER_SENT
   OFFER_ACCEPTED
+  PRE_JOINING
+  JOINING_RESCHEDULED
+  NO_SHOW
   OFFER_REJECTED
   ACTIVATED
   REJECTED
@@ -1597,6 +1600,18 @@ model OnboardingCandidate {
   offerRespondedAt       DateTime?
   candidateSignature     String?
   offerRejectReason      String?
+
+  // Post-acceptance joining lifecycle. Acceptance does not activate an employee.
+  actualJoiningDate       DateTime? @db.Date
+  joiningConfirmedAt      DateTime?
+  joiningConfirmedBy      String?
+  joiningRescheduledFrom  DateTime? @db.Date
+  joiningRescheduleReason String?
+  noShowAt                DateTime?
+  noShowReason            String?
+  reminder7SentAt         DateTime?
+  reminder2SentAt         DateTime?
+  joiningDayReminderAt    DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2415,4 +2430,3 @@ model BillingEvent {
 
   @@index([organizationId])
 }
-

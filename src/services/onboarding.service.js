@@ -1,12 +1,11 @@
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const prisma = require("../config/database");
-const { DEFAULT_OFFER_LETTER_TEMPLATE, normalizeOfferLetterTemplate } = require("../utils/offerLetterTemplate");
+const { normalizeOfferLetterTemplate } = require("../utils/offerLetterTemplate");
 const { validateIdentityFields, parsePastDate } = require("../utils/employeeValidation");
 const { uploadImage, uploadBuffer, signedDeliveryUrl, isSensitiveDocumentType } = require("../config/cloudinary");
 const { uploadBuffer: uploadS3Buffer, getDownloadUrl, deleteObject: deleteS3Object } = require("../config/s3");
 const emailService = require("./email.service");
-const whatsappService = require("./whatsapp.service");
 const { generateTempPassword, resolveAssignableRole } = require("../utils/password");
 const { resolveAvatarUrl } = require("../utils/avatar");
 const { assertSeatAvailable } = require("./entitlement.service");
@@ -14,6 +13,8 @@ const { normalizeIndianPhone } = require("../utils/phone");
 const { getNextEmployeeCode } = require("../utils/employeeCode");
 const { releaseDeletedEmployeeEmail } = require("../utils/releaseDeletedAccountEmail");
 const { assertStorageAvailable, addStorageObject } = require("./storage-quota.service");
+const { generateOfferLetterPdf } = require("./offer-letter-pdf.service");
+const employeeDocumentService = require("./employee-document.service");
 
 // The onboarding database enum predates the employee-document enum. Accept the
 // names used by the current portal and persist the values supported by
@@ -26,7 +27,7 @@ const ONBOARDING_DOCUMENT_TYPE_ALIASES = {
 };
 
 const PORTAL_TTL_MS = 14 * 24 * 60 * 60 * 1000;
-const CLOSED_PORTAL_STATUSES = new Set(["ACTIVATED", "REJECTED", "OFFER_REJECTED"]);
+const CLOSED_PORTAL_STATUSES = new Set(["ACTIVATED", "REJECTED", "OFFER_REJECTED", "NO_SHOW"]);
 
 // Keep all joining dates date-only. Constructing a Date from a locale string
 // causes the same candidate to appear one day early/late in some timezones.
@@ -72,6 +73,32 @@ const assertPortalCandidate = (candidate, { allowClosedReadOnly = false } = {}) 
 };
 
 class OnboardingService {
+  async storeOfferLetterOnEmployee(organizationId, employeeId, offerLetterData, organization) {
+    if (!employeeId || !offerLetterData) return null;
+    const existing = await prisma.employeeDocument.findFirst({
+      where: { organizationId, employeeId, documentType: "OFFER_LETTER", title: `Offer Letter - ${offerLetterData.referenceNo}` },
+    });
+    if (existing) return existing;
+
+    const pdf = await generateOfferLetterPdf({
+      offer: offerLetterData,
+      companyName: organization?.name,
+      companyLogoUrl: organization?.logoUrl,
+    });
+    return employeeDocumentService.uploadEmployeeDocument(
+      organizationId,
+      employeeId,
+      {
+        documentType: "OFFER_LETTER",
+        title: `Offer Letter - ${offerLetterData.referenceNo}`,
+        fileName: `Offer_Letter_${String(offerLetterData.candidateName || "Employee").replace(/[^a-z0-9]+/gi, "_")}.pdf`,
+        mimeType: "application/pdf",
+      },
+      pdf,
+      { id: "system", role: "COMPANY_ADMIN" },
+    );
+  }
+
   async getDocumentContent(document, organizationId) {
     if (!document) throw Object.assign(new Error("Document not found"), { statusCode: 404 });
     if (document.storageProvider === "s3") {
@@ -724,6 +751,10 @@ class OnboardingService {
       role = "EMPLOYEE",
       actorRole = "COMPANY_ADMIN",
     } = approvalData;
+    const actualJoiningDate = approvalData.actualJoiningDate
+      ? parseJoiningDate(approvalData.actualJoiningDate)
+      : new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()));
+    if (!actualJoiningDate) throw joiningDateError();
 
     const tempPassword = initialPassword && String(initialPassword).trim()
       ? String(initialPassword).trim()
@@ -741,7 +772,7 @@ class OnboardingService {
     const basic = Math.round(salaryVal * 0.5);
     const hra = Math.round(salaryVal * 0.3);
     const specialAllowance = Math.round(salaryVal * 0.2);
-    const offerTemplate = normalizeOfferLetterTemplate(candidate.organization.hrAccess?.OFFER_LETTER_TEMPLATE || DEFAULT_OFFER_LETTER_TEMPLATE);
+    const offerTemplate = normalizeOfferLetterTemplate();
 
     const offerLetterData = {
       referenceNo: offerLetterRef,
@@ -817,7 +848,7 @@ class OnboardingService {
           // Promote the fields the candidate already provided so they are not
           // silently dropped after conversion.
           designation: candidate.designation || null,
-          dateOfJoining: candidate.expectedJoinDate || candidate.dateOfJoining || null,
+          dateOfJoining: actualJoiningDate,
           dateOfBirth: candidate.dateOfBirth || null,
           gender: ["MALE", "FEMALE"].includes(String(candidate.gender || "").trim().toUpperCase())
             ? String(candidate.gender).trim().toUpperCase()
@@ -855,6 +886,9 @@ class OnboardingService {
         where: { id: candidate.id },
         data: {
           status: "ACTIVATED",
+          actualJoiningDate,
+          joiningConfirmedAt: new Date(),
+          joiningConfirmedBy: adminUserId,
           adminApproverId: adminUserId,
           adminNotes: adminNotes ? String(adminNotes).trim() : null,
           adminApprovedAt: new Date(),
@@ -876,6 +910,11 @@ class OnboardingService {
       };
     });
 
+    if (candidate.offerLetterData && result.employee?.id) {
+      await this.storeOfferLetterOnEmployee(organizationId, result.employee.id, candidate.offerLetterData, candidate.organization)
+        .catch((error) => console.warn("[OnboardingActivate] Offer letter profile storage failed:", error.message));
+    }
+
     // Send only the account welcome message for the direct activation path.
     const candEmail = candidate.email;
     const candName = `${candidate.firstName} ${candidate.lastName || ""}`.trim();
@@ -893,6 +932,56 @@ class OnboardingService {
     }
 
     return result;
+  }
+
+  async rescheduleJoining(organizationId, candidateId, actorId, joiningData = {}) {
+    const candidate = await prisma.onboardingCandidate.findFirst({ where: { id: candidateId, organizationId } });
+    if (!candidate) throw Object.assign(new Error("Candidate record not found"), { statusCode: 404 });
+    if (!["OFFER_ACCEPTED", "PRE_JOINING", "JOINING_RESCHEDULED"].includes(candidate.status)) {
+      throw Object.assign(new Error("Only an accepted offer can be rescheduled"), { statusCode: 400 });
+    }
+    const newDate = parseJoiningDate(joiningData.joiningDate || joiningData.expectedJoinDate);
+    if (!newDate) throw joiningDateError();
+    if (!String(joiningData.reason || "").trim()) {
+      throw Object.assign(new Error("A reason is required when rescheduling the joining date"), { statusCode: 400 });
+    }
+    const offerLetterData = candidate.offerLetterData && typeof candidate.offerLetterData === "object"
+      ? { ...candidate.offerLetterData, expectedJoinDate: newDate.toISOString().split("T")[0] }
+      : candidate.offerLetterData;
+    return prisma.onboardingCandidate.update({
+      where: { id: candidate.id },
+      data: {
+        status: "JOINING_RESCHEDULED",
+        expectedJoinDate: newDate,
+        joiningRescheduledFrom: candidate.expectedJoinDate,
+        joiningRescheduleReason: String(joiningData.reason).trim(),
+        offerLetterData,
+        reminder7SentAt: null,
+        reminder2SentAt: null,
+        joiningDayReminderAt: null,
+        adminNotes: actorId ? `${candidate.adminNotes || ""}${candidate.adminNotes ? "\n" : ""}Joining date rescheduled by ${actorId}` : candidate.adminNotes,
+      },
+      include: { branch: { select: { id: true, name: true } }, department: { select: { id: true, name: true } } },
+    });
+  }
+
+  async markNoShow(organizationId, candidateId, actorId, noShowData = {}) {
+    const candidate = await prisma.onboardingCandidate.findFirst({ where: { id: candidateId, organizationId } });
+    if (!candidate) throw Object.assign(new Error("Candidate record not found"), { statusCode: 404 });
+    if (!["OFFER_ACCEPTED", "PRE_JOINING", "JOINING_RESCHEDULED"].includes(candidate.status)) {
+      throw Object.assign(new Error("Only an accepted pre-joining candidate can be marked as no-show"), { statusCode: 400 });
+    }
+    return prisma.onboardingCandidate.update({
+      where: { id: candidate.id },
+      data: {
+        status: "NO_SHOW",
+        noShowAt: new Date(),
+        noShowReason: String(noShowData.reason || "Candidate did not join on the confirmed date").trim(),
+        revokedAt: new Date(),
+        adminNotes: actorId ? `${candidate.adminNotes || ""}${candidate.adminNotes ? "\n" : ""}Marked no-show by ${actorId}` : candidate.adminNotes,
+      },
+      include: { branch: { select: { id: true, name: true } }, department: { select: { id: true, name: true } } },
+    });
   }
 
   /**
@@ -930,7 +1019,7 @@ class OnboardingService {
     const basic = Math.round(salaryVal * 0.5);
     const hra = Math.round(salaryVal * 0.3);
     const specialAllowance = Math.round(salaryVal * 0.2);
-    const offerTemplate = normalizeOfferLetterTemplate(candidate.organization.hrAccess?.OFFER_LETTER_TEMPLATE || DEFAULT_OFFER_LETTER_TEMPLATE);
+    const offerTemplate = normalizeOfferLetterTemplate();
 
     const offerLetterData = {
       referenceNo: offerLetterRef,
@@ -1019,7 +1108,7 @@ class OnboardingService {
     const basic = Math.round(salaryVal * 0.5);
     const hra = Math.round(salaryVal * 0.3);
     const specialAllowance = Math.round(salaryVal * 0.2);
-    const offerTemplate = normalizeOfferLetterTemplate(candidate.organization.hrAccess?.OFFER_LETTER_TEMPLATE || DEFAULT_OFFER_LETTER_TEMPLATE);
+    const offerTemplate = normalizeOfferLetterTemplate();
 
     const offerLetterData = {
       referenceNo: offerLetterRef,
@@ -1101,9 +1190,7 @@ class OnboardingService {
     }
 
     const { hrReviewNotes } = sendData;
-    const deliveryChannel = ["EMAIL", "WHATSAPP", "BOTH"].includes(String(sendData.deliveryChannel || "").toUpperCase())
-      ? String(sendData.deliveryChannel).toUpperCase()
-      : "BOTH";
+    const deliveryChannel = "EMAIL";
 
     const updated = await prisma.onboardingCandidate.update({
       where: { id: candidate.id },
@@ -1132,14 +1219,8 @@ class OnboardingService {
       companyLogoUrl: candidate.organization?.logoUrl,
     };
     const [emailDelivery, whatsappDelivery] = await Promise.all([
-      deliveryChannel === "WHATSAPP"
-        ? Promise.resolve({ success: false, skipped: true, error: "Email delivery skipped" })
-        : emailService.sendOfferLetterEmail(candidate.email, candidateName, offerMessage).catch((error) => ({ success: false, error: error.message })),
-      deliveryChannel === "EMAIL"
-        ? Promise.resolve({ success: false, skipped: true, error: "WhatsApp delivery skipped" })
-        : candidate.phone
-          ? whatsappService.sendOfferLetterWhatsApp(candidate.phone, candidateName, { designation: candidate.designation, offerUrl }).catch((error) => ({ success: false, error: error.message }))
-          : Promise.resolve({ success: false, error: "Candidate phone is missing" }),
+      emailService.sendOfferLetterEmail(candidate.email, candidateName, offerMessage).catch((error) => ({ success: false, error: error.message })),
+      Promise.resolve({ success: false, skipped: true, error: "WhatsApp delivery disabled; offer is sent by email only" }),
     ]);
 
     return { ...updated, deliveryChannel, emailDelivery, whatsappDelivery, resent: isResend };
@@ -1198,114 +1279,14 @@ class OnboardingService {
       throw error;
     }
 
-    // Provision user & employee account upon acceptance if not already created
-    let employeeId = candidate.employeeId;
-    let newEmployee = null;
-
-    if (!employeeId) {
-      const tempPassword = generateTempPassword();
-      const passwordHash = await bcrypt.hash(tempPassword, 10);
-      const finalEmployeeCode = await getNextEmployeeCode(candidate.organizationId, prisma);
-      const salaryVal = candidate.proposedSalary ? Number(candidate.proposedSalary) / 12 : 50000;
-      const basic = Math.round(salaryVal * 0.5);
-      const hra = Math.round(salaryVal * 0.3);
-      const specialAllowance = Math.round(salaryVal * 0.2);
-
-      const created = await prisma.$transaction(async (tx) => {
-        await assertSeatAvailable(candidate.organizationId, tx);
-        let u = await tx.user.findUnique({
-          where: {
-            organizationId_email: {
-              organizationId: candidate.organizationId,
-              email: candidate.email,
-            },
-          },
-        });
-        if (!u) {
-          u = await tx.user.create({
-            data: {
-              organizationId: candidate.organizationId,
-              email: candidate.email,
-              passwordHash,
-              role: "EMPLOYEE",
-              mustChangePassword: true,
-              isActive: true,
-              // Converted from a vetted onboarding candidate, not self-registered.
-              emailVerifiedAt: new Date(),
-            },
-          });
-        }
-
-        const candidateAvatar = resolveAvatarUrl({
-          firstName: candidate.firstName,
-          lastName: candidate.lastName,
-          employeeCode: finalEmployeeCode,
-        });
-
-        const emp = await tx.employee.create({
-          data: {
-            organizationId: candidate.organizationId,
-            userId: u.id,
-            employeeCode: finalEmployeeCode,
-            firstName: candidate.firstName,
-            lastName: candidate.lastName,
-            phone: candidate.phone,
-            avatarUrl: candidateAvatar,
-            status: "ACTIVE",
-            branchId: candidate.branchId,
-            departmentId: candidate.departmentId,
-            shiftId: candidate.shiftId,
-            designation: candidate.designation || null,
-            dateOfJoining: candidate.expectedJoinDate || candidate.dateOfJoining || null,
-            dateOfBirth: candidate.dateOfBirth || null,
-            workEmail: candidate.email || null,
-            panNumber: candidate.panNumber || null,
-            uanNumber: candidate.uanNumber || null,
-            bankName: candidate.bankName || null,
-            bankAccountNumber: candidate.accountNumber || candidate.bankAccountNumber || null,
-            bankIfsc: candidate.ifscCode || candidate.bankIfsc || null,
-            emergencyContactName: candidate.emergencyContactName || null,
-            emergencyContactPhone: candidate.emergencyContactPhone || null,
-            address: candidate.currentAddress || candidate.permanentAddress || candidate.address || null,
-          },
-        });
-
-        await tx.salaryStructure.create({
-          data: {
-            organizationId: candidate.organizationId,
-            employeeId: emp.id,
-            annualCtc: salaryVal * 12,
-            monthlyCtc: salaryVal,
-            baseSalary: basic,
-            hra: hra,
-            special: specialAllowance,
-          },
-        });
-
-        return { user: u, employee: emp };
-      });
-
-      employeeId = created.employee.id;
-      newEmployee = created.employee;
-
-      emailService
-        .sendEmployeeWelcomeEmail(candidate.email, `${candidate.firstName} ${candidate.lastName || ""}`.trim(), {
-          organizationName: candidate.organization?.name || "Clocked",
-          companyLogoUrl: candidate.organization?.logoUrl,
-          tempPassword,
-          loginUrl: `${process.env.FRONTEND_URL || "http://localhost:3000"}/login`,
-          role: "EMPLOYEE",
-        })
-        .catch((e) => console.warn("[OnboardingAccept] Welcome email failed:", e.message));
-    }
-
+    // Acceptance is not joining. Keep the candidate in the pre-joining
+    // pipeline until HR confirms the person actually joined.
     const accepted = await prisma.onboardingCandidate.update({
       where: { id: candidate.id },
       data: {
-        status: "OFFER_ACCEPTED",
+        status: "PRE_JOINING",
         candidateSignature: signature.trim(),
         offerRespondedAt: new Date(),
-        employeeId,
       },
       include: {
         branch: { select: { id: true, name: true } },
@@ -1314,11 +1295,12 @@ class OnboardingService {
     });
 
     return {
-      status: "OFFER_ACCEPTED",
-      message: "Offer letter accepted successfully! Welcome to the team.",
+      status: "PRE_JOINING",
+      message: "Offer accepted. Your employee account will be activated after HR confirms your joining.",
       candidate: accepted,
-      employee: newEmployee,
+      employee: null,
     };
+
   }
 }
 

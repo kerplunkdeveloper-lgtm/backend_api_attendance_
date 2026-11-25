@@ -95,6 +95,25 @@ router.post(
   onboardingController.adminApproveAndActivate,
 );
 
+// Admin confirms the candidate actually joined and activates the employee account.
+router.post(
+  "/:id/mark-joined",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
+  onboardingController.markJoined,
+);
+
+router.post(
+  "/:id/reschedule-joining",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
+  onboardingController.rescheduleJoining,
+);
+
+router.post(
+  "/:id/no-show",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
+  onboardingController.markNoShow,
+);
+
 router.use(handleUploadErrors);
 
 module.exports = router;

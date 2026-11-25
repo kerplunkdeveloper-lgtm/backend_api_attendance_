@@ -70,17 +70,17 @@ const privateAvatarUrl = (employeeId) => employeeId
 const presentEmployeeMedia = (employee) => {
   if (!employee) return employee;
   const safe = { ...employee };
-  const employeeStorageKey = safe.avatarStorageKey;
+  const hasPrivateAvatar = Boolean(safe.avatarStorageKey || safe.user?.avatarStorageKey);
   delete safe.avatarStorageKey;
   if (safe.user) {
-    const userStorageKey = safe.user.avatarStorageKey;
     safe.user = { ...safe.user };
     delete safe.user.avatarStorageKey;
-    if (userStorageKey || employeeStorageKey) {
-      safe.avatarUrl = privateAvatarUrl(safe.id);
-      safe.user.avatarUrl = safe.avatarUrl;
+    const resolved = hasPrivateAvatar ? privateAvatarUrl(safe.id) : (safe.avatarUrl || safe.user.avatarUrl || null);
+    if (resolved) {
+      safe.avatarUrl = resolved;
+      safe.user.avatarUrl = resolved;
     }
-  } else if (employeeStorageKey) {
+  } else if (hasPrivateAvatar) {
     safe.avatarUrl = privateAvatarUrl(safe.id);
   }
   return safe;
@@ -1155,14 +1155,14 @@ const resendEmployeeInvite = async (organizationId, invitedByUserId, employeeId)
 const getMyEmployee = async (organizationId, userId) => {
   const employee = await prisma.employee.findFirst({
     where: { organizationId, userId, deletedAt: null },
-    include: { branch: true, department: true, shift: true, user: { select: { id: true, email: true, role: true } } },
+    include: { branch: true, department: true, shift: true, user: { select: { id: true, email: true, role: true, avatarUrl: true, avatarStorageKey: true } } },
   });
   if (!employee) {
     const err = new Error("Employee profile not found");
     err.statusCode = 404;
     throw err;
   }
-  return employee;
+  return presentEmployeeMedia(employee);
 };
 
 const updateMyProfile = async (organizationId, userId, data, actorRole = "EMPLOYEE") => {
@@ -1251,9 +1251,9 @@ const updateMyProfile = async (organizationId, userId, data, actorRole = "EMPLOY
             ? { branchId: data.branchId ? String(data.branchId) : null }
             : {}),
       },
-      include: { branch: true, department: true, shift: true, user: { select: { id: true, email: true, role: true, avatarUrl: true } } },
+      include: { branch: true, department: true, shift: true, user: { select: { id: true, email: true, role: true, avatarUrl: true, avatarStorageKey: true } } },
     });
-  });
+  }).then((updated) => presentEmployeeMedia(updated));
 };
 
 

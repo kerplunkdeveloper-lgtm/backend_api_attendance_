@@ -31,6 +31,19 @@ const getRedis = async () => {
 };
 
 /**
+ * Production readiness helper. Redis is optional for local development, but
+ * a multi-replica deployment must not silently fall back to process-local
+ * locks/rate limits. The readiness endpoint uses this instead of exposing the
+ * client implementation details to the HTTP layer.
+ */
+const pingRedis = async () => {
+  const redis = await getRedis();
+  if (!redis) return { configured: false, connected: false };
+  await redis.ping();
+  return { configured: true, connected: true };
+};
+
+/**
  * Redis clients cannot issue normal commands after SUBSCRIBE, so realtime
  * consumers use a duplicated connection. The duplicate is created lazily so
  * applications that only need rate limiting do not open an extra connection.
@@ -97,6 +110,7 @@ module.exports = {
   getRedis,
   getRedisSubscriber,
   logRedisError,
+  pingRedis,
   publishRedis,
   withRedisLock,
 };
