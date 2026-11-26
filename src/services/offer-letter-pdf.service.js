@@ -1,5 +1,7 @@
 const PDFDocument = require("pdfkit");
+const { PDFDocument: EditablePdfDocument, rgb, StandardFonts } = require("pdf-lib");
 const { DEFAULT_OFFER_LETTER_TEMPLATE, normalizeOfferLetterTemplate } = require("../utils/offerLetterTemplate");
+const { getFileContent } = require("../config/s3");
 
 const money = (value) => {
   const amount = Number(value || 0);
@@ -28,6 +30,49 @@ const fetchLogo = async (logoUrl) => {
   }
 };
 
+const fieldValue = (key, offer, companyName) => interpolateTemplate(`{{${key}}}`, offer, companyName);
+const pdfColor = (value) => {
+  const hex = String(value || "#111827").replace("#", "");
+  return rgb(parseInt(hex.slice(0, 2), 16) / 255, parseInt(hex.slice(2, 4), 16) / 255, parseInt(hex.slice(4, 6), 16) / 255);
+};
+
+const loadUploadedTemplate = async (pdf) => {
+  if (!pdf) return null;
+  if (pdf.provider === "s3" && pdf.key) return (await getFileContent(pdf.key, pdf.organizationId)).buffer;
+  if (pdf.url) {
+    const response = await fetch(pdf.url);
+    if (!response.ok) throw new Error("Offer letter template could not be downloaded.");
+    return Buffer.from(await response.arrayBuffer());
+  }
+  return null;
+};
+
+const generateFromUploadedTemplate = async ({ offer, companyName, template }) => {
+  const pdf = await loadUploadedTemplate({ ...template.pdf, organizationId: offer.organizationId });
+  if (!pdf) return null;
+  const document = await EditablePdfDocument.load(pdf);
+  const font = await document.embedFont(StandardFonts.Helvetica);
+  const form = document.getForm();
+  const fields = template.pdfFields || {};
+  const configuredNames = Object.keys(fields);
+  const formNames = configuredNames.length ? configuredNames : form.getFields().map((field) => field.getName());
+  for (const name of formNames) {
+    const field = fields[name] || { page: 1, x: 0, y: 0, fontSize: 10, color: "#111827" };
+    const value = fieldValue(name, offer, companyName);
+    if (value === `{{${name}}}`) continue;
+    try {
+      const formField = form.getTextField(name);
+      formField.setText(value);
+    } catch {
+      const page = document.getPages()[Math.max(0, Number(field.page || 1) - 1)];
+      if (!page) continue;
+      const size = Number(field.fontSize || 10);
+      page.drawText(value, { x: Number(field.x || 0), y: page.getHeight() - Number(field.y || 0) - size, size, font, color: pdfColor(field.color), maxWidth: Number(field.maxWidth || undefined) || undefined });
+    }
+  }
+  return Buffer.from(await document.save());
+};
+
 const interpolateTemplate = (text, offer, companyName) => String(text || "")
   .replaceAll("{{candidateName}}", offer.candidateName || "Candidate")
   .replaceAll("{{employeeName}}", offer.candidateName || "Candidate")
@@ -45,6 +90,10 @@ const interpolateTemplate = (text, offer, companyName) => String(text || "")
   .replaceAll("{{joiningDate}}", dateText(offer.expectedJoinDate))
   .replaceAll("{{annualCtc}}", money(offer.compensation?.ctcAnnual || Number(offer.salary || 0) * 12))
   .replaceAll("{{monthlyCtc}}", money(offer.compensation?.grossMonthly || offer.salary))
+  .replaceAll("{{salary}}", money(offer.compensation?.grossMonthly || offer.salary))
+  .replaceAll("{{annualSalary}}", money(offer.compensation?.ctcAnnual || Number(offer.salary || 0) * 12))
+  .replaceAll("{{employee_name}}", offer.candidateName || "Candidate")
+  .replaceAll("{{joining_date}}", dateText(offer.expectedJoinDate))
   .replaceAll("{{basicMonthly}}", money(offer.compensation?.basicMonthly))
   .replaceAll("{{hraMonthly}}", money(offer.compensation?.hraMonthly))
   .replaceAll("{{specialAllowanceMonthly}}", money(offer.compensation?.specialAllowanceMonthly))
@@ -56,6 +105,10 @@ const interpolateTemplate = (text, offer, companyName) => String(text || "")
 
 const generateOfferLetterPdf = async ({ offer, companyName, companyLogoUrl }) => {
   const template = normalizeOfferLetterTemplate(offer.template || DEFAULT_OFFER_LETTER_TEMPLATE);
+  if (template.pdf) {
+    const uploadedPdf = await generateFromUploadedTemplate({ offer, companyName, template });
+    if (uploadedPdf) return uploadedPdf;
+  }
   const interpolate = (text) => interpolateTemplate(text, offer, companyName);
   const document = new PDFDocument({ size: "A4", margin: 54, info: {
     Title: `Offer Letter - ${offer.candidateName}`,

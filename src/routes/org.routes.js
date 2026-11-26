@@ -4,7 +4,7 @@ const {
   authenticate,
   authorizeRoles,
 } = require("../middleware/auth.middleware");
-const { imageUploader, handleUploadErrors } = require("../middleware/upload.middleware");
+const { imageUploader, documentUploader, handleUploadErrors } = require("../middleware/upload.middleware");
 
 const logoFields = imageUploader().fields([
   { name: "logo", maxCount: 1 },
@@ -18,6 +18,9 @@ router.get("/", orgController.get);
 router.get("/logo-file", orgController.getLogoFile);
 router.get("/exit-document-templates", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"), orgController.getExitDocumentTemplates);
 router.put("/exit-document-templates", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"), orgController.updateExitDocumentTemplates);
+router.get("/offer-letter-template", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"), orgController.getOfferLetterTemplate);
+router.put("/offer-letter-template", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"), orgController.updateOfferLetterTemplate);
+router.post("/offer-letter-template/upload", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"), documentUploader.single("file"), handleUploadErrors, orgController.uploadOfferLetterTemplate);
 router.put(
   "/",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"),

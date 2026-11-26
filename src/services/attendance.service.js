@@ -1958,6 +1958,8 @@ const getLiveToday = async (organizationId) => {
         lastName: true,
         employeeCode: true,
         designation: true,
+        avatarUrl: true,
+        avatarStorageKey: true,
         department: { select: { name: true } },
         branch: { select: { id: true, name: true } },
       },
@@ -2002,9 +2004,11 @@ const getLiveToday = async (organizationId) => {
     const location = attendance
       ? attendance.checkInLocation || attendance.branch?.name || employee.branch?.name || "Location not shared"
       : null;
+    const employeeImage = presentEmployeeImage(employee);
     return {
       employeeId: employee.id,
       name,
+      avatarUrl: employeeImage?.avatarUrl || null,
       employeeCode: employee.employeeCode,
       designation: employee.designation || "Staff",
       department: employee.department?.name || null,

@@ -10,6 +10,8 @@ const { assertStorageAvailable, addStorageObject } = require("./storage-quota.se
 const ssoService = require("./sso.service");
 const { isValidTimeZone } = require("../utils/datetime");
 const { DEFAULT_EXIT_DOCUMENT_TEMPLATES, normalizeExitDocumentTemplates } = require("../utils/exitDocumentTemplate");
+const { DEFAULT_OFFER_LETTER_TEMPLATE, normalizeOfferLetterTemplate } = require("../utils/offerLetterTemplate");
+const { assertSniffedType } = require("../middleware/upload.middleware");
 const HR_ACCESS_AREAS = ["DASHBOARD", "ATTENDANCE", "EMPLOYEES", "ROLES", "APPROVALS", "ONBOARDING", "PAYROLL", "REPORTS", "AUDIT", "ANNOUNCEMENTS", "BRANCHES", "POLICIES", "SHOOTS"];
 const DEFAULT_HR_ACCESS = Object.fromEntries(HR_ACCESS_AREAS.map((area) => [area, true]));
 const DEFAULT_EMPLOYEE_ACCESS = { DASHBOARD: true, ATTENDANCE: true, EMPLOYEES: false, ROLES: false, APPROVALS: false, ONBOARDING: false, PAYROLL: true, REPORTS: false, ANNOUNCEMENTS: true, BRANCHES: false, POLICIES: false, SHOOTS: true };
@@ -185,4 +187,39 @@ async function updateExitDocumentTemplates(organizationId, payload) {
   return templates;
 }
 
-module.exports = { getSettings, updateSettings, uploadLogo, removeLogo, getLogoFile, getExitDocumentTemplates, updateExitDocumentTemplates };
+async function getOfferLetterTemplate(organizationId) {
+  const org = await prisma.organization.findUnique({ where: { id: organizationId }, select: { hrAccess: true } });
+  return normalizeOfferLetterTemplate(org?.hrAccess?.OFFER_LETTER_TEMPLATE || DEFAULT_OFFER_LETTER_TEMPLATE);
+}
+
+async function updateOfferLetterTemplate(organizationId, payload) {
+  const org = await prisma.organization.findUnique({ where: { id: organizationId }, select: { hrAccess: true } });
+  const hrAccess = org?.hrAccess && typeof org.hrAccess === "object" ? org.hrAccess : {};
+  const template = normalizeOfferLetterTemplate(payload || {});
+  await prisma.organization.update({ where: { id: organizationId }, data: { hrAccess: { ...hrAccess, OFFER_LETTER_TEMPLATE: template } } });
+  return template;
+}
+
+async function uploadOfferLetterTemplate(organizationId, file) {
+  if (!file?.buffer || !["application/pdf", "application/x-pdf"].includes(String(file.mimetype || "").toLowerCase())) {
+    throw Object.assign(new Error("Upload a PDF offer letter template."), { statusCode: 415 });
+  }
+  assertSniffedType(file);
+  await assertStorageAvailable(organizationId, file.buffer.length);
+  let pdf;
+  if (String(process.env.STORAGE_PROVIDER || "").toLowerCase() === "s3") {
+    const uploaded = await uploadS3Buffer(file.buffer, { organizationId, folder: "onboarding", contentType: "application/pdf" });
+    pdf = { provider: "s3", key: uploaded.key, fileName: file.originalname || "offer-letter-template.pdf", bytes: uploaded.bytes };
+  } else {
+    const uploaded = await uploadBuffer(file.buffer, { folder: `workpulse/${organizationId}/onboarding`, resource_type: "raw", type: "upload", format: "pdf" });
+    pdf = { provider: "cloudinary", key: uploaded.public_id, url: uploaded.secure_url || uploaded.url, fileName: file.originalname || "offer-letter-template.pdf", bytes: uploaded.bytes || file.buffer.length };
+  }
+  await addStorageObject({ organizationId, provider: pdf.provider, storageKey: pdf.key, bytes: pdf.bytes, mimeType: "application/pdf", purpose: "onboarding" });
+  const org = await prisma.organization.findUnique({ where: { id: organizationId }, select: { hrAccess: true } });
+  const hrAccess = org?.hrAccess && typeof org.hrAccess === "object" ? org.hrAccess : {};
+  const template = normalizeOfferLetterTemplate({ ...(hrAccess.OFFER_LETTER_TEMPLATE || {}), pdf });
+  await prisma.organization.update({ where: { id: organizationId }, data: { hrAccess: { ...hrAccess, OFFER_LETTER_TEMPLATE: template } } });
+  return template;
+}
+
+module.exports = { getSettings, updateSettings, uploadLogo, removeLogo, getLogoFile, getExitDocumentTemplates, updateExitDocumentTemplates, getOfferLetterTemplate, updateOfferLetterTemplate, uploadOfferLetterTemplate };

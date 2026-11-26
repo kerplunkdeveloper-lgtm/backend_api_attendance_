@@ -75,9 +75,8 @@ const validateEnvironment = () => {
     String(process.env.RESEND_FROM_EMAIL || "").trim() ||
     String(process.env.EMAIL_FROM || "").trim()
   );
-  const hasBrevoEmail = String(process.env.BREVO_API_KEY || "").trim() && String(process.env.BREVO_FROM_EMAIL || "").trim();
-  if (!hasResendEmail && !hasBrevoEmail) {
-    throw new Error("Missing transactional email configuration: set RESEND_API_KEY + RESEND_FROM_EMAIL (or BREVO_API_KEY + BREVO_FROM_EMAIL)");
+  if (!hasResendEmail) {
+    throw new Error("Missing transactional email configuration: set RESEND_API_KEY + RESEND_FROM_EMAIL");
   }
     const appEnv = String(process.env.APP_ENV || "production").toLowerCase();
   const razorpayKeyId = String(process.env.RAZORPAY_KEY_ID || "");

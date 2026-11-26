@@ -772,9 +772,10 @@ class OnboardingService {
     const basic = Math.round(salaryVal * 0.5);
     const hra = Math.round(salaryVal * 0.3);
     const specialAllowance = Math.round(salaryVal * 0.2);
-    const offerTemplate = normalizeOfferLetterTemplate();
+    const offerTemplate = normalizeOfferLetterTemplate(candidate.organization?.hrAccess?.OFFER_LETTER_TEMPLATE);
 
     const offerLetterData = {
+      organizationId,
       referenceNo: offerLetterRef,
       issuedDate: new Date().toISOString().split("T")[0],
       candidateName: `${candidate.firstName} ${candidate.lastName || ""}`.trim(),
@@ -1019,9 +1020,10 @@ class OnboardingService {
     const basic = Math.round(salaryVal * 0.5);
     const hra = Math.round(salaryVal * 0.3);
     const specialAllowance = Math.round(salaryVal * 0.2);
-    const offerTemplate = normalizeOfferLetterTemplate();
+    const offerTemplate = normalizeOfferLetterTemplate(candidate.organization?.hrAccess?.OFFER_LETTER_TEMPLATE);
 
     const offerLetterData = {
+      organizationId,
       referenceNo: offerLetterRef,
       issuedDate: new Date().toISOString().split("T")[0],
       candidateName: `${candidate.firstName} ${candidate.lastName || ""}`.trim(),
@@ -1108,9 +1110,10 @@ class OnboardingService {
     const basic = Math.round(salaryVal * 0.5);
     const hra = Math.round(salaryVal * 0.3);
     const specialAllowance = Math.round(salaryVal * 0.2);
-    const offerTemplate = normalizeOfferLetterTemplate();
+    const offerTemplate = normalizeOfferLetterTemplate(candidate.organization?.hrAccess?.OFFER_LETTER_TEMPLATE);
 
     const offerLetterData = {
+      organizationId,
       referenceNo: offerLetterRef,
       issuedDate: new Date().toISOString().split("T")[0],
       candidateName: `${candidate.firstName} ${candidate.lastName || ""}`.trim(),

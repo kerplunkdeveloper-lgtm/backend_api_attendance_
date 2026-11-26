@@ -51,6 +51,33 @@ enum RequestStatus {
   CANCELLED
 }
 
+enum SupportTicketStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING_ON_USER
+  RESOLVED
+  CLOSED
+}
+
+enum SupportTicketPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum SupportTicketCategory {
+  ATTENDANCE
+  PAYROLL
+  PROFILE
+  LEAVE
+  EMPLOYEE
+  CHAT
+  BILLING
+  BUG
+  OTHER
+}
+
 enum HalfDayPeriod {
   MORNING
   AFTERNOON
@@ -137,6 +164,8 @@ model Organization {
   payslips             Payslip[]
   permissionRequests   PermissionRequest[]
   notifications        Notification[]
+  supportTickets       SupportTicket[]
+  supportMessages      SupportMessage[]
   pushSubscriptions    PushSubscription[]
   fcmTokens            FcmToken[]
   announcements        Announcement[]
@@ -698,6 +727,9 @@ model User {
   organization            Organization          @relation(fields: [organizationId], references: [id])
   employee                Employee?
   notifications           Notification[]
+  supportTicketsCreated   SupportTicket[]       @relation("SupportTicketRequester")
+  supportTicketsAssigned  SupportTicket[]       @relation("SupportTicketAssignee")
+  supportMessages         SupportMessage[]
   pushSubscriptions       PushSubscription[]
   fcmTokens               FcmToken[]
   refreshTokens           RefreshToken[]
@@ -1399,6 +1431,53 @@ model Notification {
   @@index([userId, isRead])
   @@index([organizationId])
   @@index([userId, createdAt])
+}
+
+model SupportTicket {
+  id              String                @id @default(uuid())
+  reference       String                @unique
+  organizationId  String
+  requesterId     String
+  assignedToId    String?
+  subject         String
+  description     String                @db.Text
+  category        SupportTicketCategory @default(OTHER)
+  priority        SupportTicketPriority @default(NORMAL)
+  status          SupportTicketStatus   @default(OPEN)
+  sourcePage      String?
+  userAgent       String?
+  metadata        Json?
+  firstResponseAt DateTime?
+  resolvedAt      DateTime?
+  closedAt        DateTime?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  requester    User             @relation("SupportTicketRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  assignedTo   User?            @relation("SupportTicketAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  messages     SupportMessage[]
+
+  @@index([organizationId, status, updatedAt])
+  @@index([organizationId, requesterId, updatedAt])
+  @@index([organizationId, priority, status])
+}
+
+model SupportMessage {
+  id             String   @id @default(uuid())
+  organizationId String
+  ticketId       String
+  authorId       String
+  body           String   @db.Text
+  isInternal     Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ticket       SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author       User          @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId, createdAt])
+  @@index([organizationId, createdAt])
 }
 
 model PushSubscription {

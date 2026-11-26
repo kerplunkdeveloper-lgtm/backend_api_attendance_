@@ -590,6 +590,104 @@ class NotificationService {
   }
 
   /**
+   * Remind employees two minutes before their configured break or lunch allowance ends.
+   * Each active pause is idempotent: the notification timestamp is checked against
+   * the current pause start, so taking another pause later in the day gets its own alert.
+   */
+  async sendPauseLimitReminders(organizationId = null) {
+    const where = {
+      checkIn: { not: null },
+      checkOut: null,
+      employee: { status: { in: WORKING_STATUSES }, userId: { not: null } },
+      shift: { isNot: null },
+    };
+    if (organizationId) where.organizationId = organizationId;
+
+    const activeSessions = await prisma.attendance.findMany({
+      where,
+      select: {
+        id: true,
+        organizationId: true,
+        employee: {
+          select: {
+            userId: true,
+            firstName: true,
+            phone: true,
+            user: { select: { email: true } },
+          },
+        },
+        shift: {
+          select: {
+            name: true,
+            breakMinutes: true,
+            lunchMinutes: true,
+            breakIncluded: true,
+            lunchIncluded: true,
+          },
+        },
+        events: {
+          where: { type: { in: ["BREAK_START", "LUNCH_START"] } },
+          orderBy: { timestamp: "desc" },
+          take: 1,
+          select: { type: true, timestamp: true },
+        },
+      },
+    });
+
+    const now = new Date();
+    const due = [];
+    for (const session of activeSessions) {
+      const start = session.events[0];
+      if (!start || !session.employee?.userId) continue;
+      const isLunch = start.type === "LUNCH_START";
+      const included = isLunch ? session.shift?.lunchIncluded !== false : session.shift?.breakIncluded !== false;
+      const allowanceMinutes = Number(isLunch ? session.shift?.lunchMinutes : session.shift?.breakMinutes) || 0;
+      if (!included || allowanceMinutes <= 0) continue;
+
+      const reminderAt = new Date(start.timestamp.getTime() + Math.max(0, allowanceMinutes - 2) * 60_000);
+      if (now < reminderAt) continue;
+      due.push({ session, start, isLunch, allowanceMinutes });
+    }
+    if (!due.length) return { success: true, sentCount: 0, sentUsers: [], timestamp: now.toISOString() };
+
+    const userIds = due.map(({ session }) => session.employee.userId);
+    const startTimes = due.map(({ start }) => start.timestamp);
+    const alreadySent = await prisma.notification.findMany({
+      where: {
+        userId: { in: userIds },
+        title: { in: ["Break ending soon", "Lunch ending soon"] },
+        createdAt: { gte: new Date(Math.min(...startTimes.map((time) => time.getTime()))) },
+      },
+      select: { userId: true, title: true, createdAt: true },
+    });
+
+    const toNotify = due.filter(({ session, start, isLunch }) => {
+      const title = isLunch ? "Lunch ending soon" : "Break ending soon";
+      return !alreadySent.some((notification) => notification.userId === session.employee.userId && notification.title === title && notification.createdAt >= start.timestamp);
+    });
+    if (!toNotify.length) return { success: true, sentCount: 0, sentUsers: [], timestamp: now.toISOString() };
+
+    const messages = toNotify.map(({ session, isLunch, allowanceMinutes }) => {
+      const label = isLunch ? "Lunch" : "Break";
+      const title = `${label} ending soon`;
+      const message = `${label} time ends in about 2 minutes. Please return and tap End ${label.toLowerCase()} to keep your attendance accurate. (Allowance: ${allowanceMinutes} minutes.)`;
+      return { session, title, message };
+    });
+    await notificationDelivery.createMany({
+      data: messages.map(({ session, title, message }) => ({
+        organizationId: session.organizationId,
+        userId: session.employee.userId,
+        title,
+        message,
+        type: "ATTENDANCE",
+      })),
+    });
+    void fcmService.sendToUsers(messages.map(({ session, title, message }) => ({ userId: session.employee.userId, title, message, type: "ATTENDANCE" }))).catch((error) => console.warn("[PauseReminder:FCM] Delivery failed:", error.message));
+
+    return { success: true, sentCount: messages.length, sentUsers: messages.map(({ session }) => `${session.employee.firstName} (${session.employee.userId})`), timestamp: now.toISOString() };
+  }
+
+  /**
    * Automated Daily Evaluator
    * Called periodically by the backend scheduler, already protected by job lease
    */
@@ -837,6 +935,7 @@ class NotificationService {
       await this.sendJoiningDateReminders();
       await this.sendMorningCheckInReminders(null, true);
       await this.sendEveningCheckOutReminders(null, true);
+      await this.sendPauseLimitReminders();
 
       // Each organization is marked once its own local day reaches 23:00.
       await this.markAbsentEmployees(null, { endOfDayOnly: true });

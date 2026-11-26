@@ -20,8 +20,8 @@ const required = {
   RAZORPAY_KEY_ID: "rzp_live_key",
   RAZORPAY_KEY_SECRET: "secret",
   RAZORPAY_WEBHOOK_SECRET: "secret",
-  BREVO_API_KEY: "brevo-key",
-  BREVO_FROM_EMAIL: "notifications@example.com",
+  RESEND_API_KEY: "resend-key",
+  RESEND_FROM_EMAIL: "notifications@example.com",
 };
 
 describe("production environment validation", () => {

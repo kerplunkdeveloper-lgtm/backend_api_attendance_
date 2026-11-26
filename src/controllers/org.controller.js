@@ -63,4 +63,22 @@ module.exports = {
       return res.json({ success: true, message: "Exit document templates saved", data });
     } catch (err) { return sendControllerError(res, err); }
   },
+  async getOfferLetterTemplate(req, res) {
+    try {
+      const data = await orgService.getOfferLetterTemplate(req.user.organizationId);
+      return res.json({ success: true, data });
+    } catch (err) { return sendControllerError(res, err); }
+  },
+  async updateOfferLetterTemplate(req, res) {
+    try {
+      const data = await orgService.updateOfferLetterTemplate(req.user.organizationId, req.body);
+      return res.json({ success: true, message: "Offer letter template saved", data });
+    } catch (err) { return sendControllerError(res, err); }
+  },
+  async uploadOfferLetterTemplate(req, res) {
+    try {
+      const data = await orgService.uploadOfferLetterTemplate(req.user.organizationId, req.file);
+      return res.json({ success: true, message: "Offer letter PDF template uploaded", data });
+    } catch (err) { return sendControllerError(res, err); }
+  },
 };

@@ -56,6 +56,7 @@ const announcementRoutes = require("./routes/announcement.routes");
 const appraisalRoutes = require("./routes/appraisal.routes");
 const apikeyRoutes = require("./routes/apikey.routes");
 const webhookRoutes = require("./routes/webhook.routes");
+const supportRoutes = require("./routes/support.routes");
 const billingWebhookRoutes = require("./routes/billing.webhook.routes");
 const { apiRateLimiter } = require("./middleware/rateLimiter.middleware");
 const { auditLogger } = require("./middleware/audit.middleware");
@@ -66,7 +67,7 @@ const {
 } = require("./middleware/requestSecurity.middleware");
 
 const app = express();const API_ROUTE_GROUPS = [
-  ["auth", "/api/auth"], ["departments", "/api/departments"], ["branches", "/api/branches"], ["employees", "/api/employees"], ["shifts", "/api/shifts"], ["attendance", "/api/attendance"], ["corrections", "/api/attendance/corrections"], ["day-off-work", "/api/attendance/day-off-work"], ["shoot-requests", "/api/attendance/shoot-requests"], ["leaves", "/api/leaves"], ["work-from-home", "/api/work-from-home"], ["permissions", "/api/permissions"], ["company-leaves", "/api/company-leaves"], ["payroll", "/api/payroll"], ["reports", "/api/reports"], ["notifications", "/api/notifications"], ["devices", "/api/devices"], ["audit-logs", "/api/audit-logs"], ["holidays", "/api/holidays"], ["onboarding", "/api/onboarding"], ["upload", "/api/upload"], ["expenses", "/api/expenses"], ["policy", "/api/policy"], ["compoff", "/api/compoff"], ["overtime", "/api/overtime"], ["shift-overrides", "/api/shift-overrides"], ["offboarding", "/api/offboarding"], ["assets", "/api/assets"], ["billing", "/api/billing"], ["admin-billing", "/api/admin/billing"], ["platform-admin", "/api/admin/platform"], ["chat", "/api/chat"], ["ai", "/api/ai"], ["biometric", "/api/biometric"], ["organization", "/api/organization"], ["loans", "/api/loans"], ["announcements", "/api/announcements"], ["appraisals", "/api/appraisals"], ["api-keys", "/api/api-keys"], ["webhooks", "/api/webhooks"],
+  ["auth", "/api/auth"], ["departments", "/api/departments"], ["branches", "/api/branches"], ["employees", "/api/employees"], ["shifts", "/api/shifts"], ["attendance", "/api/attendance"], ["corrections", "/api/attendance/corrections"], ["day-off-work", "/api/attendance/day-off-work"], ["shoot-requests", "/api/attendance/shoot-requests"], ["leaves", "/api/leaves"], ["work-from-home", "/api/work-from-home"], ["permissions", "/api/permissions"], ["company-leaves", "/api/company-leaves"], ["payroll", "/api/payroll"], ["reports", "/api/reports"], ["notifications", "/api/notifications"], ["devices", "/api/devices"], ["audit-logs", "/api/audit-logs"], ["holidays", "/api/holidays"], ["onboarding", "/api/onboarding"], ["upload", "/api/upload"], ["expenses", "/api/expenses"], ["policy", "/api/policy"], ["compoff", "/api/compoff"], ["overtime", "/api/overtime"], ["shift-overrides", "/api/shift-overrides"], ["offboarding", "/api/offboarding"], ["assets", "/api/assets"], ["billing", "/api/billing"], ["admin-billing", "/api/admin/billing"], ["platform-admin", "/api/admin/platform"], ["chat", "/api/chat"], ["ai", "/api/ai"], ["biometric", "/api/biometric"], ["organization", "/api/organization"], ["loans", "/api/loans"], ["announcements", "/api/announcements"], ["appraisals", "/api/appraisals"], ["api-keys", "/api/api-keys"], ["webhooks", "/api/webhooks"], ["support", "/api/support"],
 ];
 
 
@@ -207,6 +208,7 @@ app.use("/api/announcements", announcementRoutes);
 app.use("/api/appraisals", appraisalRoutes);
 app.use("/api/api-keys", apikeyRoutes);
 app.use("/api/webhooks", webhookRoutes);
+app.use("/api/support", supportRoutes);
 app.use("/offboarding", offboardingRoutes);
 app.use("/assets", assetRoutes);
 app.use("/auth", authRoutes);
@@ -258,6 +260,7 @@ app.use("/announcements", announcementRoutes);
 app.use("/appraisals", appraisalRoutes);
 app.use("/api-keys", apikeyRoutes);
 app.use("/webhooks", webhookRoutes);
+app.use("/support", supportRoutes);
 app.get(["/", "/api"], (req, res) => {
   res.json({
     success: true,
