@@ -20,7 +20,7 @@ router.get("/exit-document-templates", authorizeRoles("SUPER_ADMIN", "COMPANY_AD
 router.put("/exit-document-templates", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"), orgController.updateExitDocumentTemplates);
 router.get("/offer-letter-template", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"), orgController.getOfferLetterTemplate);
 router.put("/offer-letter-template", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"), orgController.updateOfferLetterTemplate);
-router.post("/offer-letter-template/upload", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"), documentUploader.single("file"), handleUploadErrors, orgController.uploadOfferLetterTemplate);
+router.post("/offer-letter-template/upload", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"), documentUploader().single("file"), handleUploadErrors, orgController.uploadOfferLetterTemplate);
 router.put(
   "/",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"),
