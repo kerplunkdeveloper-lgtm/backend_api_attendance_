@@ -99,10 +99,9 @@ router.get("/communication-status", adminOnly, async (req, res) => {
         isConfigured: connectionStatus.activeProvider !== "SIMULATION",
         activeProvider: connectionStatus.activeProvider,
         resend: connectionStatus.resend,
-        brevo: connectionStatus.brevo,
         from: connectionStatus.resend?.configured
           ? connectionStatus.resend.fromEmail
-          : process.env.BREVO_FROM_EMAIL || "onboarding@workpulse.com",
+          : process.env.RESEND_FROM_EMAIL || process.env.EMAIL_FROM || null,
       },
       whatsapp: {
         isConfigured: whatsappService.isConfigured,
@@ -134,6 +133,8 @@ router.post("/test-email", adminOnly, async (req, res) => {
       title: "Clocked Test Notification",
       badge: "Diagnostic Test",
       badgeColor: "#10b981",
+      companyName: req.user.organization?.name,
+      companyLogoUrl: req.user.organization?.logoUrl,
       contentHtml: `
         <p class="text">Hello <strong>${req.user.name || "Colleague"}</strong>,</p>
         <p class="text">This is a verified test email sent from the <strong>Clocked Automation & Communication Gateway</strong>.</p>

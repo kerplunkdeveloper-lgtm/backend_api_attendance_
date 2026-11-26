@@ -40,6 +40,22 @@ const normalizeOfferLetterTemplate = (value = {}) => ({
   sourceFileName: clean(value.sourceFileName, "", 180),
   version: Number.isInteger(Number(value.version)) && Number(value.version) > 0 ? Number(value.version) : 1,
   status: ["DRAFT", "ACTIVE", "ARCHIVED"].includes(String(value.status || "").toUpperCase()) ? String(value.status).toUpperCase() : "ACTIVE",
+  pdf: value.pdf && typeof value.pdf === "object" ? {
+    provider: ["s3", "cloudinary"].includes(String(value.pdf.provider || "").toLowerCase()) ? String(value.pdf.provider).toLowerCase() : null,
+    key: String(value.pdf.key || "").trim().slice(0, 500) || null,
+    url: /^https:\/\/[^\s"'<>]+$/i.test(String(value.pdf.url || "")) ? String(value.pdf.url) : null,
+    fileName: clean(value.pdf.fileName, "offer-letter-template.pdf", 180),
+    bytes: Math.max(0, Number(value.pdf.bytes) || 0),
+  } : null,
+  pdfFields: value.pdfFields && typeof value.pdfFields === "object" && !Array.isArray(value.pdfFields)
+    ? Object.fromEntries(Object.entries(value.pdfFields).slice(0, 30).map(([key, field]) => [String(key).slice(0, 80), {
+      page: Math.max(1, Math.round(Number(field?.page) || 1)),
+      x: Math.max(0, Number(field?.x) || 0),
+      y: Math.max(0, Number(field?.y) || 0),
+      fontSize: Math.min(48, Math.max(6, Number(field?.fontSize) || 10)),
+      color: /^#[0-9a-f]{6}$/i.test(String(field?.color || "")) ? String(field.color) : "#111827",
+      maxWidth: Math.max(0, Number(field?.maxWidth) || 0),
+    }])) : {},
 });
 
 module.exports = { DEFAULT_OFFER_LETTER_TEMPLATE, normalizeOfferLetterTemplate };

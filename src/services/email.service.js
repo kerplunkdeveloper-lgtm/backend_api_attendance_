@@ -1,4 +1,3 @@
-const brevoService = require("./brevo.service");
 const resendService = require("./resend.service");
 const { generateOfferLetterPdf } = require("./offer-letter-pdf.service");
 
@@ -26,7 +25,6 @@ const getEmailLogo = (value) => {
 
 class EmailService {
   constructor() {
-    this.brevoService = brevoService;
     this.resendService = resendService;
   }
 
@@ -36,7 +34,9 @@ class EmailService {
   async buildHtmlTemplate({ title, badge, badgeColor = "#2563eb", contentHtml, ctaText, ctaUrl, companyName, companyLogoUrl }) {
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
     const actionUrl = ctaUrl || frontendUrl;
-    const displayCompanyName = escapeHtml(companyName || "Clocked");
+    const rawCompanyName = String(companyName || "Clocked").trim() || "Clocked";
+    const displayCompanyName = escapeHtml(rawCompanyName);
+    const brandInitials = escapeHtml(rawCompanyName.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase() || "C");
     // Use a verified HTTPS image URL. Data-URI images are blocked by many
     // inboxes, including transactional email clients, so they do not render
     // reliably in OTP, offer, welcome, or billing messages.
@@ -44,7 +44,7 @@ class EmailService {
     const escapedLogoUrl = safeLogoUrl ? escapeHtml(safeLogoUrl) : null;
     const brandMark = safeLogoUrl
       ? `<img src="${escapedLogoUrl}" alt="${displayCompanyName} logo" width="240" height="90" style="width: 100%; max-width: 240px; height: auto; max-height: 90px; object-fit: contain; margin: 0 auto 10px; display: block; background: #ffffff; border-radius: 10px; padding: 8px; border: 0;">`
-      : `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin: 0 auto 10px;"><tr><td style="width: 38px; height: 38px; border-radius: 12px; background: #ffffff; color: #1e3a8a; font-size: 16px; font-weight: 800; text-align: center; vertical-align: middle;">WP</td><td style="padding-left: 10px; color: #ffffff; font-size: 24px; font-weight: 800; letter-spacing: -0.5px; text-align: left;">Work<span style="color: #60a5fa;">Pluse</span></td></tr></table>`;
+      : `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin: 0 auto 10px;"><tr><td style="width: 38px; height: 38px; border-radius: 12px; background: #ffffff; color: #1e3a8a; font-size: 16px; font-weight: 800; text-align: center; vertical-align: middle;">${brandInitials}</td><td style="padding-left: 10px; color: #ffffff; font-size: 24px; font-weight: 800; letter-spacing: -0.5px; text-align: left;">${displayCompanyName}</td></tr></table>`;
 
     return `
 <!DOCTYPE html>
@@ -99,6 +99,7 @@ class EmailService {
     </div>
     <div class="footer" style="padding: 24px; background: #f8fafc; border-top: 1px solid #e2e8f0; text-align: center; font-size: 12px; color: #94a3b8; line-height: 1.5;">
       This is an automated notification from Clocked Workforce Systems.<br>
+      Need help? <a href="mailto:vasanth@kerplunkmedia.com" style="color: #2563eb; text-decoration: underline;">vasanth@kerplunkmedia.com</a><br>
       © ${new Date().getFullYear()} Clocked Inc. All rights reserved.
     </div>
   </div>
@@ -108,7 +109,7 @@ class EmailService {
   }
 
   /**
-   * Generic sender — Brevo transactional API live, simulation fallback outside production.
+   * Generic sender — Resend transactional API live, simulation fallback outside production.
    */
   async sendEmail({ to, subject, html, text, attachments = [] }) {
     if (!to) {
@@ -132,21 +133,8 @@ class EmailService {
       }
     }
 
-    // 2. Keep Brevo as a compatibility fallback during provider migration.
-    if (this.brevoService && this.brevoService.isReady()) {
-      try {
-        const result = await this.brevoService.sendEmail({ to, subject, html, text, attachments });
-        if (result.success) {
-          console.log(`[EmailService:BREVO_LIVE] Sent email to ${to} via Brevo API (ID: ${result.id})`);
-          return { success: true, live: true, provider: "BREVO", ...result };
-        }
-        console.warn(`[EmailService:BREVO_FAIL] Brevo dispatch failed for ${to}: ${result.error}.`);
-        return { success: false, error: result.error, provider: "BREVO" };
-      } catch (err) {
-        console.warn(`[EmailService:BREVO_ERROR] Brevo exception: ${err.message}.`);
-        return { success: false, error: err.message, provider: "BREVO" };
-      }
-    } else if (process.env.NODE_ENV === "production") {
+    // Resend is the only supported live provider.
+    if (process.env.NODE_ENV === "production") {
       console.error("[EmailService] No live email provider is configured.");
       return {
         success: false,
@@ -685,16 +673,9 @@ class EmailService {
       provider: "Resend Transactional Email API",
       fromEmail: this.resendService?.fromEmail || null,
     };
-    const brevoStatus = {
-      configured: this.brevoService ? this.brevoService.isReady() : false,
-      provider: "Brevo Transactional Email API",
-      fromEmail: process.env.BREVO_FROM_EMAIL || "onboarding@workpulse.com",
-    };
-
     return {
-      activeProvider: resendStatus.configured ? "RESEND" : brevoStatus.configured ? "BREVO" : "SIMULATION",
+      activeProvider: resendStatus.configured ? "RESEND" : "SIMULATION",
       resend: resendStatus,
-      brevo: brevoStatus,
     };
   }
 

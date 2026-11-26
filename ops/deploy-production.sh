@@ -47,26 +47,28 @@ set +a
 HEALTH_PORT="${PORT:-5000}"
 HEALTH_URL="http://127.0.0.1:${HEALTH_PORT}/api/health"
 [[ -n "${DATABASE_URL:-}" ]] || { echo 'DATABASE_URL missing in production env'; exit 6; }
+MIGRATION_DATABASE_URL="${DATABASE_URL_UNPOOLED:-${DIRECT_URL:-${DATABASE_URL:-}}}"
+[[ -n "$MIGRATION_DATABASE_URL" ]] || { echo 'Direct migration database URL missing; set DATABASE_URL_UNPOOLED (preferred) or DIRECT_URL'; exit 6; }
 [[ "${STORAGE_PROVIDER:-}" == "s3" ]] || { echo 'Production STORAGE_PROVIDER must be s3'; exit 6; }
 [[ -n "${AWS_REGION:-}" ]] || { echo 'AWS_REGION missing in production env'; exit 6; }
 [[ -n "${S3_BUCKET_NAME:-${AWS_S3_BUCKET:-}}" ]] || { echo 'S3 bucket missing in production env'; exit 6; }
 PGPASS="$WORKDIR/pgpass"
-export DATABASE_URL PGPASS
+export DATABASE_URL MIGRATION_DATABASE_URL PGPASS
 python3 - <<'PY'
 import os, urllib.parse
-u = urllib.parse.urlsplit(os.environ['DATABASE_URL'])
+u = urllib.parse.urlsplit(os.environ['MIGRATION_DATABASE_URL'])
 if not u.hostname or not u.username or u.password is None or not u.path.strip('/'):
-    raise SystemExit('DATABASE_URL is not a complete PostgreSQL URI')
+    raise SystemExit('MIGRATION_DATABASE_URL is not a complete PostgreSQL URI')
 def esc(s): return s.replace('\\', '\\\\').replace(':', '\\:')
 with open(os.environ['PGPASS'], 'w') as f:
     f.write(':'.join(map(esc, [u.hostname, str(u.port or 5432), urllib.parse.unquote(u.path.lstrip('/')), urllib.parse.unquote(u.username), urllib.parse.unquote(u.password)]))+'\n')
 os.chmod(os.environ['PGPASS'], 0o600)
 PY
 export PGPASSFILE="$PGPASS"
-DB_HOST=$(python3 -c 'import os,urllib.parse;print(urllib.parse.urlsplit(os.environ["DATABASE_URL"]).hostname)')
-DB_PORT=$(python3 -c 'import os,urllib.parse;print(urllib.parse.urlsplit(os.environ["DATABASE_URL"]).port or 5432)')
-DB_NAME=$(python3 -c 'import os,urllib.parse;print(urllib.parse.unquote(urllib.parse.urlsplit(os.environ["DATABASE_URL"]).path.lstrip("/")))')
-DB_USER=$(python3 -c 'import os,urllib.parse;print(urllib.parse.unquote(urllib.parse.urlsplit(os.environ["DATABASE_URL"]).username))')
+DB_HOST=$(python3 -c 'import os,urllib.parse;print(urllib.parse.urlsplit(os.environ["MIGRATION_DATABASE_URL"]).hostname)')
+DB_PORT=$(python3 -c 'import os,urllib.parse;print(urllib.parse.urlsplit(os.environ["MIGRATION_DATABASE_URL"]).port or 5432)')
+DB_NAME=$(python3 -c 'import os,urllib.parse;print(urllib.parse.unquote(urllib.parse.urlsplit(os.environ["MIGRATION_DATABASE_URL"]).path.lstrip("/")))')
+DB_USER=$(python3 -c 'import os,urllib.parse;print(urllib.parse.unquote(urllib.parse.urlsplit(os.environ["MIGRATION_DATABASE_URL"]).username))')
 export PGHOST="$DB_HOST" PGPORT="$DB_PORT" PGDATABASE="$DB_NAME" PGUSER="$DB_USER"
 BACKUP="/home/ubuntu/workpulse-prod-backups/${SHA}-$(date -u +%Y%m%dT%H%M%SZ).dump"
 pg_dump --format=custom --file "$BACKUP"

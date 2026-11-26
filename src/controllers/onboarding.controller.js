@@ -241,7 +241,7 @@ class OnboardingController {
       res.status(200).json({
         success: true,
         message:
-          "Candidate approved by Admin and official Offer Letter generated!",
+          "Candidate approved and official Offer Letter generated!",
         data: result,
       });
     } catch (err) {

@@ -1,9 +1,9 @@
 import "dotenv/config";
 import { defineConfig } from "prisma/config";
 
-// Production uses one canonical database URL for both runtime traffic and
-// migrations. This avoids deployments accidentally selecting a stale or
-// malformed secondary URL.
+// Runtime traffic may use Neon's pooled endpoint, but Prisma Migrate needs a
+// direct/unpooled connection so session state and migration persistence are
+// reliable. Keep TEST_DATABASE_URL first for isolated migration tests.
 const normalizeDatabaseUrl = (value: string) => {
   let url = value.trim().replace(/^psql\s+/i, "").trim();
   if (
@@ -17,14 +17,29 @@ const normalizeDatabaseUrl = (value: string) => {
 
 // Test migrations must be able to pin Prisma to an isolated database without
 // rewriting the developer's .env or risking a Production/Alpha URL.
-const dbUrl = normalizeDatabaseUrl(
-  process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || "",
-);
+const configuredUrl = process.env.TEST_DATABASE_URL
+  || process.env.DATABASE_URL_UNPOOLED
+  || process.env.DIRECT_URL
+  || process.env.DATABASE_URL
+  || "";
+const dbUrl = normalizeDatabaseUrl(configuredUrl);
 
 if (!dbUrl) {
   throw new Error(
     "DATABASE_URL is required before running Prisma commands."
   );
+}
+
+try {
+  const host = new URL(dbUrl).hostname.toLowerCase();
+  if (host.includes("-pooler.")) {
+    throw new Error(
+      "Prisma migrations require a direct Neon connection. Set DATABASE_URL_UNPOOLED (preferred) or DIRECT_URL; keep the pooled DATABASE_URL for runtime traffic.",
+    );
+  }
+} catch (error) {
+  if (error instanceof Error && error.message.startsWith("Prisma migrations require")) throw error;
+  throw new Error("DATABASE_URL for Prisma migrations must be a valid PostgreSQL URL.");
 }
 
 export default defineConfig({
@@ -35,9 +50,7 @@ export default defineConfig({
   },
 
   datasource: {
-    // Keep schema changes on the same canonical database as runtime traffic
-    // and production preflight. Secondary direct/unpooled variables can point
-    // at a different branch and must not silently split the deployment.
+    // This is deliberately the direct/unpooled URL for Prisma Migrate.
     url: dbUrl,
   },
 });

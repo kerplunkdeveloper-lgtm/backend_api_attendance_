@@ -74,10 +74,10 @@ router.put(
   onboardingController.hrVerifyCandidate,
 );
 
-// Admin: Approve candidate & Generate Offer Letter
+// Admin or HR: Approve candidate & Generate Offer Letter
 router.post(
   "/:id/admin-approve-offer",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"),
   onboardingController.adminApproveAndGenerateOffer,
 );
 
