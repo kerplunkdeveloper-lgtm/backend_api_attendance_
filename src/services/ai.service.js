@@ -113,6 +113,8 @@ function toolsFor(user) {
   if (salaryRoles.includes(user.role)) tools.push({ type: "function", name: "getEmployeeSalaryStructure", description: "Get the authorized employee's salary structure including CTC, basic, allowances, and statutory settings. Only HR and administrators.", parameters: { type: "object", properties: { employeeId: { type: "string" }, employeeCode: { type: "string" } }, additionalProperties: false } });
   if (salaryRoles.includes(user.role)) tools.push({ type: "function", name: "getEmployeePayrollBreakdown", description: "Get a verified payslip breakdown for the authorized employee and period, including earnings, deductions, overtime, and net salary. Only HR and administrators.", parameters: { type: "object", properties: { employeeId: { type: "string" }, employeeCode: { type: "string" }, year: { type: "integer" }, month: { type: "integer", minimum: 1, maximum: 12 } }, additionalProperties: false } });
   if (teamRoles.includes(user.role)) tools.push({ type: "function", name: "searchAuthorizedEmployee", description: "Resolve an employee code inside the authenticated organization and the caller's authorized scope. Never search globally.", parameters: { type: "object", properties: { employeeCode: { type: "string", minLength: 1, maxLength: 80 } }, required: ["employeeCode"], additionalProperties: false } });
+  if (teamRoles.includes(user.role)) tools.push({ type: "function", name: "listAuthorizedEmployees", description: "List employee names and employee codes inside the authenticated organization and the caller's authorized scope. Use for requests such as 'tell me employee names and codes' or 'show employee code list'.", parameters: { type: "object", properties: {}, additionalProperties: false } });
+  if (teamRoles.includes(user.role)) tools.push({ type: "function", name: "getTodayLateSummary", description: "List employees who arrived late today, including verified name, employee code, department, and late minutes, within the caller's authorized scope.", parameters: { type: "object", properties: {}, additionalProperties: false } });
   if (teamRoles.includes(user.role)) tools.push({ type: "function", name: "getDepartmentSummary", description: "Get employee counts by department and status within the caller's authorized scope.", parameters: { type: "object", properties: {}, additionalProperties: false } });
   if (adminRoles.includes(user.role)) tools.push({ type: "function", name: "getAuthorizedOrganizationSummary", description: "Get high-level employee, department, and branch counts for the authenticated organization.", parameters: { type: "object", properties: {}, additionalProperties: false } });
   if (REVIEWER_ROLES.includes(user.role)) {
@@ -208,6 +210,78 @@ async function getTodayLeaveSummary(user) {
   };
 }
 
+async function getTodayLateSummary(user) {
+  if (user.role === "EMPLOYEE") {
+    if (!user.employee?.id) throw fail("Your employee profile is not available.", 404);
+  } else if (!teamRoles.includes(user.role)) {
+    throw fail("You are not authorized to view team lateness.", 403);
+  }
+  if (user.role === "MANAGER" && !user.employee?.departmentId) throw fail("Your manager scope is not configured.", 403);
+  const timezone = user.organization?.timezone || DEFAULT_TIMEZONE;
+  const today = getLocalDateOnly(new Date(), timezone);
+  const rows = await prisma.attendance.findMany({
+    where: {
+      organizationId: user.organizationId,
+      date: today,
+      OR: [{ lateMinutes: { gt: 0 } }, { status: "LATE" }],
+      employee: {
+        organizationId: user.organizationId,
+        deletedAt: null,
+        status: { in: ["ACTIVE", "PROBATION", "NOTICE_PERIOD"] },
+        ...(user.role === "EMPLOYEE" ? { id: user.employee.id } : {}),
+        ...(user.role === "MANAGER" ? { departmentId: user.employee.departmentId } : {}),
+      },
+    },
+    select: {
+      lateMinutes: true,
+      status: true,
+      employee: { select: { employeeCode: true, firstName: true, lastName: true, department: { select: { name: true } } } },
+    },
+    orderBy: { lateMinutes: "desc" },
+    take: 200,
+  });
+  const unique = new Map();
+  for (const row of rows) {
+    const employee = row.employee;
+    if (!employee) continue;
+    const key = employee.employeeCode || `${employee.firstName}:${employee.lastName || ""}`;
+    if (!unique.has(key)) unique.set(key, {
+      employeeCode: employee.employeeCode,
+      name: `${employee.firstName} ${employee.lastName || ""}`.trim(),
+      department: employee.department?.name || null,
+      lateMinutes: Number(row.lateMinutes || 0),
+    });
+  }
+  return { date: today.toISOString().slice(0, 10), timezone, count: unique.size, employees: [...unique.values()] };
+}
+
+function isEmployeeDirectoryQuestion(text) {
+  const value = String(text || "").toLowerCase();
+  return /\b(employee|staff|people|team)\b/.test(value) && /\b(name|code|employee code|list|show|tell)\b/.test(value);
+}
+
+function isTodayLateQuestion(text) {
+  const value = String(text || "").toLowerCase();
+  return /\b(late|tardy|delayed|late coming)\b/.test(value) && /\b(who|which|name|names|employee|staff|today|show|list)\b/.test(value);
+}
+
+function employeeDirectoryAnswer(user, rows) {
+  if (user.role === "EMPLOYEE") {
+    const employee = user.employee;
+    if (!employee) return "Your employee profile is not available.";
+    return `Your name is ${employee.firstName} ${employee.lastName || ""}`.trim() + ` and your employee code is ${employee.employeeCode || "not assigned"}.`;
+  }
+  if (!rows.length) return "I couldn't find any active employees in your authorized scope.";
+  const list = rows.slice(0, 100).map((row) => `${row.firstName} ${row.lastName || ""}`.trim() + ` (${row.employeeCode || "code not assigned"})`).join(", ");
+  return `Authorized employee names and codes: ${list}${rows.length > 100 ? ". Showing the first 100 employees." : "."}`;
+}
+
+function todayLateAnswer(summary) {
+  if (!summary.count) return `Today (${summary.date}), no late arrivals were found in your authorized scope.`;
+  const list = summary.employees.map((row) => `${row.name} (${row.employeeCode || "code not assigned"}${row.lateMinutes ? `, ${row.lateMinutes} minutes late` : ""})`).join(", ");
+  return `Today (${summary.date}), ${summary.count} employee(s) were late: ${list}.`;
+}
+
 async function getAuthorizedEmployeePayrollSummary(user, args = {}, selectedEmployeeId) {
   if (!salaryRoles.includes(user.role)) throw fail("Salary details are available only to HR and administrators.", 403);
   const requestedId = String(args.employeeId || selectedEmployeeId || "").trim();
@@ -280,6 +354,10 @@ async function runTool(user, name, args, selectedEmployeeId) {
     result = { year, holidays: await prisma.holiday.findMany({ where: { organizationId, date: { gte: new Date(Date.UTC(year, 0, 1)), lt: new Date(Date.UTC(year + 1, 0, 1)) } }, select: { name: true, date: true, isOptional: true }, orderBy: { date: "asc" }, take: 100 }) };
   } else if (name === "searchAuthorizedEmployee") {
     result = await aiAgentTools.searchAuthorizedEmployee(user, args);
+  } else if (name === "listAuthorizedEmployees") {
+    result = { employees: await listAuthorizedEmployees(user) };
+  } else if (name === "getTodayLateSummary") {
+    result = await getTodayLateSummary(user);
   } else if (name === "getEmployeeProfile") {
     result = await aiAgentTools.getEmployeeProfile(user, args);
   } else if (name === "getEmployeeSalaryStructure") {
@@ -360,6 +438,26 @@ async function chat({ user, conversationId, message, selectedEmployeeId }) {
   if (isClearlyOutOfScope(text)) {
     await prisma.aIMessage.create({ data: { conversationId: conversation.id, organizationId: user.organizationId, role: "assistant", content: OUT_OF_SCOPE_MESSAGE } });
     return { conversationId: conversation.id, message: { role: "assistant", content: OUT_OF_SCOPE_MESSAGE }, usage: null };
+  }
+  // Resolve common read-only questions deterministically. This keeps the
+  // assistant useful when the model returns a generic clarification instead
+  // of selecting a safe, role-scoped tool.
+  if (isEmployeeDirectoryQuestion(text) || isTodayLateQuestion(text)) {
+    const insights = [];
+    let answer;
+    if (isTodayLateQuestion(text)) {
+      const summary = await getTodayLateSummary(user);
+      insights.push({ tool: "getTodayLateSummary", data: summary });
+      answer = todayLateAnswer(summary);
+    } else if (user.role === "EMPLOYEE") {
+      answer = employeeDirectoryAnswer(user, []);
+    } else {
+      const employees = await listAuthorizedEmployees(user);
+      insights.push({ tool: "listAuthorizedEmployees", data: { employees } });
+      answer = employeeDirectoryAnswer(user, employees);
+    }
+    await prisma.aIMessage.create({ data: { conversationId: conversation.id, organizationId: user.organizationId, role: "assistant", content: answer } });
+    return { conversationId: conversation.id, message: { role: "assistant", content: answer, insights }, insights, usage: null };
   }
   const history = await prisma.aIMessage.findMany({ where: { conversationId: conversation.id }, orderBy: { createdAt: "desc" }, take: 12, select: { role: true, content: true } });
   let input = history.reverse().map((m) => ({ role: m.role, content: m.content })); let response; const insights = [];
