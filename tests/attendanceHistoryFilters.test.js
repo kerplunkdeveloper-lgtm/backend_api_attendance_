@@ -61,4 +61,16 @@ describe("attendance history filters", () => {
     assert.equal(result.records[0].status, "ABSENT");
     assert.equal(result.records[0].employeeId, "employee-1");
   });
+
+  it("does not hide stored absences that contain a preserved punch-in", async () => {
+    await getAttendanceHistory({
+      userId: "u-1",
+      organizationId: "org-1",
+      role: "COMPANY_ADMIN",
+      status: "ABSENT",
+    });
+
+    assert.equal(seenWhere.status, "ABSENT");
+    assert.equal(Object.prototype.hasOwnProperty.call(seenWhere, "checkIn"), false);
+  });
 });

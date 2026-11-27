@@ -313,10 +313,11 @@ class EmployeeDocumentService {
       where: {
         organizationId,
         status: "PENDING",
-        ...(branchId ? { employee: { branchId: String(branchId) } } : {}),
+        employee: { user: { role: { notIn: ["COMPANY_ADMIN", "SUPER_ADMIN"] } }, ...(branchId ? { branchId: String(branchId) } : {}) },
         ...(normalizedSearch
           ? {
               employee: {
+                user: { role: { notIn: ["COMPANY_ADMIN", "SUPER_ADMIN"] } },
                 ...(branchId ? { branchId: String(branchId) } : {}),
                 OR: [
                   { firstName: { contains: normalizedSearch, mode: "insensitive" } },
@@ -348,10 +349,11 @@ class EmployeeDocumentService {
       where: {
         organizationId,
         status: "PENDING",
-        ...(branchId ? { employee: { branchId: String(branchId) } } : {}),
+        employee: { user: { role: { notIn: ["COMPANY_ADMIN", "SUPER_ADMIN"] } }, ...(branchId ? { branchId: String(branchId) } : {}) },
         ...(normalizedSearch
           ? {
               employee: {
+                user: { role: { notIn: ["COMPANY_ADMIN", "SUPER_ADMIN"] } },
                 ...(branchId ? { branchId: String(branchId) } : {}),
                 OR: [
                   { firstName: { contains: normalizedSearch, mode: "insensitive" } },
@@ -395,7 +397,7 @@ class EmployeeDocumentService {
   /** Dashboard-friendly mandatory-document compliance summary. */
   async getMissingDocumentsSummary(organizationId, { branchId, limit = 50 } = {}) {
     const employees = await prisma.employee.findMany({
-      where: { organizationId, status: { in: WORKING_STATUSES }, ...(branchId ? { branchId: String(branchId) } : {}) },
+      where: { organizationId, status: { in: WORKING_STATUSES }, user: { role: { notIn: ["COMPANY_ADMIN", "SUPER_ADMIN"] } }, ...(branchId ? { branchId: String(branchId) } : {}) },
       select: {
         id: true, employeeCode: true, firstName: true, lastName: true, branch: { select: { id: true, name: true } },
         documents: { select: { documentType: true, status: true } },

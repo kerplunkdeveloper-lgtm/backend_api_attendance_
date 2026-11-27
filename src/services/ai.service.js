@@ -322,6 +322,58 @@ async function getDailyExceptionBriefing(user) {
   };
 }
 
+async function getTodayAbsentSummary(user) {
+  if (!teamRoles.includes(user.role)) {
+    if (!user.employee?.id) throw fail("Your employee profile is not available.", 404);
+  }
+  if (user.role === "MANAGER" && !user.employee?.departmentId) throw fail("Your manager scope is not configured.", 403);
+  const timezone = user.organization?.timezone || DEFAULT_TIMEZONE;
+  const today = getLocalDateOnly(new Date(), timezone);
+  const employeeWhere = {
+    organizationId: user.organizationId,
+    deletedAt: null,
+    status: { in: ["ACTIVE", "PROBATION", "NOTICE_PERIOD"] },
+    ...(user.role === "EMPLOYEE" ? { id: user.employee.id } : {}),
+    ...(user.role === "MANAGER" ? { departmentId: user.employee.departmentId } : {}),
+  };
+  const [employees, attendance, approvedLeaves, holidays, companyLeaves] = await Promise.all([
+    prisma.employee.findMany({
+      where: employeeWhere,
+      select: { id: true, employeeCode: true, firstName: true, lastName: true, branchId: true, department: { select: { name: true } }, branch: { select: { name: true } }, shift: { select: { workingDays: true } } },
+      orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
+    }),
+    prisma.attendance.findMany({ where: { organizationId: user.organizationId, date: today }, select: { employeeId: true, status: true } }),
+    prisma.leaveRequest.findMany({ where: { organizationId: user.organizationId, status: "APPROVED", startDate: { lte: today }, endDate: { gte: today } }, select: { employeeId: true } }),
+    prisma.holiday.findMany({ where: { organizationId: user.organizationId, date: today, isOptional: false }, select: { branchId: true } }),
+    prisma.companyLeave.findMany({ where: { organizationId: user.organizationId, startDate: { lte: today }, endDate: { gte: today } }, select: { branchId: true } }),
+  ]);
+  const attendanceByEmployee = new Map(attendance.map((row) => [row.employeeId, row.status]));
+  const onLeave = new Set(approvedLeaves.map((row) => row.employeeId));
+  const closedAll = holidays.some((row) => !row.branchId) || companyLeaves.some((row) => !row.branchId);
+  const closedBranches = new Set([...holidays, ...companyLeaves].filter((row) => row.branchId).map((row) => row.branchId));
+  const absentEmployees = employees.filter((employee) => {
+    const storedStatus = attendanceByEmployee.get(employee.id);
+    if (storedStatus === "ABSENT") return true;
+    if (storedStatus) return false;
+    const workingDays = employee.shift?.workingDays;
+    const weeklyOff = workingDays ? !workingDays.split(",").map((day) => Number(day.trim())).includes(today.getUTCDay()) : false;
+    const closed = closedAll || (employee.branchId && closedBranches.has(employee.branchId)) || weeklyOff;
+    return !onLeave.has(employee.id) && !closed;
+  }).map((employee) => ({ employeeId: employee.id, employeeCode: employee.employeeCode, name: `${employee.firstName} ${employee.lastName || ""}`.trim(), department: employee.department?.name || null, branch: employee.branch?.name || null }));
+  return { date: today.toISOString().slice(0, 10), timezone, scope: user.role === "MANAGER" ? "department" : user.role === "EMPLOYEE" ? "self" : "organization", absentCount: absentEmployees.length, absentEmployees };
+}
+
+function isTodayAbsentQuestion(text) {
+  const value = String(text || "").toLowerCase();
+  return /\b(absent|not present|did not come|didn't come)\b/.test(value) && /\b(today|now|currently)\b/.test(value) && /\b(who|which|all|list|show|people|employees|everyone|how many)\b/.test(value);
+}
+
+function todayAbsentAnswer(summary) {
+  if (!summary.absentCount) return `Today (${summary.date}): no verified absent employees were found.`;
+  const names = summary.absentEmployees.slice(0, 100).map((employee) => `${employee.name}${employee.employeeCode ? ` (${employee.employeeCode})` : ""}`).join(", ");
+  return `Today (${summary.date}): ${summary.absentCount} employee(s) are absent. ${names}.`;
+}
+
 function isDailyBriefingQuestion(text) {
   return /\b(daily briefing|exception briefing|today(?:'s|s)? exceptions|what needs attention|autopilot|attention queue)\b/i.test(String(text || ""));
 }
@@ -336,6 +388,10 @@ function dailyBriefingAnswer(briefing) {
 function isEmployeeDirectoryQuestion(text) {
   const value = String(text || "").toLowerCase();
   return /\b(employee|staff|people|team)\b/.test(value) && /\b(name|code|employee code|list|show|tell)\b/.test(value);
+}
+
+function isDirectoryContinuation(text) {
+  return /^(both|all|yes|yes all|show all|continue|go ahead|do it)$/i.test(String(text || "").trim());
 }
 
 function isTodayLateQuestion(text) {
@@ -514,11 +570,13 @@ async function chat({ user, conversationId, message, selectedEmployeeId }) {
   if (selectedEmployeeId) await resolveAuthorizedEmployee(user, selectedEmployeeId);
   let conversation = conversationId ? await prisma.aIConversation.findFirst({ where: { id: conversationId, organizationId: user.organizationId, userId: user.id, deletedAt: null } }) : null;
   if (!conversation) conversation = await prisma.aIConversation.create({ data: { organizationId: user.organizationId, userId: user.id, title: text.slice(0, 80) } });
-  await prisma.aIMessage.create({ data: { conversationId: conversation.id, organizationId: user.organizationId, role: "user", content: text } });
+  const currentMessage = await prisma.aIMessage.create({ data: { conversationId: conversation.id, organizationId: user.organizationId, role: "user", content: text } });
   if (isClearlyOutOfScope(text)) {
     await prisma.aIMessage.create({ data: { conversationId: conversation.id, organizationId: user.organizationId, role: "assistant", content: OUT_OF_SCOPE_MESSAGE } });
     return { conversationId: conversation.id, message: { role: "assistant", content: OUT_OF_SCOPE_MESSAGE }, usage: null };
   }
+  const recentUserMessage = await prisma.aIMessage.findFirst({ where: { conversationId: conversation.id, role: "user", id: { not: currentMessage.id } }, orderBy: { createdAt: "desc" }, select: { content: true } }).catch(() => null);
+  const continuesEmployeeDirectory = isDirectoryContinuation(text) && isEmployeeDirectoryQuestion(recentUserMessage?.content);
   // Resolve common read-only questions deterministically. This keeps the
   // assistant useful when the model returns a generic clarification instead
   // of selecting a safe, role-scoped tool.
@@ -529,7 +587,14 @@ async function chat({ user, conversationId, message, selectedEmployeeId }) {
     await prisma.aIMessage.create({ data: { conversationId: conversation.id, organizationId: user.organizationId, role: "assistant", content: answer } });
     return { conversationId: conversation.id, message: { role: "assistant", content: answer, insights }, insights, usage: null };
   }
-  if (isEmployeeDirectoryQuestion(text) || isTodayLateQuestion(text)) {
+  if (isTodayAbsentQuestion(text)) {
+    const summary = await getTodayAbsentSummary(user);
+    const insights = [{ tool: "getTodayAbsentSummary", data: summary }];
+    const answer = todayAbsentAnswer(summary);
+    await prisma.aIMessage.create({ data: { conversationId: conversation.id, organizationId: user.organizationId, role: "assistant", content: answer } });
+    return { conversationId: conversation.id, message: { role: "assistant", content: answer, insights }, insights, usage: null };
+  }
+  if (isEmployeeDirectoryQuestion(text) || continuesEmployeeDirectory || isTodayLateQuestion(text)) {
     const insights = [];
     let answer;
     if (isTodayLateQuestion(text)) {
