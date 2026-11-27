@@ -16,6 +16,8 @@ const HR_ACCESS_AREAS = ["DASHBOARD", "ATTENDANCE", "EMPLOYEES", "ROLES", "APPRO
 const DEFAULT_HR_ACCESS = Object.fromEntries(HR_ACCESS_AREAS.map((area) => [area, true]));
 const DEFAULT_EMPLOYEE_ACCESS = { DASHBOARD: true, ATTENDANCE: true, EMPLOYEES: false, ROLES: false, APPROVALS: false, ONBOARDING: false, PAYROLL: true, REPORTS: false, ANNOUNCEMENTS: true, BRANCHES: false, POLICIES: false, SHOOTS: true };
 const DEFAULT_ROLE_ACCESS = { MANAGER: DEFAULT_HR_ACCESS, HR: DEFAULT_HR_ACCESS, EMPLOYEE: DEFAULT_EMPLOYEE_ACCESS };
+const DEFAULT_MANDATORY_PROFILE_FIELDS = ["gender", "dateOfBirth", "dateOfJoining", "designation", "employmentType", "branchId", "departmentId", "shiftId", "address", "emergencyContactName", "emergencyContactPhone", "bankName", "bankAccountNumber", "bankIfsc", "ctc"];
+const MANDATORY_PROFILE_FIELD_OPTIONS = new Set(["gender", "bloodGroup", "maritalStatus", "dateOfBirth", "dateOfJoining", "designation", "employmentType", "branchId", "departmentId", "shiftId", "address", "emergencyContactName", "emergencyContactPhone", "personalEmail", "bankName", "bankAccountNumber", "bankIfsc", "ctc"]);
 
 const normalizeRoleAccess = (stored) => {
   const source = stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
@@ -33,7 +35,8 @@ const presentOrganization = (organization) => {
   const { ssoClientSecretCiphertext, unlockCode, logoStorageKey, ...safe } = organization;
   const storedAccess = organization.hrAccess && typeof organization.hrAccess === "object" ? organization.hrAccess : {};
   const hrAccess = Object.fromEntries(HR_ACCESS_AREAS.map((area) => [area, storedAccess[area] === undefined ? true : storedAccess[area] === true]));
-  return { ...presentOrganizationImage(safe), hrAccess, roleAccess: normalizeRoleAccess(storedAccess.ROLE_ACCESS), sso: ssoService.getConfiguration(organization) };
+  const configuredProfileFields = Array.isArray(storedAccess.MANDATORY_PROFILE_FIELDS) ? storedAccess.MANDATORY_PROFILE_FIELDS.filter((field) => MANDATORY_PROFILE_FIELD_OPTIONS.has(field)) : DEFAULT_MANDATORY_PROFILE_FIELDS;
+  return { ...presentOrganizationImage(safe), hrAccess, roleAccess: normalizeRoleAccess(storedAccess.ROLE_ACCESS), mandatoryProfileFields: configuredProfileFields, sso: ssoService.getConfiguration(organization) };
 };
 
 async function getSettings(organizationId) {
@@ -52,8 +55,12 @@ async function getSettings(organizationId) {
 async function updateSettings(organizationId, payload, actor = {}) {
   const data = {};
   if (actor.role === "HR") {
-    const unsupported = Object.keys(payload || {}).filter((key) => !["hrAccess", "roleAccess"].includes(key));
+    const unsupported = Object.keys(payload || {}).filter((key) => !["hrAccess", "roleAccess", "mandatoryProfileFields"].includes(key));
     if (unsupported.length) throw Object.assign(new Error("HR can update role permissions only."), { statusCode: 403 });
+  }
+  if (actor.role === "MANAGER") {
+    const unsupported = Object.keys(payload || {}).filter((key) => key !== "mandatoryProfileFields");
+    if (unsupported.length) throw Object.assign(new Error("Managers can update mandatory profile fields only."), { statusCode: 403 });
   }
   const currentAccess = await prisma.organization.findUnique({ where: { id: organizationId }, select: { hrAccess: true } });
   const existingAccess = currentAccess?.hrAccess && typeof currentAccess.hrAccess === "object" ? currentAccess.hrAccess : {};
@@ -67,6 +74,13 @@ async function updateSettings(organizationId, payload, actor = {}) {
     if (!payload.roleAccess || typeof payload.roleAccess !== "object" || Array.isArray(payload.roleAccess)) throw Object.assign(new Error("Role access settings must be an object."), { statusCode: 400 });
     const roleAccess = normalizeRoleAccess(payload.roleAccess);
     data.hrAccess = { ...(data.hrAccess || existingAccess), ROLE_ACCESS: roleAccess };
+  }
+  if (payload.mandatoryProfileFields !== undefined) {
+    if (!Array.isArray(payload.mandatoryProfileFields)) throw Object.assign(new Error("Mandatory profile fields must be an array."), { statusCode: 400 });
+    const fields = [...new Set(payload.mandatoryProfileFields.map((field) => String(field)))];
+    const invalid = fields.filter((field) => !MANDATORY_PROFILE_FIELD_OPTIONS.has(field));
+    if (invalid.length) throw Object.assign(new Error(`Unsupported profile field: ${invalid[0]}`), { statusCode: 400 });
+    data.hrAccess = { ...(data.hrAccess || existingAccess), MANDATORY_PROFILE_FIELDS: fields };
   }
   if (payload.requireAdminTwoFactor !== undefined) {
     const enable = payload.requireAdminTwoFactor === true || payload.requireAdminTwoFactor === "true";

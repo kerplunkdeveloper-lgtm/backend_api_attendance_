@@ -72,7 +72,7 @@ router.get(
 
 router.get(
   "/documents/pending",
-  authorizeRoles("COMPANY_ADMIN", "MANAGER", "HR"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   employeeDocumentController.getPendingDocuments,
 );
 

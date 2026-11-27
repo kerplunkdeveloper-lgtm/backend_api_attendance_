@@ -23,7 +23,7 @@ router.put("/offer-letter-template", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMI
 router.post("/offer-letter-template/upload", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"), documentUploader().single("file"), handleUploadErrors, orgController.uploadOfferLetterTemplate);
 router.put(
   "/",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   orgController.update,
 );
 router.post("/logo", authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN"), logoFields, handleUploadErrors, orgController.uploadLogo);

@@ -2337,10 +2337,12 @@ const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, 
     where.checkOut = null;
     where.status = { not: "ABSENT" };
   } else if (status === "ABSENT") {
-    // An open session is a punch-out exception, never an absent employee.
-    // Keep the absent queue exclusive so the two filters cannot overlap.
+    // ABSENT is the authoritative stored status. End-of-day processing also
+    // converts missed punch-out sessions to ABSENT while preserving checkIn,
+    // so filtering by checkIn = null would hide those valid absent records.
+    // The PUNCH_OUT branch above remains exclusive because it explicitly
+    // requires an open session and excludes stored ABSENT rows.
     where.status = "ABSENT";
-    where.checkIn = null;
   } else if (status && status !== "ALL") {
     where.status = status;
   }

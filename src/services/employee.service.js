@@ -1189,14 +1189,13 @@ const updateMyProfile = async (organizationId, userId, data, actorRole = "EMPLOY
     if (workEmailClash) throw badRequest("That office email is already used by another employee in this organization.");
   }
   const birthDate = data.dateOfBirth !== undefined ? parsePastDate("Date of birth", data.dateOfBirth) : undefined;
+  const genderToSet = data.gender !== undefined ? normalizeGender(data.gender) : undefined;
   const bloodGroupToSet = data.bloodGroup !== undefined ? normalizeBloodGroup(data.bloodGroup) : undefined;
   const maritalStatusToSet = data.maritalStatus !== undefined ? normalizeMaritalStatus(data.maritalStatus) : undefined;
   const joiningDate = data.dateOfJoining !== undefined
     ? parsePastDate("Date of joining", data.dateOfJoining, { allowFuture: true })
     : undefined;
-  // Date of birth is fill-once for self-service. Joining date is intentionally
-  // editable so an employee can correct an onboarding date entered incorrectly.
-  if (birthDate && employee.dateOfBirth) throw badRequest("Date of birth is already recorded. Contact HR to change it.");
+  // Employees can correct both dates; retain validation so joining cannot precede birth.
   const effectiveBirth = birthDate || employee.dateOfBirth;
   const effectiveJoining = joiningDate || employee.dateOfJoining;
   if (effectiveBirth && effectiveJoining && effectiveJoining < effectiveBirth) {
@@ -1241,6 +1240,7 @@ const updateMyProfile = async (organizationId, userId, data, actorRole = "EMPLOY
           ? { emergencyContactPhone: data.emergencyContactPhone ? String(data.emergencyContactPhone).trim() : null }
           : {}),
         ...(birthDate ? { dateOfBirth: birthDate } : {}),
+        ...(genderToSet !== undefined ? { gender: genderToSet } : {}),
         ...(bloodGroupToSet !== undefined ? { bloodGroup: bloodGroupToSet } : {}),
         ...(maritalStatusToSet !== undefined ? { maritalStatus: maritalStatusToSet } : {}),
         ...(joiningDate ? { dateOfJoining: joiningDate } : {}),
