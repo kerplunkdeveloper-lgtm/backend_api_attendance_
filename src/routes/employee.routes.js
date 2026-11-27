@@ -71,6 +71,12 @@ router.get(
 );
 
 router.get(
+  "/documents/pending",
+  authorizeRoles("COMPANY_ADMIN", "MANAGER", "HR"),
+  employeeDocumentController.getPendingDocuments,
+);
+
+router.get(
   "/:id",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   employeeController.getById,
@@ -171,7 +177,7 @@ router.delete(
 // Verify or reject document (Admin/Manager only)
 router.post(
   "/:employeeId/documents/:documentId/verify",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
+  authorizeRoles("COMPANY_ADMIN", "MANAGER", "HR"),
   employeeDocumentController.verifyDocument,
 );
 

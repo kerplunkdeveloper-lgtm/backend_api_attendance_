@@ -2,8 +2,8 @@ const crypto = require("node:crypto");
 const prisma = require("../config/database");
 const notificationService = require("./notification.service");
 
-const MANAGE_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"];
-const SUPPORT_ROLES = ["SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"];
+const MANAGE_ROLES = ["SUPER_ADMIN", "DEVELOPER", "COMPANY_ADMIN", "MANAGER", "HR"];
+const SUPPORT_ROLES = ["SUPER_ADMIN", "DEVELOPER", "COMPANY_ADMIN", "MANAGER", "HR"];
 const CATEGORIES = ["ATTENDANCE", "PAYROLL", "PROFILE", "LEAVE", "EMPLOYEE", "CHAT", "BILLING", "BUG", "OTHER"];
 const PRIORITIES = ["LOW", "NORMAL", "HIGH", "URGENT"];
 const STATUSES = ["OPEN", "IN_PROGRESS", "WAITING_ON_USER", "RESOLVED", "CLOSED"];
@@ -119,7 +119,8 @@ async function supportAgents(organizationId, excludeId) {
 }
 
 async function findTicket(organizationId, id, user, includeMessages = true) {
-  const where = { id, organizationId };
+  const globalAgent = ["SUPER_ADMIN", "DEVELOPER"].includes(user.role);
+  const where = { id, ...(globalAgent ? {} : { organizationId }) };
   if (!canManage(user.role)) where.requesterId = user.id;
   const ticket = await prisma.supportTicket.findFirst({
     where,
@@ -133,7 +134,7 @@ async function list(organizationId, user, query = {}) {
   const queue = query.scope === "queue" && canManage(user.role);
   const status = query.status ? validEnum("Status", query.status, STATUSES) : null;
   const where = {
-    organizationId,
+    ...(["SUPER_ADMIN", "DEVELOPER"].includes(user.role) && queue ? {} : { organizationId }),
     ...(queue ? {} : { requesterId: user.id }),
     ...(status ? { status } : {}),
   };
@@ -221,7 +222,7 @@ async function update(organizationId, user, id, payload = {}) {
     if (payload.assignedToId === null || payload.assignedToId === "") {
       data.assignedToId = null;
     } else {
-      const assignee = await prisma.user.findFirst({ where: { id: String(payload.assignedToId), organizationId, isActive: true, role: { in: SUPPORT_ROLES } } });
+      const assignee = await prisma.user.findFirst({ where: { id: String(payload.assignedToId), isActive: true, role: { in: ["DEVELOPER", "COMPANY_ADMIN", "MANAGER", "HR"] } } });
       if (!assignee) fail("The selected assignee is not an active support user.");
       data.assignedToId = assignee.id;
     }

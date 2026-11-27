@@ -1,10 +1,23 @@
 const employeeDocumentService = require("../services/employee-document.service");
+const auditService = require("../services/audit.service");
 
 class EmployeeDocumentController {
   async getMissingSummary(req, res, next) {
     try {
       const data = await employeeDocumentService.getMissingDocumentsSummary(req.user.organizationId, req.query);
       return res.status(200).json({ success: true, data, ...data });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async getPendingDocuments(req, res, next) {
+    try {
+      const data = await employeeDocumentService.getPendingDocuments(
+        req.user.organizationId,
+        req.query,
+      );
+      return res.status(200).json({ success: true, data });
     } catch (error) {
       next(error);
     }
@@ -258,6 +271,20 @@ class EmployeeDocumentController {
         },
       );
 
+      await auditService.logAction({
+        organizationId: req.user.organizationId,
+        userId: req.user.id,
+        employeeId: req.params.employeeId,
+        action: status === "VERIFIED" ? "VERIFY" : status === "REJECTED" ? "REJECT" : "UPDATE",
+        entity: "EmployeeDocument",
+        entityId: req.params.documentId,
+        details: { status, rejectionReason: status === "REJECTED" ? rejectionReason || null : null },
+        ipAddress: req.ip,
+        reviewStatus: status,
+        reviewedBy: req.user.id,
+        reviewNote: rejectionReason || null,
+      });
+
       return res.status(200).json({
         success: true,
         message: `Document status updated to ${status}`,
@@ -289,6 +316,7 @@ class EmployeeDocumentController {
 const controller = new EmployeeDocumentController();
 // Bind methods to controller instance
 controller.getDocuments = controller.getDocuments.bind(controller);
+controller.getPendingDocuments = controller.getPendingDocuments.bind(controller);
 controller.getDocumentContent = controller.getDocumentContent.bind(controller);
 controller.uploadDocument = controller.uploadDocument.bind(controller);
 controller.replaceOrUpdateDocument =

@@ -3,6 +3,7 @@ const prisma = require("../config/database");
 const { fail } = require("../utils/response");
 const { assertCanSetStatus, assertNotOwnSalary } = require("../utils/payrollAccess");
 const notificationDelivery = require("../services/notification-delivery.service");
+const logger = require("../utils/logger");
 
 /** Throws 403 when HR (a non-admin) is about to change their own pay. */
 const guardOwnSalary = (req, employeeIds) =>
@@ -113,6 +114,7 @@ class PayrollController {
   }
 
   async generate(req, res) {
+    const startedAt = Date.now();
     try {
       const { month, year } = req.body;
       if (!month || !year) {
@@ -125,6 +127,15 @@ class PayrollController {
         month,
         year,
       );
+      logger.info("payroll.generate_completed", {
+        requestId: req.requestId,
+        organizationId: req.user.organizationId,
+        month: Number(month),
+        year: Number(year),
+        elapsedMs: Date.now() - startedAt,
+        totalGenerated: result.totalGenerated,
+        totalSkipped: result.totalSkipped,
+      });
       return res
         .status(201)
         .json({
@@ -132,7 +143,17 @@ class PayrollController {
           message: "Payslips generated successfully",
           data: result,
         });
-    } catch (err) { return fail(res, err); }
+    } catch (err) {
+      logger.error("payroll.generate_failed", {
+        requestId: req.requestId,
+        organizationId: req.user?.organizationId,
+        month: req.body?.month,
+        year: req.body?.year,
+        elapsedMs: Date.now() - startedAt,
+        error: err,
+      });
+      return fail(res, err);
+    }
   }
 
   async getPayslips(req, res) {

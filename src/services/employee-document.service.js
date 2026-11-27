@@ -303,6 +303,95 @@ async function storeDocument({
 // --------------------------------------------------
 
 class EmployeeDocumentService {
+  /** Dashboard queue for documents that still need a human review. */
+  async getPendingDocuments(organizationId, { branchId, search, page = 1, limit = 100 } = {}) {
+    const take = Math.max(1, Math.min(Number(limit) || 100, 250));
+    const currentPage = Math.max(1, Number(page) || 1);
+    const skip = (currentPage - 1) * take;
+    const normalizedSearch = String(search || "").trim();
+    const documents = await prisma.employeeDocument.findMany({
+      where: {
+        organizationId,
+        status: "PENDING",
+        ...(branchId ? { employee: { branchId: String(branchId) } } : {}),
+        ...(normalizedSearch
+          ? {
+              employee: {
+                ...(branchId ? { branchId: String(branchId) } : {}),
+                OR: [
+                  { firstName: { contains: normalizedSearch, mode: "insensitive" } },
+                  { lastName: { contains: normalizedSearch, mode: "insensitive" } },
+                  { employeeCode: { contains: normalizedSearch, mode: "insensitive" } },
+                ],
+              },
+            }
+          : {}),
+      },
+      orderBy: { createdAt: "asc" },
+      skip,
+      take,
+      include: {
+        employee: {
+          select: {
+            id: true,
+            employeeCode: true,
+            firstName: true,
+            lastName: true,
+            department: { select: { name: true } },
+            branch: { select: { id: true, name: true } },
+          },
+        },
+      },
+    });
+
+    const total = await prisma.employeeDocument.count({
+      where: {
+        organizationId,
+        status: "PENDING",
+        ...(branchId ? { employee: { branchId: String(branchId) } } : {}),
+        ...(normalizedSearch
+          ? {
+              employee: {
+                ...(branchId ? { branchId: String(branchId) } : {}),
+                OR: [
+                  { firstName: { contains: normalizedSearch, mode: "insensitive" } },
+                  { lastName: { contains: normalizedSearch, mode: "insensitive" } },
+                  { employeeCode: { contains: normalizedSearch, mode: "insensitive" } },
+                ],
+              },
+            }
+          : {}),
+      },
+    });
+
+    return {
+      summary: {
+        pendingCount: total,
+        returned: documents.length,
+        page: currentPage,
+        limit: take,
+        totalPages: Math.ceil(total / take),
+        hasMore: skip + documents.length < total,
+      },
+      documents: documents.map((document) => ({
+        id: document.id,
+        employeeId: document.employeeId,
+        documentType: document.documentType,
+        title: document.title,
+        fileName: document.fileName,
+        fileSize: document.fileSize,
+        mimeType: document.mimeType,
+        status: document.status,
+        createdAt: document.createdAt,
+        updatedAt: document.updatedAt,
+        employee: {
+          ...document.employee,
+          name: `${document.employee.firstName} ${document.employee.lastName || ""}`.trim(),
+        },
+      })),
+    };
+  }
+
   /** Dashboard-friendly mandatory-document compliance summary. */
   async getMissingDocumentsSummary(organizationId, { branchId, limit = 50 } = {}) {
     const employees = await prisma.employee.findMany({
@@ -727,7 +816,6 @@ class EmployeeDocumentService {
             organizationId,
             role: {
               in: [
-                "SUPER_ADMIN",
                 "COMPANY_ADMIN",
                 "MANAGER",
                 "HR",
