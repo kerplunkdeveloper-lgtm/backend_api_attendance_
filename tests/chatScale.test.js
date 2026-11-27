@@ -51,6 +51,12 @@ describe("chat at scale", () => {
     assert.deepEqual(calls.users.where.id, { not: "u1" });
   });
 
+  it("applies a branch filter even when the text search is empty", async () => {
+    await chat.listTeammates("org", "u1", { branchId: "branch-puducherry" });
+    assert.deepEqual(calls.users.where.employee, { branchId: "branch-puducherry" });
+    assert.equal(calls.users.where.OR, undefined);
+  });
+
   it("caps teammate page size", async () => {
     await chat.listTeammates("org", "u1", { limit: 5000 });
     assert.equal(calls.users.take, 100);

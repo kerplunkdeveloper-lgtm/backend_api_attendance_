@@ -11,7 +11,7 @@ const { tenantRateLimiter } = require("./rateLimiter.middleware");
 // The platform owner's console reads across every workspace, so only tenant
 // roles are confined to their own organization by the Prisma tenant guard.
 const scopeRequestToTenant = (role, organizationId) => {
-  if (role !== "SUPER_ADMIN") setTenant(organizationId);
+  if (role !== "SUPER_ADMIN" && role !== "DEVELOPER") setTenant(organizationId);
 };
 
 const parseScopes = (raw) => {

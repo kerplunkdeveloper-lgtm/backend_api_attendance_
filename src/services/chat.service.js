@@ -223,6 +223,8 @@ async function listTeammates(organizationId, userId, query = {}) {
   const { page, limit, skip } = parsePagination(query, { defaultLimit: 30, maxLimit: 100 });
   const where = { organizationId, isActive: true, id: { not: userId } };
   const term = typeof query.search === "string" ? query.search.trim().slice(0, 80) : "";
+  const branchId = typeof query.branchId === "string" ? query.branchId.trim() : "";
+  if (branchId) where.employee = { branchId };
   if (term) {
     where.OR = [
       { email: { contains: term, mode: "insensitive" } },
@@ -247,6 +249,7 @@ async function listTeammates(organizationId, userId, query = {}) {
             lastName: true,
             employeeCode: true,
             department: { select: { id: true, name: true } },
+            branch: { select: { id: true, name: true } },
           },
         },
       },

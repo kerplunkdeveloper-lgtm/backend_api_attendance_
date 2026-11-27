@@ -2328,14 +2328,36 @@ const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, 
     if (to) where.date.lte = getTodayDateOnly(new Date(to));
   }
 
-  if (status && status !== "ALL") where.status = status;
+  const timezone = await getOrgTimezone(organizationId);
+  const today = getLocalDateOnly(new Date(), timezone);
+  // Punch-out is a derived filter: an open attendance session has a punch-in
+  // but no punch-out, regardless of whether its stored status is PRESENT/LATE.
+  if (status === "PUNCH_OUT") {
+    where.checkIn = { not: null };
+    where.checkOut = null;
+    where.status = { not: "ABSENT" };
+  } else if (status === "ABSENT") {
+    // An open session is a punch-out exception, never an absent employee.
+    // Keep the absent queue exclusive so the two filters cannot overlap.
+    where.status = "ABSENT";
+    where.checkIn = null;
+  } else if (status && status !== "ALL") {
+    where.status = status;
+  }
 
   const { limit: take, skip, page: curPage } = parsePagination({ page, limit }, { defaultLimit: 20 });
   // Today + team views may append derived ABSENT rows below. In that case we
   // need the complete filtered set before applying the final in-memory page.
   // For every other query the database page is already the final page.
-  const mayAddVirtualAbsence = canSeeTeam && from && to && from === to &&
+  // An employee can be absent before the EOD scheduler writes the ABSENT row.
+  // The UI commonly uses "This month", so only checking an exact Today range
+  // made the Absent tab appear empty during the current day.
+  const todayKeyForRange = today.toISOString().slice(0, 10);
+  const todayFallsInRange = Boolean(from && to && from <= todayKeyForRange && todayKeyForRange <= to);
+  const mayAddVirtualAbsence = canSeeTeam && todayFallsInRange &&
     (!status || status === "ALL" || status === "ABSENT");
+  const mayAddVirtualHoliday = Boolean(from || to) && (!status || status === "ALL" || status === "HOLIDAY");
+  const needsVirtualRows = mayAddVirtualAbsence || mayAddVirtualHoliday;
 
   const [records, total] = await Promise.all([
     prisma.attendance.findMany({
@@ -2358,7 +2380,7 @@ const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, 
         },
       },
       orderBy: { date: "desc" },
-      ...(mayAddVirtualAbsence ? {} : { take, skip }),
+      ...(needsVirtualRows ? {} : { take, skip }),
     }),
     prisma.attendance.count({ where }),
   ]);
@@ -2367,11 +2389,9 @@ const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, 
   // not have created an ABSENT row yet, so Today + Absent also includes
   // working employees with no attendance row and no approved day off.
   let virtualAbsent = [];
-  const timezone = await getOrgTimezone(organizationId);
-  const today = getLocalDateOnly(new Date(), timezone);
   const todayKey = today.toISOString().slice(0, 10);
-  const exactToday = from && to && from === todayKey && to === todayKey;
-  if (canSeeTeam && exactToday && (!status || status === "ALL" || status === "ABSENT")) {
+  const todayInSelectedRange = Boolean(from && to && from <= todayKey && todayKey <= to);
+  if (canSeeTeam && todayInSelectedRange && (!status || status === "ALL" || status === "ABSENT")) {
     const [employees, todayAttendances, approvedLeaves, holidays, companyLeaves] = await Promise.all([
       prisma.employee.findMany({
         where: {
@@ -2423,11 +2443,120 @@ const getAttendanceHistory = async ({ userId, organizationId, role, employeeId, 
     }));
   }
 
+  // Holidays are calendar records, not punch records. Create a visible row
+  // for every employee covered by a company/branch holiday when no attendance
+  // row exists for that date. This keeps the attendance log complete for both
+  // admins and employees, including historical date ranges.
+  let virtualHoliday = [];
+  const dateKey = (value) => new Date(value).toISOString().slice(0, 10);
+  if (mayAddVirtualHoliday) {
+    const holidayDateWhere = {};
+    if (from) holidayDateWhere.gte = getTodayDateOnly(new Date(from));
+    if (to) holidayDateWhere.lte = getTodayDateOnly(new Date(to));
+
+    const employeeWhere = {
+      organizationId,
+      deletedAt: null,
+      status: { in: WORKING_STATUSES },
+      user: workforceUserFilter,
+      ...(employeeId ? { id: employeeId } : {}),
+      ...(canSeeTeam && branchId && branchId !== "ALL" ? { branchId: String(branchId) } : {}),
+    };
+    if (!canSeeTeam) {
+      const ownEmployee = await prisma.employee.findFirst({ where: { userId, organizationId }, select: { id: true } });
+      employeeWhere.id = ownEmployee?.id || "__no_employee__";
+    }
+
+    const [holidayCalendar, companyLeaveCalendar, holidayAttendance] = await Promise.all([
+      prisma.holiday.findMany({
+        where: {
+          organizationId,
+          ...(Object.keys(holidayDateWhere).length ? { date: holidayDateWhere } : {}),
+        },
+        select: { date: true, name: true, branchId: true },
+        orderBy: { date: "asc" },
+      }),
+      prisma.companyLeave.findMany({
+        where: {
+          organizationId,
+          ...(from ? { endDate: { gte: getTodayDateOnly(new Date(from)) } } : {}),
+          ...(to ? { startDate: { lte: getTodayDateOnly(new Date(to)) } } : {}),
+        },
+        select: { startDate: true, endDate: true, title: true, branchId: true },
+      }),
+      prisma.attendance.findMany({
+        where: {
+          organizationId,
+          ...(Object.keys(holidayDateWhere).length ? { date: holidayDateWhere } : {}),
+          ...(employeeId ? { employeeId } : {}),
+        },
+        select: { employeeId: true, date: true },
+      }),
+      
+    ]);
+    const holidayEmployees = await prisma.employee.findMany({
+      where: employeeWhere,
+      select: {
+        id: true, firstName: true, lastName: true, employeeCode: true, designation: true, avatarUrl: true, avatarStorageKey: true, branchId: true,
+        department: { select: { id: true, name: true } },
+        user: { select: { email: true, role: true, avatarUrl: true, avatarStorageKey: true } },
+        branch: { select: { id: true, name: true, radiusMeters: true, ...(canSeeLocation ? { latitude: true, longitude: true } : {}) } },
+        shift: { select: { id: true, name: true, startTime: true, endTime: true, graceMinutes: true, workingDays: true } },
+      },
+    });
+    const alreadyRecorded = new Set(holidayAttendance.map((row) => `${row.employeeId}:${row.date.toISOString().slice(0, 10)}`));
+    const holidayByDate = new Map();
+    holidayCalendar.forEach((holiday) => holidayByDate.set(dateKey(holiday.date), { name: holiday.name, type: "HOLIDAY" }));
+    companyLeaveCalendar.forEach((leave) => {
+      const start = new Date(leave.startDate);
+      const end = new Date(leave.endDate);
+      for (let cursor = new Date(start); cursor <= end; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+        const key = dateKey(cursor);
+        if ((!from || key >= from) && (!to || key <= to)) {
+          holidayByDate.set(key, { name: leave.title, type: "COMPANY_LEAVE" });
+        }
+      }
+    });
+    for (const [key, calendarDay] of holidayByDate) {
+      for (const employee of holidayEmployees) {
+        const holiday = holidayCalendar.find((item) => dateKey(item.date) === key && (!item.branchId || item.branchId === employee.branchId));
+        const companyLeave = companyLeaveCalendar.find((item) => {
+          const start = dateKey(item.startDate);
+          const end = dateKey(item.endDate);
+          return key >= start && key <= end && (!item.branchId || item.branchId === employee.branchId);
+        });
+        if (!holiday && !companyLeave) continue;
+        if (alreadyRecorded.has(`${employee.id}:${key}`)) continue;
+        virtualHoliday.push({
+          id: `virtual-holiday-${employee.id}-${key}`,
+          organizationId,
+          employeeId: employee.id,
+          date: new Date(`${key}T00:00:00.000Z`),
+          status: "HOLIDAY",
+          holidayName: holiday?.name || companyLeave?.title || calendarDay.name,
+          holidayType: holiday ? "HOLIDAY" : "COMPANY_LEAVE",
+          checkIn: null,
+          checkOut: null,
+          checkInLocation: null,
+          checkOutLocation: null,
+          employee,
+          branch: employee.branch,
+          shift: employee.shift,
+          events: [],
+        });
+      }
+    }
+  }
+
   const combined = (status === "ABSENT" || status === "ALL" ? [...records, ...virtualAbsent] : records)
-    .map(presentAttendanceEmployeeImage);
+    .concat(status === "HOLIDAY" || status === "ALL" ? virtualHoliday : [])
+    .map((row) => {
+      const holiday = virtualHoliday.find((item) => item.employeeId === row.employeeId && dateKey(item.date) === dateKey(row.date));
+      return presentAttendanceEmployeeImage(holiday && row.status !== "HOLIDAY" ? { ...row, holidayName: holiday.holidayName, holidayType: holiday.holidayType } : row);
+    });
   combined.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  const paged = mayAddVirtualAbsence ? combined.slice(skip, skip + take) : combined;
-  const combinedTotal = total + virtualAbsent.length;
+  const paged = needsVirtualRows ? combined.slice(skip, skip + take) : combined;
+  const combinedTotal = total + virtualAbsent.length + virtualHoliday.length;
   return {
     success: true,
     page: curPage,

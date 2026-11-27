@@ -9,6 +9,7 @@ datasource db {
 
 enum UserRole {
   SUPER_ADMIN
+  DEVELOPER
   COMPANY_ADMIN
   MANAGER
   HR
@@ -1835,6 +1836,7 @@ model EmployeeDocument {
   employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
   @@index([organizationId])
+  @@index([organizationId, status, createdAt])
   @@index([employeeId])
   @@index([documentType])
   @@index([expiryDate])

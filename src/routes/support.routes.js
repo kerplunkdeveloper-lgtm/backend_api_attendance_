@@ -3,7 +3,7 @@ const supportController = require("../controllers/support.controller");
 const { authenticate, authorizeRoles } = require("../middleware/auth.middleware");
 
 const router = express.Router();
-const manage = authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR");
+const manage = authorizeRoles("SUPER_ADMIN", "DEVELOPER", "COMPANY_ADMIN", "MANAGER", "HR");
 
 router.use(authenticate);
 router.get("/", supportController.list);

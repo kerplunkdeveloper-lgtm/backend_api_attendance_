@@ -3,6 +3,8 @@ const { parsePagination, paginationMeta } = require("../utils/pagination");
 const { applyPaidPlan, getConfiguredLimits, PLAN_KEYS, BILLING_CYCLES } = require("./billing.service");
 const { SEAT_STATUSES: SEATS } = require("../config/plans");
 const authService = require("./auth.service");
+const bcrypt = require("bcryptjs");
+const { generateTempPassword } = require("../utils/password");
 
 const PLANS = ["FREE_TRIAL", "STARTER", "PROFESSIONAL", "ENTERPRISE"];
 const STATUSES = ["TRIALING", "ACTIVE", "PAST_DUE", "CANCELED", "EXPIRED"];
@@ -10,6 +12,20 @@ const SEAT_STATUSES = ["ACTIVE", "PROBATION", "NOTICE_PERIOD"];
 const DAY = 86400000;
 
 const num = (v) => (v == null ? 0 : Number(v));
+
+async function listDevelopers() {
+  return prisma.user.findMany({ where: { role: "DEVELOPER" }, orderBy: { createdAt: "desc" }, select: { id: true, email: true, role: true, isActive: true, createdAt: true, lastLoginAt: true, mustChangePassword: true } });
+}
+
+async function createDeveloper(actor, payload = {}) {
+  const email = String(payload.email || "").trim().toLowerCase();
+  if (!email || !email.includes("@")) throw Object.assign(new Error("A valid developer email is required."), { statusCode: 400 });
+  if (await prisma.user.findFirst({ where: { email } })) throw Object.assign(new Error("An account with this email already exists."), { statusCode: 409 });
+  const temporaryPassword = generateTempPassword();
+  const passwordHash = await bcrypt.hash(temporaryPassword, 12);
+  const developer = await prisma.user.create({ data: { organizationId: actor.organizationId, email, passwordHash, role: "DEVELOPER", emailVerifiedAt: new Date(), mustChangePassword: true }, select: { id: true, email: true, role: true, isActive: true, mustChangePassword: true, createdAt: true } });
+  return { developer, temporaryPassword };
+}
 
 /** Monthly recurring revenue contributed by one subscription. */
 const monthlyValue = (sub) => {
@@ -558,4 +574,4 @@ async function activityLog(query = {}) {
   return { records, ...paginationMeta(total, page, limit) };
 }
 
-module.exports = { overview, revenueHistory, listClients, getClient, applyAction, sendAdminPasswordReset, attention, activityLog, monthlyValue };
+module.exports = { overview, revenueHistory, listClients, getClient, applyAction, sendAdminPasswordReset, attention, activityLog, monthlyValue, listDevelopers, createDeveloper };

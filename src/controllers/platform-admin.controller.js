@@ -26,4 +26,6 @@ module.exports = {
   sendAdminPasswordReset: handle((req) =>
     service.sendAdminPasswordReset(req.params.id, { userId: req.user.id, organizationId: req.user.organizationId, ip: req.ip }),
   ),
+  listDevelopers: handle(() => service.listDevelopers()),
+  createDeveloper: handle((req) => service.createDeveloper(req.user, req.body)),
 };
