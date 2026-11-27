@@ -7,9 +7,14 @@ stubSideEffects();
 let seenWhere;
 mockPrisma({
   organization: { findUnique: async () => ({ timezone: "UTC" }) },
+  employee: { findMany: async () => [] },
+  holiday: { findMany: async () => [] },
+  companyLeave: { findMany: async () => [] },
   attendance: {
     findMany: async ({ where }) => {
-      seenWhere = where;
+      // Attendance history also reads holiday dates after the primary query.
+      // Keep the first query so this test asserts the actual attendance scope.
+      if (seenWhere === null) seenWhere = where;
       return [];
     },
     count: async () => 0,
