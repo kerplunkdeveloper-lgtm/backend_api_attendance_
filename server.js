@@ -6,6 +6,7 @@ const notificationService = require("./src/services/notification.service");
 const auditService = require("./src/services/audit.service");
 const { disconnectRedis } = require("./src/config/redis");
 const { warmVerifier, shutdownVerifier } = require("./src/utils/passwordVerifier");
+const asyncJobService = require("./src/services/async-job.service");
 
 // Spin up the password-hashing workers now, not on the first login spike.
 warmVerifier();
@@ -22,6 +23,7 @@ function startBackgroundScheduler() {
   // Audit retention is always enabled. It is leader-locked, so it remains
   // safe when more than one API process is running.
   auditService.startRetentionScheduler();
+  asyncJobService.startWorker().catch((error) => console.error("[jobs] worker failed to start:", error.message));
   const flag = process.env.ENABLE_SCHEDULER;
   const enabled = flag === undefined ? process.env.NODE_ENV !== "production" : flag === "true";
 
@@ -105,6 +107,7 @@ const shutdown = async (signal) => {
   server?.close(async () => {
     try {
       await prisma.$disconnect();
+      await asyncJobService.stopWorker();
       await disconnectRedis();
       await shutdownVerifier();
     } catch (err) {

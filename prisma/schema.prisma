@@ -217,6 +217,7 @@ model Organization {
   aiUsageRecords       AIUsageRecord[]
   aiToolAuditLogs      AIToolAuditLog[]
   aiSettings           AIOrganizationSettings?
+  asyncJobs            AsyncJob[]
 }
 
 model StorageObject {
@@ -743,6 +744,7 @@ model User {
   aiKnowledgeDocuments    AIKnowledgeDocument[] @relation("AIKnowledgeUploadedBy")
   aiToolAuditLogs         AIToolAuditLog[]
   aiUsageRecords          AIUsageRecord[]
+  asyncJobs               AsyncJob[]
 
   // Scoped to the tenant: the same person may hold an account in more than one
   // workspace (consultants, agencies, or simply evaluating a second org).
@@ -794,6 +796,8 @@ model AIKnowledgeDocument {
   sourceType     String    @default("TEXT") // TEXT | MARKDOWN | PDF
   fileName       String?
   content        String    @db.Text
+  embedding      Json?
+  embeddingModel String?
   isPublished    Boolean   @default(false)
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
@@ -852,6 +856,29 @@ model AIOrganizationSettings {
   updatedAt      DateTime @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model AsyncJob {
+  id             String   @id @default(uuid())
+  organizationId String
+  userId         String
+  type           String
+  status         String   @default("QUEUED") // QUEUED | RUNNING | COMPLETED | FAILED
+  payload        Json
+  result         Json?
+  error          String?
+  progress       Int      @default(0)
+  createdAt      DateTime @default(now())
+  startedAt      DateTime?
+  completedAt    DateTime?
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, status, createdAt])
+  @@index([userId, createdAt])
 }
 
 model SsoLoginCode {

@@ -18,6 +18,8 @@
     "db:local:deploy": "prisma db push",
     "db:local:push": "prisma db push",
     "db:push": "prisma db push",
+    "ai:embeddings:dry-run": "node scripts/backfill-ai-embeddings.js",
+    "ai:embeddings:backfill": "node scripts/backfill-ai-embeddings.js --execute",
     "fix:access": "node scripts/fix_all_access.js",
     "test": "node --test --test-concurrency=1 --test-force-exit tests/*.test.js",
     "test:integration": "node --test --test-concurrency=1 --test-force-exit tests/integration/*.test.js",

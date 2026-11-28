@@ -527,6 +527,7 @@ const getEmployeeAvatarFile = async (req, res) => {
       "COMPANY_ADMIN",
       "HR",
       "MANAGER",
+      "EMPLOYEE",
     ];
 
     const canRead =

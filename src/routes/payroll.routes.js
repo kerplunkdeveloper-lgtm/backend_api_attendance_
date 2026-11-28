@@ -87,12 +87,24 @@ router.post(
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"),
   payrollController.generate,
 );
+router.post(
+  "/generate/async",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "HR"),
+  payrollController.generateAsync,
+);
 
 // List Organization Payslips
 router.get(
   "/payslips",
   authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
   payrollController.getPayslips,
+);
+
+// Must stay before /payslips/:id so the export path is not treated as a payslip id.
+router.get(
+  "/payslips/export.pdf",
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
+  payrollController.getPayrollExportPdf,
 );
 
 // Detailed Payslip View with Company Letterhead & Amount in Words for PDF

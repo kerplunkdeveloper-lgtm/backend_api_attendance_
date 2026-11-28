@@ -159,7 +159,10 @@ class AttendanceController {
 
   async getLiveToday(req, res) {
     try {
-      const result = await attendanceService.getLiveToday(req.user.organizationId);
+      const result = await attendanceService.getLiveToday(req.user.organizationId, {
+        from: req.query.from,
+        to: req.query.to,
+      });
       return ok(res, result);
     } catch (error) {
       return fail(res, error);

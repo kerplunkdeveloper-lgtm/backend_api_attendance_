@@ -8,6 +8,8 @@ const aiAgentTools = require("./ai-agent-tools.service");
 
 const MAX_MESSAGE = 4000;
 const MAX_TOOL_LOOPS = 4;
+const AI_TIMEOUT_MS = Math.max(5000, Math.min(60000, Number(process.env.AI_TIMEOUT_MS) || 15000));
+const AI_MAX_RETRIES = Math.max(0, Math.min(3, Number(process.env.AI_MAX_RETRIES) || 1));
 const OUT_OF_SCOPE_MESSAGE = "I’m Clocked AI Assistant. I can help only with Clocked HRMS topics such as attendance, leave, payroll, employees, policies, holidays, approvals, and app usage.";
 const fail = (message, statusCode = 400) => Object.assign(new Error(message), { statusCode });
 const num = (v) => Number(v || 0);
@@ -75,6 +77,23 @@ function providerFailure(error) {
   });
 }
 
+async function embedText(value) {
+  if (!process.env.OPENAI_API_KEY) return null;
+  try {
+    const response = await new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 8000, maxRetries: 0 }).embeddings.create({ model: process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small", input: String(value || "").slice(0, 12000) });
+    return response.data?.[0]?.embedding || null;
+  } catch { return null; }
+}
+
+function cosineSimilarity(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length || !a.length) return 0;
+  let dot = 0; let left = 0; let right = 0;
+  for (let index = 0; index < a.length; index += 1) { dot += Number(a[index]) * Number(b[index]); left += Number(a[index]) ** 2; right += Number(b[index]) ** 2; }
+  return left && right ? dot / (Math.sqrt(left) * Math.sqrt(right)) : 0;
+}
+
+const policySynonyms = { salary: ["pay", "wage", "payroll", "deduction"], leave: ["holiday", "vacation", "time off"], attendance: ["punch", "check-in", "check-out", "late"], document: ["proof", "certificate", "compliance"], remote: ["wfh", "work from home", "work-from-home"] };
+
 function assertEnabled() {
   if (String(process.env.AI_ASSISTANT_ENABLED).toLowerCase() !== "true") {
     throw Object.assign(fail("AI Assistant is disabled for this environment.", 503), { code: "AI_ASSISTANT_DISABLED", expose: true });
@@ -96,10 +115,12 @@ function toolsFor(user) {
     { type: "function", name: "applyLeaveRequest", description: "Prepare or submit the authenticated user's own leave request. Always show a preview first; only set confirmation to CONFIRM after the user explicitly confirms. Never apply leave for another employee.", parameters: { type: "object", properties: { leaveType: { type: "string" }, startDate: { type: "string" }, endDate: { type: "string" }, reason: { type: "string", maxLength: 1000 }, totalDays: { type: "number", minimum: 0.5 }, halfDayPeriod: { type: "string", enum: ["MORNING", "AFTERNOON"] }, confirmation: { type: "string", enum: ["CONFIRM"] } }, required: ["leaveType", "startDate", "endDate", "reason"], additionalProperties: false } },
     { type: "function", name: "applyPermissionRequest", description: "Prepare or submit the authenticated user's own permission request. Always show a preview first; only set confirmation to CONFIRM after the user explicitly confirms. Never apply permission for another employee.", parameters: { type: "object", properties: { date: { type: "string" }, startTime: { type: "string" }, endTime: { type: "string" }, hours: { type: "number", minimum: 0.01 }, reason: { type: "string", maxLength: 500 }, confirmation: { type: "string", enum: ["CONFIRM"] } }, required: ["date", "reason"], additionalProperties: false } },
     { type: "function", name: "getMyAttendanceSummary", description: "Get the authenticated employee attendance summary for a month.", parameters: date },
+    { type: "function", name: "getTodayAttendanceSummary", description: "Get the verified attendance status for today. Use for today's attendance summary, current team status, or the authenticated employee's current status. Scope is automatically limited by role.", parameters: { type: "object", properties: {}, additionalProperties: false } },
     { type: "function", name: "getMyLeaveBalance", description: "Get the authenticated employee leave balances and pending leave.", parameters: { type: "object", properties: { year: { type: "integer" } }, additionalProperties: false } },
     { type: "function", name: "getMyPayrollSummary", description: "Get the authenticated employee latest payslip and deductions.", parameters: date },
     { type: "function", name: "searchCompanyKnowledge", description: "Search approved global and organization HRMS policy/help content.", parameters: { type: "object", properties: { query: { type: "string", minLength: 2, maxLength: 200 } }, required: ["query"], additionalProperties: false } },
     { type: "function", name: "getHolidayCalendar", description: "Get published holidays for the organization.", parameters: { type: "object", properties: { year: { type: "integer" } }, additionalProperties: false } },
+    { type: "function", name: "getAttendancePunchDetails", description: "MANDATORY for exact attendance questions such as today's, yesterday's, last day's, or a specified date's punch-in/punch-out time. Return only the verified record for the authenticated employee, or for an authorized employee when employeeCode/employeeId is explicitly provided. Do not use the monthly tool for exact punch times.", parameters: { type: "object", properties: { date: { type: "string", description: "Attendance date in YYYY-MM-DD format" }, employeeCode: { type: "string" }, employeeId: { type: "string" } }, required: ["date"], additionalProperties: false } },
     { type: "function", name: "getEmployeeAttendance", description: "Get an authorized employee's monthly attendance, lateness, early departures, working hours, overtime, and punch locations. Employees can request only themselves.", parameters: { type: "object", properties: { employeeCode: { type: "string" }, employeeId: { type: "string" }, year: { type: "integer" }, month: { type: "integer", minimum: 1, maximum: 12 } }, required: ["year", "month"], additionalProperties: false } },
     { type: "function", name: "getEmployeeLeaveHistory", description: "Get an authorized employee's leave history and statuses. Employees can request only themselves.", parameters: { type: "object", properties: { employeeCode: { type: "string" }, employeeId: { type: "string" }, status: { type: "string", enum: ["PENDING", "APPROVED", "REJECTED", "CANCELLED"] } }, additionalProperties: false } },
     { type: "function", name: "getEmployeeProfile", description: "Get minimal authorized employee profile, reporting manager, shift, and document completion status. Never return banking, PAN, Aadhaar, or document contents.", parameters: { type: "object", properties: { employeeCode: { type: "string" }, employeeId: { type: "string" } }, additionalProperties: false } },
@@ -363,6 +384,66 @@ async function getTodayAbsentSummary(user) {
   return { date: today.toISOString().slice(0, 10), timezone, scope: user.role === "MANAGER" ? "department" : user.role === "EMPLOYEE" ? "self" : "organization", absentCount: absentEmployees.length, absentEmployees };
 }
 
+async function getTodayAttendanceSummary(user) {
+  if (user.role === "EMPLOYEE" && !user.employee?.id) throw fail("Your employee profile is not available.", 404);
+  if (!teamRoles.includes(user.role) && user.role !== "EMPLOYEE") throw fail("You are not authorized to view attendance summary.", 403);
+  if (user.role === "MANAGER" && !user.employee?.departmentId) throw fail("Your manager scope is not configured.", 403);
+  const timezone = user.organization?.timezone || DEFAULT_TIMEZONE;
+  const today = getLocalDateOnly(new Date(), timezone);
+  const employeeWhere = {
+    organizationId: user.organizationId,
+    deletedAt: null,
+    status: { in: ["ACTIVE", "PROBATION", "NOTICE_PERIOD"] },
+    ...(user.role === "EMPLOYEE" ? { id: user.employee.id } : {}),
+    ...(user.role === "MANAGER" ? { departmentId: user.employee.departmentId } : {}),
+  };
+  const [employees, attendance, leaveRows] = await Promise.all([
+    prisma.employee.findMany({ where: employeeWhere, select: { id: true, employeeCode: true, firstName: true, lastName: true }, orderBy: [{ firstName: "asc" }, { lastName: "asc" }] }),
+    prisma.attendance.findMany({ where: { organizationId: user.organizationId, date: today, employee: employeeWhere }, select: { employeeId: true, status: true, checkIn: true, checkOut: true, lateMinutes: true, workingMinutes: true } }),
+    prisma.leaveRequest.findMany({ where: { organizationId: user.organizationId, status: "APPROVED", startDate: { lte: today }, endDate: { gte: today }, employee: employeeWhere }, select: { employeeId: true } }),
+  ]);
+  const byEmployee = new Map(attendance.map((row) => [row.employeeId, row]));
+  const leaveIds = new Set(leaveRows.map((row) => row.employeeId));
+  const presentStatuses = new Set(["PRESENT", "LATE", "SHORT_HOURS", "WORK_FROM_HOME", "HALF_DAY"]);
+  const records = employees.map((employee) => {
+    const row = byEmployee.get(employee.id);
+    return { employeeId: employee.id, employeeCode: employee.employeeCode, name: `${employee.firstName} ${employee.lastName || ""}`.trim(), status: row?.status || (leaveIds.has(employee.id) ? "LEAVE" : "NOT_PUNCHED"), checkIn: row?.checkIn || null, checkOut: row?.checkOut || null, lateMinutes: Number(row?.lateMinutes || 0), workingMinutes: Number(row?.workingMinutes || 0) };
+  });
+  const counted = records.filter((row) => row.status !== "LEAVE");
+  return {
+    date: today.toISOString().slice(0, 10), timezone, scope: user.role === "EMPLOYEE" ? "self" : user.role === "MANAGER" ? "department" : "organization",
+    counts: {
+      totalEmployees: records.length,
+      present: counted.filter((row) => presentStatuses.has(row.status)).length,
+      late: counted.filter((row) => row.status === "LATE" || row.lateMinutes > 0).length,
+      wfh: counted.filter((row) => row.status === "WORK_FROM_HOME").length,
+      halfDay: counted.filter((row) => row.status === "HALF_DAY").length,
+      shortHours: counted.filter((row) => row.status === "SHORT_HOURS").length,
+      onLeave: records.filter((row) => row.status === "LEAVE").length,
+      notPunched: records.filter((row) => row.status === "NOT_PUNCHED").length,
+      missingPunchOut: records.filter((row) => row.checkIn && !row.checkOut).length,
+    },
+    records: user.role === "EMPLOYEE" ? records : undefined,
+  };
+}
+
+function isTodayAttendanceSummaryQuestion(text) {
+  const value = String(text || "").toLowerCase();
+  return /\b(attendance|present|status|punch|workforce|team)\b/.test(value)
+    && /\b(today|now|currently|summary|how many|what is my)\b/.test(value)
+    && !/\b(punch\s*-?\s*(in|out)|check\s*-?\s*(in|out)|clock\s*-?\s*(in|out))\b/.test(value);
+}
+
+function todayAttendanceAnswer(summary) {
+  const c = summary.counts;
+  if (summary.scope === "self") {
+    const row = summary.records?.[0];
+    if (!row) return `Today (${summary.date}): no attendance profile is available.`;
+    return `Today (${summary.date}): status ${row.status}. Punch-in: ${row.checkIn ? "recorded" : "not recorded"}; punch-out: ${row.checkOut ? "recorded" : "not recorded"}.`;
+  }
+  return `Today's attendance (${summary.date}): ${c.present} present, ${c.late} late, ${c.wfh} WFH, ${c.halfDay} half day, ${c.shortHours} short hours, ${c.onLeave} on leave, ${c.notPunched} not punched, and ${c.missingPunchOut} missing punch-out. Total employees: ${c.totalEmployees}.`;
+}
+
 function isTodayAbsentQuestion(text) {
   const value = String(text || "").toLowerCase();
   return /\b(absent|not present|did not come|didn't come)\b/.test(value) && /\b(today|now|currently)\b/.test(value) && /\b(who|which|all|list|show|people|employees|everyone|how many)\b/.test(value);
@@ -470,6 +551,8 @@ async function runTool(user, name, args, selectedEmployeeId) {
     const from = new Date(Date.UTC(year, month - 1, 1)); const to = new Date(Date.UTC(year, month, 1));
     const rows = await prisma.attendance.findMany({ where: { organizationId, employeeId, date: { gte: from, lt: to } }, select: { date: true, status: true, workingMinutes: true, lateMinutes: true, overtimeMinutes: true }, orderBy: { date: "asc" }, take: 62 });
     result = { year, month, presentDays: rows.filter((r) => ["PRESENT", "LATE", "SHORT_HOURS", "WORK_FROM_HOME"].includes(r.status)).length, lateDays: rows.filter((r) => r.lateMinutes > 0 || r.status === "LATE").length, totalWorkingMinutes: rows.reduce((n, r) => n + r.workingMinutes, 0), overtimeMinutes: rows.reduce((n, r) => n + r.overtimeMinutes, 0), records: rows };
+  } else if (name === "getTodayAttendanceSummary") {
+    result = await getTodayAttendanceSummary(user);
   } else if (name === "getMyLeaveBalance") {
     const [balances, pending] = await Promise.all([
       prisma.leaveBalance.findMany({ where: { organizationId, employeeId, year }, include: { leaveType: { select: { name: true, code: true, isPaid: true } } }, orderBy: { leaveType: { name: "asc" } } }),
@@ -480,10 +563,13 @@ async function runTool(user, name, args, selectedEmployeeId) {
     const row = await prisma.payslip.findFirst({ where: { organizationId, employeeId, ...(args.month ? { month, year } : {}) }, orderBy: [{ year: "desc" }, { month: "desc" }], select: { month: true, year: true, grossSalary: true, netSalary: true, deductionsTotal: true, pfDeduction: true, esiDeduction: true, ptDeduction: true, tdsDeduction: true, unpaidLeaveDeduction: true, lateDeduction: true, overtimePay: true, status: true } });
     result = row ? Object.fromEntries(Object.entries(row).map(([k, v]) => [k, v?.toJSON ? v.toJSON() : v])) : { message: "No payslip is available." };
   } else if (name === "searchCompanyKnowledge") {
-    const query = String(args.query || "").trim().slice(0, 200); const terms = query.split(/\s+/).filter((x) => x.length > 2).slice(0, 8);
-    const docs = await prisma.aIKnowledgeDocument.findMany({ where: { isPublished: true, archivedAt: null, OR: [{ organizationId }, { organizationId: null }] }, select: { id: true, title: true, category: true, content: true, organizationId: true }, take: 50 });
-    const ranked = docs.map((doc) => ({ ...doc, score: terms.reduce((n, t) => n + (doc.title + " " + doc.content).toLowerCase().split(t.toLowerCase()).length - 1, 0) })).filter((d) => d.score > 0).sort((a, b) => b.score - a.score).slice(0, 5);
-    result = { sources: ranked.map(({ content, ...d }) => ({ ...d, excerpt: content.slice(0, 3000) })) };
+    const query = String(args.query || "").trim().slice(0, 200); const baseTerms = query.toLowerCase().split(/\s+/).filter((x) => x.length > 2).slice(0, 8); const terms = [...new Set(baseTerms.flatMap((term) => [term, ...(policySynonyms[term] || [])]))];
+    const [docs, queryEmbedding] = await Promise.all([
+      prisma.aIKnowledgeDocument.findMany({ where: { isPublished: true, archivedAt: null, OR: [{ organizationId }, { organizationId: null }] }, select: { id: true, title: true, category: true, content: true, organizationId: true, embedding: true }, take: 100 }),
+      embedText(query),
+    ]);
+    const ranked = docs.map((doc) => { const haystack = `${doc.title} ${doc.content}`.toLowerCase(); const lexical = terms.reduce((n, term) => n + (haystack.split(term).length - 1), 0) + (haystack.includes(query.toLowerCase()) ? 5 : 0); const semantic = queryEmbedding && doc.embedding ? cosineSimilarity(queryEmbedding, doc.embedding) * 20 : 0; return { ...doc, score: lexical + semantic }; }).filter((d) => d.score > 0).sort((a, b) => b.score - a.score).slice(0, 5);
+    result = { sources: ranked.map(({ content, embedding, ...d }) => ({ ...d, excerpt: content.slice(0, 3000) })) };
   } else if (name === "getHolidayCalendar") {
     result = { year, holidays: await prisma.holiday.findMany({ where: { organizationId, date: { gte: new Date(Date.UTC(year, 0, 1)), lt: new Date(Date.UTC(year + 1, 0, 1)) } }, select: { name: true, date: true, isOptional: true }, orderBy: { date: "asc" }, take: 100 }) };
   } else if (name === "searchAuthorizedEmployee") {
@@ -502,6 +588,8 @@ async function runTool(user, name, args, selectedEmployeeId) {
     result = await aiAgentTools.getEmployeePayrollBreakdown(user, args);
   } else if (name === "getEmployeeAttendance") {
     result = await aiAgentTools.getEmployeeAttendance(user, args);
+  } else if (name === "getAttendancePunchDetails") {
+    result = await aiAgentTools.getAttendancePunchDetails(user, args);
   } else if (name === "getEmployeeLeaveHistory") {
     result = await aiAgentTools.getEmployeeLeaveHistory(user, args);
   } else if (name === "getEmployeeOvertime") {
@@ -565,6 +653,30 @@ function isKnownWorkflowQuestion(text) {
   return /(payroll\s+(processing|workflow|steps)|process payroll|incomplete employee documents|missing employee documents|review employee documents)/.test(value);
 }
 
+function isExactPunchQuestion(text) {
+  const value = String(text || "").toLowerCase();
+  return /\b(punch|check\s*-?\s*in|check\s*-?\s*out|clock\s*-?\s*in|clock\s*-?\s*out)\b/.test(value)
+    && /\b(today|yesterday|last\s*day|lastday|\d{4}-\d{2}-\d{2})\b/.test(value);
+}
+
+function exactPunchDate(text, timezone) {
+  const value = String(text || "").toLowerCase();
+  const explicit = value.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+  if (explicit) return explicit[1];
+  const date = getLocalDateOnly(new Date(), timezone);
+  if (/\b(yesterday|last\s*day|lastday)\b/.test(value)) date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
+}
+
+function exactPunchAnswer(data) {
+  const record = data.record;
+  if (!record) return `No verified attendance record was found for ${data.date} for ${data.employee.name}.`;
+  const checkIn = record.checkInTime || "not recorded";
+  const checkOut = record.checkOutTime || "not recorded";
+  const hours = record.workingMinutes == null ? "" : ` Working time: ${Math.floor(record.workingMinutes / 60)}h ${record.workingMinutes % 60}m.`;
+  return `${data.employee.name} — ${data.date}: punch-in ${checkIn}; punch-out ${checkOut}; status ${record.status || "recorded"}.${hours}`;
+}
+
 async function chat({ user, conversationId, message, selectedEmployeeId }) {
   assertAIPlan(user); assertEnabled(); const text = String(message || "").trim().slice(0, MAX_MESSAGE); if (!text) throw fail("Message is required.");
   if (selectedEmployeeId) await resolveAuthorizedEmployee(user, selectedEmployeeId);
@@ -594,6 +706,22 @@ async function chat({ user, conversationId, message, selectedEmployeeId }) {
     await prisma.aIMessage.create({ data: { conversationId: conversation.id, organizationId: user.organizationId, role: "assistant", content: answer } });
     return { conversationId: conversation.id, message: { role: "assistant", content: answer, insights }, insights, usage: null };
   }
+  if (isExactPunchQuestion(text)) {
+    const timezone = user.organization?.timezone || DEFAULT_TIMEZONE;
+    const date = exactPunchDate(text, timezone);
+    const data = await aiAgentTools.getAttendancePunchDetails(user, { date, ...(selectedEmployeeId ? { employeeId: selectedEmployeeId } : {}) });
+    const insights = [{ tool: "getAttendancePunchDetails", data }];
+    const answer = exactPunchAnswer(data);
+    await prisma.aIMessage.create({ data: { conversationId: conversation.id, organizationId: user.organizationId, role: "assistant", content: answer } });
+    return { conversationId: conversation.id, message: { role: "assistant", content: answer, insights }, insights, usage: null };
+  }
+  if (isTodayAttendanceSummaryQuestion(text)) {
+    const summary = await getTodayAttendanceSummary(user);
+    const insights = [{ tool: "getTodayAttendanceSummary", data: summary }];
+    const answer = todayAttendanceAnswer(summary);
+    await prisma.aIMessage.create({ data: { conversationId: conversation.id, organizationId: user.organizationId, role: "assistant", content: answer } });
+    return { conversationId: conversation.id, message: { role: "assistant", content: answer, insights }, insights, usage: null };
+  }
   if (isEmployeeDirectoryQuestion(text) || continuesEmployeeDirectory || isTodayLateQuestion(text)) {
     const insights = [];
     let answer;
@@ -615,7 +743,7 @@ async function chat({ user, conversationId, message, selectedEmployeeId }) {
   let input = history.reverse().map((m) => ({ role: m.role, content: m.content })); let response; const insights = [];
   for (let loop = 0; loop < MAX_TOOL_LOOPS; loop += 1) {
     try {
-      response = await new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 30000, maxRetries: 2 }).responses.create({ model: process.env.OPENAI_MODEL || "gpt-5-mini", instructions: `${prompt(user)}${selectedEmployeeId ? ` The user selected authorized employee ID ${selectedEmployeeId}. If the user asks about that employee, use getAuthorizedEmployeeSnapshot with exactly that ID.` : " No employee is selected; do not infer or choose another employee."}`, input, tools: toolsFor(user), store: false, max_output_tokens: 900 });
+      response = await new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: AI_TIMEOUT_MS, maxRetries: AI_MAX_RETRIES }).responses.create({ model: process.env.OPENAI_MODEL || "gpt-5-mini", instructions: `${prompt(user)}${selectedEmployeeId ? ` The user selected authorized employee ID ${selectedEmployeeId}. If the user asks about that employee, use getAuthorizedEmployeeSnapshot with exactly that ID.` : " No employee is selected; do not infer or choose another employee."}`, input, tools: toolsFor(user), store: false, max_output_tokens: 900 });
     } catch (error) {
       throw providerFailure(error);
     }
@@ -647,6 +775,18 @@ async function conversations(user) { assertAIPlan(user); return prisma.aIConvers
 async function messages(user, id) { assertAIPlan(user); const c = await prisma.aIConversation.findFirst({ where: { id, organizationId: user.organizationId, userId: user.id, deletedAt: null }, include: { messages: { orderBy: { createdAt: "asc" }, take: 100 } } }); if (!c) throw fail("Conversation not found.", 404); return c; }
 async function deleteConversation(user, id) { assertAIPlan(user); const r = await prisma.aIConversation.updateMany({ where: { id, organizationId: user.organizationId, userId: user.id, deletedAt: null }, data: { deletedAt: new Date() } }); if (!r.count) throw fail("Conversation not found.", 404); return { id }; }
 async function knowledgeList(user) { assertAIPlan(user); return prisma.aIKnowledgeDocument.findMany({ where: { OR: [{ organizationId: user.organizationId }, { organizationId: null }], archivedAt: null }, select: { id: true, title: true, category: true, sourceType: true, fileName: true, isPublished: true, organizationId: true, createdAt: true, updatedAt: true }, orderBy: { updatedAt: "desc" }, take: 100 }); }
-async function upsertKnowledge(user, data) { assertAIPlan(user); if (!isAdmin(user)) throw fail("Only HR or administrators can manage AI knowledge.", 403); const title = String(data.title || "").trim().slice(0, 200); const content = String(data.content || "").trim().slice(0, 200000); if (!title || !content) throw fail("Title and content are required."); return prisma.aIKnowledgeDocument.create({ data: { organizationId: user.role === "SUPER_ADMIN" && data.global === true ? null : user.organizationId, uploadedById: user.id, title, content, category: String(data.category || "GENERAL").slice(0, 60), sourceType: String(data.sourceType || "TEXT").slice(0, 20), fileName: data.fileName ? String(data.fileName).slice(0, 200) : null, isPublished: data.isPublished === true } }); }
+async function upsertKnowledge(user, data) { assertAIPlan(user); if (!isAdmin(user)) throw fail("Only HR or administrators can manage AI knowledge.", 403); const title = String(data.title || "").trim().slice(0, 200); const content = String(data.content || "").trim().slice(0, 200000); if (!title || !content) throw fail("Title and content are required."); const embedding = await embedText(`${title}\n${content}`); return prisma.aIKnowledgeDocument.create({ data: { organizationId: user.role === "SUPER_ADMIN" && data.global === true ? null : user.organizationId, uploadedById: user.id, title, content, category: String(data.category || "GENERAL").slice(0, 60), sourceType: String(data.sourceType || "TEXT").slice(0, 20), fileName: data.fileName ? String(data.fileName).slice(0, 200) : null, isPublished: data.isPublished === true, ...(embedding ? { embedding, embeddingModel: process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small" } : {}) } }); }
 async function deleteKnowledge(user, id) { assertAIPlan(user); if (!isAdmin(user)) throw fail("Only HR or administrators can manage AI knowledge.", 403); const r = await prisma.aIKnowledgeDocument.updateMany({ where: { id, organizationId: user.organizationId, archivedAt: null }, data: { archivedAt: new Date(), isPublished: false } }); if (!r.count) throw fail("Knowledge document not found.", 404); return { id }; }
-module.exports = { chat, conversations, messages, deleteConversation, knowledgeList, upsertKnowledge, deleteKnowledge, listAuthorizedEmployees, getTodayLeaveSummary, getAuthorizedEmployeePayrollSummary, getApplicationNavigation, getPendingApprovals, reviewApproval, getLeaveTypes, applyLeave, applyPermission, isClearlyOutOfScope, OUT_OF_SCOPE_MESSAGE };
+function status(user) {
+  return {
+    enabled: String(process.env.AI_ASSISTANT_ENABLED).toLowerCase() === "true",
+    providerConfigured: Boolean(process.env.OPENAI_API_KEY),
+    model: process.env.OPENAI_MODEL || "gpt-5-mini",
+    timeoutMs: AI_TIMEOUT_MS,
+    maxRetries: AI_MAX_RETRIES,
+    role: user.role,
+    toolCount: toolsFor(user).length,
+  };
+}
+
+module.exports = { chat, status, conversations, messages, deleteConversation, knowledgeList, upsertKnowledge, deleteKnowledge, listAuthorizedEmployees, getTodayLeaveSummary, getTodayAttendanceSummary, getAuthorizedEmployeePayrollSummary, getApplicationNavigation, getPendingApprovals, reviewApproval, getLeaveTypes, applyLeave, applyPermission, isClearlyOutOfScope, OUT_OF_SCOPE_MESSAGE };

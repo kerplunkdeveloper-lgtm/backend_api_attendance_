@@ -53,7 +53,7 @@ router.get(
 // Must stay above "/:id" or "celebrations" would be treated as an employee id.
 router.get(
   "/celebrations",
-  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR"),
+  authorizeRoles("SUPER_ADMIN", "COMPANY_ADMIN", "MANAGER", "HR", "EMPLOYEE"),
   employeeController.celebrations,
 );
 

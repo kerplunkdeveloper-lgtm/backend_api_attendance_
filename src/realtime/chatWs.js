@@ -4,6 +4,7 @@ const { getRedisSubscriber, publishRedis, logRedisError } = require("../config/r
 
 const CHAT_CHANNEL = "workpulse:chat:messages";
 const PRESENCE_CHANNEL = "workpulse:chat:presence";
+const ATTENDANCE_CHANNEL = "workpulse:attendance:updates";
 
 function getWs() {
   try {
@@ -237,6 +238,9 @@ async function startRedisChatSubscriber() {
     await subscriber.subscribe(PRESENCE_CHANNEL, (raw) => {
       try { broadcastPresenceLocal(JSON.parse(raw)); } catch (error) { logRedisError(error); }
     });
+    await subscriber.subscribe(ATTENDANCE_CHANNEL, (raw) => {
+      try { broadcastAttendanceLocal(JSON.parse(raw)); } catch (error) { logRedisError(error); }
+    });
   } catch (error) {
     redisChatSubscriberStarted = false;
     logRedisError(error);
@@ -265,6 +269,22 @@ function broadcastToThread(threadId, message) {
   });
 }
 
+function broadcastAttendanceLocal(event) {
+  if (!event?.organizationId) return;
+  const frame = JSON.stringify({ type: "attendance:update", event });
+  for (const pool of socketsByUser.values()) {
+    for (const ws of pool) {
+      if (ws.readyState === 1 && ws.organizationId === event.organizationId) ws.send(frame);
+    }
+  }
+}
+
+function publishAttendanceUpdate(event) {
+  publishRedis(ATTENDANCE_CHANNEL, event).then((published) => {
+    if (!published) broadcastAttendanceLocal(event);
+  });
+}
+
 function revokeUserSockets(userId) {
   const pool = socketsByUser.get(userId);
   if (!pool) return;
@@ -282,6 +302,8 @@ module.exports = {
   broadcastToThread,
   broadcastLocalToThread,
   broadcastPresenceLocal,
+  broadcastAttendanceLocal,
+  publishAttendanceUpdate,
   onlineUserIds,
   getSocketsByUser: () => socketsByUser,
   bindClient,
