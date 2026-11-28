@@ -14,6 +14,7 @@ router.get("/activity", controller.activity);
 router.get("/clients", controller.listClients);
 router.get("/developers", controller.listDevelopers);
 router.post("/developers", controller.createDeveloper);
+router.patch("/developers/:id", controller.updateDeveloper);
 router.get("/clients/:id", controller.getClient);
 router.post("/clients/:id/actions", controller.applyAction);
 router.post("/clients/:id/admin-password-reset", controller.sendAdminPasswordReset);

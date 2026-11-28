@@ -874,7 +874,7 @@ model Employee {
   id               String         @id @default(uuid())
   organizationId   String
   userId           String?        @unique
-  employeeCode     String
+  employeeCode     String?
   firstName        String
   lastName         String?
   phone            String?

@@ -27,6 +27,26 @@ async function createDeveloper(actor, payload = {}) {
   return { developer, temporaryPassword };
 }
 
+async function updateDeveloper(id, payload = {}) {
+  const developerId = String(id || "").trim();
+  if (!developerId) throw Object.assign(new Error("Developer account id is required."), { statusCode: 400 });
+  if (typeof payload.isActive !== "boolean") {
+    throw Object.assign(new Error("isActive must be a boolean."), { statusCode: 400 });
+  }
+
+  const developer = await prisma.user.findFirst({
+    where: { id: developerId, role: "DEVELOPER" },
+    select: { id: true },
+  });
+  if (!developer) throw Object.assign(new Error("Developer account not found."), { statusCode: 404 });
+
+  return prisma.user.update({
+    where: { id: developerId },
+    data: { isActive: payload.isActive },
+    select: { id: true, email: true, role: true, isActive: true, createdAt: true, lastLoginAt: true, mustChangePassword: true },
+  });
+}
+
 /** Monthly recurring revenue contributed by one subscription. */
 const monthlyValue = (sub) => {
   if (!sub || sub.status !== "ACTIVE" || sub.plan === "FREE_TRIAL") return 0;
@@ -574,4 +594,4 @@ async function activityLog(query = {}) {
   return { records, ...paginationMeta(total, page, limit) };
 }
 
-module.exports = { overview, revenueHistory, listClients, getClient, applyAction, sendAdminPasswordReset, attention, activityLog, monthlyValue, listDevelopers, createDeveloper };
+module.exports = { overview, revenueHistory, listClients, getClient, applyAction, sendAdminPasswordReset, attention, activityLog, monthlyValue, listDevelopers, createDeveloper, updateDeveloper };

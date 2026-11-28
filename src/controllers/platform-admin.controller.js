@@ -28,4 +28,5 @@ module.exports = {
   ),
   listDevelopers: handle(() => service.listDevelopers()),
   createDeveloper: handle((req) => service.createDeveloper(req.user, req.body)),
+  updateDeveloper: handle((req) => service.updateDeveloper(req.params.id, req.body)),
 };

@@ -227,12 +227,13 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN",
   assertCompanyAdminProvisioningAllowed(org, userRole, actorRole);
 
   // Generate or validate one common company-prefixed employee code, e.g. KM002.
-  const finalEmployeeCode =
-    employeeCode?.trim() || await getNextEmployeeCode(organizationId, prisma, userRole, org.name, profile.dateOfJoining);
+  const finalEmployeeCode = userRole === "COMPANY_ADMIN"
+    ? null
+    : employeeCode?.trim() || await getNextEmployeeCode(organizationId, prisma, userRole, org.name, profile.dateOfJoining);
 
-  const existingCode = await prisma.employee.findFirst({
+  const existingCode = finalEmployeeCode ? await prisma.employee.findFirst({
     where: { organizationId, employeeCode: finalEmployeeCode, deletedAt: null },
-  });
+  }) : null;
 
   if (existingCode) {
     throw new Error(`Employee code '${finalEmployeeCode}' is already taken in this organization`);
@@ -278,7 +279,7 @@ const createEmployee = async (organizationId, data, actorRole = "COMPANY_ADMIN",
     avatar: data.avatar,
     firstName: profile.firstName,
     lastName: profile.lastName,
-    employeeCode: finalEmployeeCode,
+    employeeCode: finalEmployeeCode || undefined,
   });
 
   // Atomic creation of User + Employee
@@ -606,6 +607,28 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
   const birthDateToSet = dateOfBirth !== undefined ? parsePastDate("Date of birth", dateOfBirth) : undefined;
   const joiningDateToSet = dateOfJoining !== undefined ? parsePastDate("Date of joining", dateOfJoining, { allowFuture: true }) : undefined;
 
+  const requestedRole = role ? assertRoleAssignment({
+    requestedRole: role,
+    actorRole,
+    actorUserId,
+    targetUserId: employee.userId,
+    targetRole: employee.user?.role,
+    allowManagerRole: actorRole === "MANAGER" && (await hasRolesAccess(organizationId, actorRole)) === true,
+  }) : employee.user?.role;
+  let nextEmployeeCode;
+  if (role) {
+    if (["COMPANY_ADMIN", "SUPER_ADMIN"].includes(requestedRole)) {
+      nextEmployeeCode = null;
+    } else if (employeeCode?.trim() || employee.employeeCode) {
+      nextEmployeeCode = employeeCode?.trim() || employee.employeeCode;
+    } else {
+      const organization = await prisma.organization.findUnique({ where: { id: organizationId }, select: { name: true } });
+      nextEmployeeCode = await getNextEmployeeCode(organizationId, prisma, requestedRole, organization?.name || "Clocked", joiningDateToSet || employee.dateOfJoining);
+    }
+  } else if (employeeCode !== undefined) {
+    nextEmployeeCode = employeeCode.trim() || null;
+  }
+
   // Check the code here so a duplicate is a clear message, not an opaque database error.
   if (employeeCode && employeeCode.trim() !== employee.employeeCode) {
     const clash = await prisma.employee.findFirst({
@@ -652,14 +675,7 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
     if (employee.userId && (role || avatarToSet !== undefined)) {
       const userUpdates = {};
       if (role) {
-        userUpdates.role = assertRoleAssignment({
-          requestedRole: role,
-          actorRole,
-          actorUserId,
-          targetUserId: employee.userId,
-          targetRole: employee.user?.role,
-          allowManagerRole: actorRole === "MANAGER" && (await hasRolesAccess(organizationId, actorRole)) === true,
-        });
+        userUpdates.role = requestedRole;
       }
       if (avatarToSet !== undefined) {
         userUpdates.avatarUrl = avatarToSet ? String(avatarToSet).trim() : null;
@@ -678,7 +694,7 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
         ...(lastName !== undefined ? { lastName: lastName?.trim() || null } : {}),
         ...(identity.phone !== undefined ? { phone: identity.phone } : {}),
         ...(statusToSet ? { status: statusToSet } : {}),
-        ...(employeeCode ? { employeeCode: employeeCode.trim() } : {}),
+        ...(nextEmployeeCode !== undefined ? { employeeCode: nextEmployeeCode } : {}),
         ...(branchId !== undefined ? { branchId: branchId || null } : {}),
         ...(departmentId !== undefined ? { departmentId: departmentId || null } : {}),
         ...(shiftId !== undefined ? { shiftId: shiftId || null } : {}),
@@ -996,8 +1012,11 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
   const passwordHash = await bcrypt.hash(tempPassword, salt);
 
   const userRole = resolveAssignableRole(role, actorRole, { allowManagerRole: ["MANAGER", "HR"].includes(actorRole) && (await hasRolesAccess(organizationId, actorRole)) === true });
-  // HR uses the same company-wide employee-code sequence as every other employee.
-  const employeeCode = data.employeeCode?.trim() || await getNextEmployeeCode(organizationId, prisma, userRole, org.name, profile.dateOfJoining);
+  // Company admins are account owners, not workforce employees, so they do not
+  // consume or receive an employee-code sequence number.
+  const employeeCode = userRole === "COMPANY_ADMIN"
+    ? null
+    : data.employeeCode?.trim() || await getNextEmployeeCode(organizationId, prisma, userRole, org.name, profile.dateOfJoining);
   const avatarUrl = resolveAvatarUrl({
     avatarUrl: data.avatarUrl,
     profileImage: data.profileImage,
@@ -1005,7 +1024,7 @@ const inviteEmployee = async (organizationId, invitedByUserId, data, actorRole =
     avatar: data.avatar,
     firstName: profile.firstName,
     lastName: profile.lastName,
-    employeeCode,
+    employeeCode: employeeCode || undefined,
   });
 
   // Atomic: create User + Employee

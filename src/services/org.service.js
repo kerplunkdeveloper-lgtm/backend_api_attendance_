@@ -18,6 +18,8 @@ const DEFAULT_EMPLOYEE_ACCESS = { DASHBOARD: true, ATTENDANCE: true, EMPLOYEES: 
 const DEFAULT_ROLE_ACCESS = { MANAGER: DEFAULT_HR_ACCESS, HR: DEFAULT_HR_ACCESS, EMPLOYEE: DEFAULT_EMPLOYEE_ACCESS };
 const DEFAULT_MANDATORY_PROFILE_FIELDS = ["gender", "dateOfBirth", "dateOfJoining", "designation", "employmentType", "branchId", "departmentId", "shiftId", "address", "emergencyContactName", "emergencyContactPhone", "bankName", "bankAccountNumber", "bankIfsc", "ctc"];
 const MANDATORY_PROFILE_FIELD_OPTIONS = new Set(["gender", "bloodGroup", "maritalStatus", "dateOfBirth", "dateOfJoining", "designation", "employmentType", "branchId", "departmentId", "shiftId", "address", "emergencyContactName", "emergencyContactPhone", "personalEmail", "bankName", "bankAccountNumber", "bankIfsc", "ctc"]);
+const EMPLOYEE_DOCUMENT_TYPES = ["AADHAAR", "PAN", "PASSPORT", "DRIVING_LICENCE", "EDUCATION_CERTIFICATE", "EXPERIENCE_LETTER", "OFFER_LETTER", "EMPLOYMENT_CONTRACT", "BANK_DOCUMENT", "OTHER"];
+const DEFAULT_MANDATORY_EMPLOYEE_DOCUMENTS = ["AADHAAR", "PAN", "EDUCATION_CERTIFICATE", "BANK_DOCUMENT"];
 
 const normalizeRoleAccess = (stored) => {
   const source = stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
@@ -36,7 +38,8 @@ const presentOrganization = (organization) => {
   const storedAccess = organization.hrAccess && typeof organization.hrAccess === "object" ? organization.hrAccess : {};
   const hrAccess = Object.fromEntries(HR_ACCESS_AREAS.map((area) => [area, storedAccess[area] === undefined ? true : storedAccess[area] === true]));
   const configuredProfileFields = Array.isArray(storedAccess.MANDATORY_PROFILE_FIELDS) ? storedAccess.MANDATORY_PROFILE_FIELDS.filter((field) => MANDATORY_PROFILE_FIELD_OPTIONS.has(field)) : DEFAULT_MANDATORY_PROFILE_FIELDS;
-  return { ...presentOrganizationImage(safe), hrAccess, roleAccess: normalizeRoleAccess(storedAccess.ROLE_ACCESS), mandatoryProfileFields: configuredProfileFields, sso: ssoService.getConfiguration(organization) };
+  const configuredDocumentTypes = Array.isArray(storedAccess.MANDATORY_EMPLOYEE_DOCUMENTS) ? storedAccess.MANDATORY_EMPLOYEE_DOCUMENTS.filter((type) => EMPLOYEE_DOCUMENT_TYPES.includes(type)) : DEFAULT_MANDATORY_EMPLOYEE_DOCUMENTS;
+  return { ...presentOrganizationImage(safe), hrAccess, roleAccess: normalizeRoleAccess(storedAccess.ROLE_ACCESS), mandatoryProfileFields: configuredProfileFields, mandatoryEmployeeDocuments: configuredDocumentTypes, sso: ssoService.getConfiguration(organization) };
 };
 
 async function getSettings(organizationId) {
@@ -55,11 +58,11 @@ async function getSettings(organizationId) {
 async function updateSettings(organizationId, payload, actor = {}) {
   const data = {};
   if (actor.role === "HR") {
-    const unsupported = Object.keys(payload || {}).filter((key) => !["hrAccess", "roleAccess", "mandatoryProfileFields"].includes(key));
+    const unsupported = Object.keys(payload || {}).filter((key) => !["hrAccess", "roleAccess", "mandatoryProfileFields", "mandatoryEmployeeDocuments"].includes(key));
     if (unsupported.length) throw Object.assign(new Error("HR can update role permissions only."), { statusCode: 403 });
   }
   if (actor.role === "MANAGER") {
-    const unsupported = Object.keys(payload || {}).filter((key) => key !== "mandatoryProfileFields");
+    const unsupported = Object.keys(payload || {}).filter((key) => !["mandatoryProfileFields", "mandatoryEmployeeDocuments"].includes(key));
     if (unsupported.length) throw Object.assign(new Error("Managers can update mandatory profile fields only."), { statusCode: 403 });
   }
   const currentAccess = await prisma.organization.findUnique({ where: { id: organizationId }, select: { hrAccess: true } });
@@ -81,6 +84,13 @@ async function updateSettings(organizationId, payload, actor = {}) {
     const invalid = fields.filter((field) => !MANDATORY_PROFILE_FIELD_OPTIONS.has(field));
     if (invalid.length) throw Object.assign(new Error(`Unsupported profile field: ${invalid[0]}`), { statusCode: 400 });
     data.hrAccess = { ...(data.hrAccess || existingAccess), MANDATORY_PROFILE_FIELDS: fields };
+  }
+  if (payload.mandatoryEmployeeDocuments !== undefined) {
+    if (!Array.isArray(payload.mandatoryEmployeeDocuments)) throw Object.assign(new Error("Mandatory employee documents must be an array."), { statusCode: 400 });
+    const types = [...new Set(payload.mandatoryEmployeeDocuments.map((type) => String(type).trim().toUpperCase()))];
+    const invalid = types.filter((type) => !EMPLOYEE_DOCUMENT_TYPES.includes(type));
+    if (invalid.length) throw Object.assign(new Error(`Unsupported document type: ${invalid[0]}`), { statusCode: 400 });
+    data.hrAccess = { ...(data.hrAccess || existingAccess), MANDATORY_EMPLOYEE_DOCUMENTS: types };
   }
   if (payload.requireAdminTwoFactor !== undefined) {
     const enable = payload.requireAdminTwoFactor === true || payload.requireAdminTwoFactor === "true";
