@@ -3,6 +3,7 @@ const controller = require("../controllers/ai.controller");
 const { authenticate, authorizeRoles } = require("../middleware/auth.middleware");
 const router = express.Router();
 router.use(authenticate);
+router.get("/status", controller.status);
 router.post("/chat", controller.chat);
 router.get("/people", controller.people);
 router.get("/conversations", controller.conversations);

@@ -120,6 +120,32 @@ async function getEmployeeAttendance(user, args = {}) {
   return { employee: { employeeCode: employee.employeeCode, name: `${employee.firstName} ${employee.lastName || ""}`.trim() }, year, month, summary: { records: rows.length, presentDays: rows.filter((r) => !["ABSENT", "LEAVE"].includes(r.status)).length, absentDays: rows.filter((r) => r.status === "ABSENT").length, lateDays: rows.filter((r) => r.lateMinutes > 0 || r.status === "LATE").length, earlyDepartureDays: rows.filter((r) => r.earlyMinutes > 0).length, workingMinutes: rows.reduce((sum, r) => sum + (r.workingMinutes || 0), 0), overtimeMinutes: rows.reduce((sum, r) => sum + (r.overtimeMinutes || 0), 0) }, records: serialise(rows) };
 }
 
+async function getAttendancePunchDetails(user, args = {}) {
+  const date = text(args.date, 20);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw fail("A valid attendance date is required in YYYY-MM-DD format.");
+  const selector = args.employeeId || args.employeeCode
+    ? { employeeId: args.employeeId, employeeCode: args.employeeCode }
+    : { employeeId: user.employee?.id };
+  const employee = await getEmployee(user, selector);
+  const dayStart = new Date(`${date}T00:00:00.000Z`);
+  const dayEnd = new Date(`${date}T00:00:00.000Z`);
+  dayEnd.setUTCDate(dayEnd.getUTCDate() + 1);
+  const row = await prisma.attendance.findFirst({
+    where: { organizationId: user.organizationId, employeeId: employee.id, date: { gte: dayStart, lt: dayEnd } },
+    select: { date: true, status: true, checkIn: true, checkOut: true, workingMinutes: true, lateMinutes: true, earlyMinutes: true, overtimeMinutes: true, breakMinutes: true, lunchMinutes: true, checkInLocation: true, checkOutLocation: true },
+    orderBy: { updatedAt: "desc" },
+  });
+  const timezone = user.organization?.timezone || "Asia/Kolkata";
+  const formatTime = (value) => value ? new Intl.DateTimeFormat("en-IN", { timeZone: timezone, hour: "2-digit", minute: "2-digit", hour12: true }).format(new Date(value)) : null;
+  return {
+    verified: true,
+    date,
+    timezone,
+    employee: { employeeCode: employee.employeeCode, name: `${employee.firstName} ${employee.lastName || ""}`.trim() },
+    record: row ? { status: row.status, checkIn: row.checkIn, checkOut: row.checkOut, checkInTime: formatTime(row.checkIn), checkOutTime: formatTime(row.checkOut), workingMinutes: row.workingMinutes, lateMinutes: row.lateMinutes, earlyMinutes: row.earlyMinutes, overtimeMinutes: row.overtimeMinutes, breakMinutes: row.breakMinutes, lunchMinutes: row.lunchMinutes, checkInLocation: row.checkInLocation, checkOutLocation: row.checkOutLocation } : null,
+  };
+}
+
 async function getEmployeeLeaveHistory(user, args = {}) {
   const employee = await getEmployee(user, args);
   const status = args.status ? text(args.status, 30).toUpperCase() : undefined;
@@ -152,4 +178,4 @@ async function getAuthorizedOrganizationSummary(user) {
   return { scope: "organization", employees, departments, branches };
 }
 
-module.exports = { searchAuthorizedEmployee, getEmployeeProfile, getEmployeeSalaryStructure, getEmployeePayrollBreakdown, getEmployeeAttendance, getEmployeeLeaveHistory, getEmployeeOvertime, getCompanyPolicies, getDepartmentSummary, getAuthorizedOrganizationSummary, employeeWhere };
+module.exports = { searchAuthorizedEmployee, getEmployeeProfile, getEmployeeSalaryStructure, getEmployeePayrollBreakdown, getEmployeeAttendance, getAttendancePunchDetails, getEmployeeLeaveHistory, getEmployeeOvertime, getCompanyPolicies, getDepartmentSummary, getAuthorizedOrganizationSummary, employeeWhere };

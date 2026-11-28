@@ -27,6 +27,7 @@ const shootRequestService = require("./shoot-request.service");
 const notificationService = require("./notification.service");
 const deviceService = require("./device.service");
 const { presentEmployeeImage } = require("../utils/privateMediaUrls");
+const { publishAttendanceUpdate } = require("../realtime/chatWs");
 
 const formatLocalTime = (value, timezone = DEFAULT_TIMEZONE) =>
   new Date(value).toLocaleTimeString("en-IN", {
@@ -810,6 +811,7 @@ const checkIn = async ({ userId, employeeId, organizationId, latitude, longitude
     checkInMessage = `Punched in on ${reason} — all hours worked will be logged as Overtime (OT).`;
   }
 
+  publishAttendanceUpdate({ organizationId, employeeId: employee.id, attendanceId: attendance.id, action: "CHECK_IN", status: attendance.status, date: attendance.date, checkIn: attendance.checkIn, checkOut: attendance.checkOut });
   return {
     success: true,
     message: checkInMessage,
@@ -1439,6 +1441,7 @@ const checkOut = async ({ userId, employeeId, organizationId, latitude, longitud
     });
   }
 
+  publishAttendanceUpdate({ organizationId, employeeId: employee.id, attendanceId: updatedAttendance.id, action: "CHECK_OUT", status: updatedAttendance.status, date: updatedAttendance.date, checkIn: updatedAttendance.checkIn, checkOut: updatedAttendance.checkOut, workingMinutes: updatedAttendance.workingMinutes });
   return {
     success: true,
     message: checkoutMessage,
@@ -1609,6 +1612,17 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
   const shift = await resolveShift(employee, organizationId, new Date(date));
   const timezone = await getOrgTimezone(organizationId);
   const policy = await getPolicy(organizationId);
+  // Manual corrections may replace the punches on an existing row. Reuse its
+  // recorded pauses so recalculating company/productive hours does not erase
+  // break or lunch time from the half-day/short-hours decision.
+  const existingAttendance = prisma.attendance?.findUnique
+    ? await prisma.attendance.findUnique({
+        where: { employeeId_date: { employeeId, date: targetDate } },
+        select: { breakMinutes: true, lunchMinutes: true },
+      })
+    : null;
+  const existingBreakMinutes = Number(existingAttendance?.breakMinutes || 0);
+  const existingLunchMinutes = Number(existingAttendance?.lunchMinutes || 0);
 
   // Admin corrections enter wall-clock times for the attendance date. For a
   // flexible or overnight shift, an out time earlier than the in time means
@@ -1636,8 +1650,8 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
       { ...shift, flexiblePunching: isFlexiblePunching(employee, shift) },
       normalizedCheckIn,
       normalizedCheckOut,
-      0,
-      { timeZone: timezone, halfDayThresholdMinutes: policy.halfDayThresholdMinutes }
+      existingBreakMinutes,
+      { timeZone: timezone, halfDayThresholdMinutes: policy.halfDayThresholdMinutes, lunchMinutes: existingLunchMinutes }
     );
     workingMinutes = metrics.workingMinutes;
     lateMinutes = metrics.lateMinutes;
@@ -1645,8 +1659,12 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
     overtimeMinutes = metrics.overtimeMinutes;
     // A completed pair of punches owns the duration status. Preserve explicit
     // non-work modes such as leave, holiday, week-off, or WFH.
-    if (["PRESENT", "LATE", "HALF_DAY", "SHORT_HOURS"].includes(status)) {
+    if (["PRESENT", "LATE", "SHORT_HOURS"].includes(status)) {
       attendanceStatus = metrics.status;
+    } else if (status === "HALF_DAY") {
+      // HALF_DAY is an explicit HR/admin decision and must not be silently
+      // converted to PRESENT or SHORT_HOURS by the duration evaluator.
+      attendanceStatus = "HALF_DAY";
     }
   }
 
@@ -1663,6 +1681,8 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
         lateMinutes,
         earlyMinutes,
         overtimeMinutes,
+        breakMinutes: existingBreakMinutes,
+        lunchMinutes: existingLunchMinutes,
       },
       create: {
         organizationId,
@@ -1677,6 +1697,8 @@ const adminMarkAttendance = async ({ adminUserId, organizationId, employeeId, da
         lateMinutes,
         earlyMinutes,
         overtimeMinutes,
+        breakMinutes: existingBreakMinutes,
+        lunchMinutes: existingLunchMinutes,
       },
     });
 
@@ -1945,9 +1967,33 @@ const getTodayStatus = async (userId, organizationId, role = "EMPLOYEE") => {
   };
 };
 
-const getLiveToday = async (organizationId) => {
+const parseLiveDate = (value, label) => {
+  if (!value) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value))) {
+    const error = new Error(`${label} must use YYYY-MM-DD format`);
+    error.statusCode = 400;
+    throw error;
+  }
+  const date = getTodayDateOnly(new Date(`${value}T00:00:00.000Z`));
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) {
+    const error = new Error(`${label} is not a valid calendar date`);
+    error.statusCode = 400;
+    throw error;
+  }
+  return date;
+};
+
+const getLiveToday = async (organizationId, { from, to } = {}) => {
   const timezone = await getOrgTimezone(organizationId);
   const today = getLocalDateOnly(new Date(), timezone);
+  const fromDate = parseLiveDate(from, "from") || parseLiveDate(to, "to") || today;
+  const toDate = parseLiveDate(to, "to") || fromDate;
+  if (fromDate > toDate) {
+    const error = new Error("from date cannot be after to date");
+    error.statusCode = 400;
+    throw error;
+  }
+  const isToday = fromDate.getTime() === today.getTime() && toDate.getTime() === today.getTime();
 
   const [employees, attendances] = await Promise.all([
     prisma.employee.findMany({
@@ -1966,8 +2012,9 @@ const getLiveToday = async (organizationId) => {
       orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
     }),
     prisma.attendance.findMany({
-      where: { organizationId, date: today },
+      where: { organizationId, date: { gte: fromDate, lte: toDate } },
       select: {
+        date: true,
         employeeId: true,
         checkIn: true,
         checkOut: true,
@@ -1986,12 +2033,19 @@ const getLiveToday = async (organizationId) => {
     }),
   ]);
 
-  const byEmployee = new Map(attendances.map((row) => [row.employeeId, row]));
+  const recordsByEmployee = new Map();
+  attendances.forEach((row) => {
+    const records = recordsByEmployee.get(row.employeeId) || [];
+    records.push(row);
+    recordsByEmployee.set(row.employeeId, records);
+  });
   const people = employees.map((employee) => {
-    const attendance = byEmployee.get(employee.id);
+    const records = recordsByEmployee.get(employee.id) || [];
+    records.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    const attendance = records[0];
     const name = `${employee.firstName || ""} ${employee.lastName || ""}`.trim() || "Team member";
-    const clockedIn = Boolean(attendance?.checkIn && !attendance?.checkOut);
-    const latestEvent = attendance?.events?.[0];
+    const clockedIn = isToday && Boolean(attendance?.checkIn && !attendance?.checkOut && attendance?.date?.getTime() === today.getTime());
+    const latestEvent = isToday && attendance?.date?.getTime() === today.getTime() ? attendance?.events?.[0] : null;
     const activePauseType = clockedIn && latestEvent?.type === "BREAK_START"
       ? "BREAK"
       : clockedIn && latestEvent?.type === "LUNCH_START"
@@ -2000,7 +2054,7 @@ const getLiveToday = async (organizationId) => {
     const activePauseMinutes = activePauseType && latestEvent?.timestamp
       ? Math.max(0, Math.floor((Date.now() - new Date(latestEvent.timestamp).getTime()) / 60000))
       : 0;
-    const completedPauseCount = attendance?.events?.filter((event) => event.type === "BREAK_END" || event.type === "LUNCH_END").length || 0;
+    const completedPauseCount = records.reduce((sum, record) => sum + (record.events?.filter((event) => event.type === "BREAK_END" || event.type === "LUNCH_END").length || 0), 0);
     const location = attendance
       ? attendance.checkInLocation || attendance.branch?.name || employee.branch?.name || "Location not shared"
       : null;
@@ -2024,8 +2078,8 @@ const getLiveToday = async (organizationId) => {
       activePauseType,
       activePauseStartedAt: activePauseType ? latestEvent.timestamp : null,
       activePauseMinutes,
-      breakMinutes: attendance?.breakMinutes || 0,
-      lunchMinutes: attendance?.lunchMinutes || 0,
+      breakMinutes: records.reduce((sum, record) => sum + Number(record.breakMinutes || 0), 0),
+      lunchMinutes: records.reduce((sum, record) => sum + Number(record.lunchMinutes || 0), 0),
       completedPauseCount,
     };
   });
@@ -2048,7 +2102,9 @@ const getLiveToday = async (organizationId) => {
   });
 
   return {
-    date: today,
+    date: fromDate.getTime() === toDate.getTime() ? fromDate : null,
+    from: fromDate,
+    to: toDate,
     total: people.length,
     clockedIn: people.filter((person) => person.clockedIn).length,
     punched: people.filter((person) => person.checkIn).length,

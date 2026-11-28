@@ -1116,12 +1116,13 @@ class PayrollService {
    * 5. Get organization payslips with filters
    */
   async getPayslips(organizationId, query = {}) {
-    const { month, year, employeeId, status } = query;
+    const { month, year, employeeId, branchId, status } = query;
     const where = { organizationId };
 
     if (month) where.month = parseInt(month);
     if (year) where.year = parseInt(year);
     if (employeeId) where.employeeId = employeeId;
+    if (branchId && branchId !== "ALL") where.employee = { branchId };
     if (status && status !== "ALL") where.status = status;
 
     return await prisma.payslip.findMany({
@@ -1134,7 +1135,7 @@ class PayrollService {
             lastName: true,
             employeeCode: true,
             department: { select: { name: true } },
-            branch: { select: { name: true } },
+            branch: { select: { id: true, name: true } },
           },
         },
         expenses: {
@@ -1150,6 +1151,70 @@ class PayrollService {
       },
       orderBy: [{ year: "desc" }, { month: "desc" }],
     });
+  }
+
+  /** Generates the filtered payroll table as a real downloadable PDF. */
+  async getPayrollExportPdf(organizationId, query = {}) {
+    const rows = await this.getPayslips(organizationId, query);
+    const PDFDocument = require("pdfkit");
+    const doc = new PDFDocument({ size: "A4", layout: "landscape", margin: 24, info: { Title: "Payroll report", Author: "Clocked" } });
+    const chunks = [];
+    const pdfBuffer = await new Promise((resolve, reject) => {
+      doc.on("data", (chunk) => chunks.push(chunk));
+      doc.on("end", () => resolve(Buffer.concat(chunks)));
+      doc.on("error", reject);
+
+      const money = (value) => `₹${Number(value || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+      const columns = [
+        ["Employee", 150], ["Code", 65], ["Branch", 95], ["Month", 42], ["Basic", 65],
+        ["Gross", 65], ["Late", 58], ["Pause", 58], ["LOP", 58], ["Deductions", 72], ["Net take-home", 78], ["Status", 70],
+      ];
+      const values = (slip) => [
+        `${slip.employee?.firstName || ""} ${slip.employee?.lastName || ""}`.trim() || "Employee",
+        slip.employee?.employeeCode || "",
+        slip.employee?.branch?.name || "Unassigned",
+        `${slip.month}/${slip.year}`,
+        money(slip.baseSalary ?? slip.basicSalary),
+        money(slip.grossSalary),
+        money(slip.lateDeduction),
+        money(slip.pauseDeduction ?? slip.breakDeduction),
+        money(slip.unpaidLeaveDeduction ?? slip.lopDeduction),
+        money(slip.deductionsTotal ?? slip.totalDeductions),
+        money(slip.netSalary),
+        String(slip.status || "").replaceAll("_", " "),
+      ];
+      const drawTable = () => {
+        const startX = doc.page.margins.left;
+        const tableWidth = columns.reduce((sum, [, width]) => sum + width, 0);
+        let y = 92;
+        doc.fillColor("#eef2ff").rect(startX, y, tableWidth, 22).fill();
+        let x = startX;
+        doc.font("Helvetica-Bold").fontSize(7).fillColor("#3730a3");
+        columns.forEach(([label, width]) => { doc.text(label, x + 4, y + 7, { width: width - 8, ellipsis: true }); x += width; });
+        y += 22;
+        doc.font("Helvetica").fontSize(7);
+        rows.forEach((slip, index) => {
+          if (y > doc.page.height - 36) { doc.addPage(); y = 30; }
+          if (index % 2 === 0) doc.fillColor("#f8fafc").rect(startX, y, tableWidth, 20).fill();
+          x = startX;
+          const cells = values(slip);
+          cells.forEach((cell, cellIndex) => {
+            const width = columns[cellIndex][1];
+            doc.fillColor("#0f172a").text(String(cell), x + 4, y + 6, { width: width - 8, ellipsis: true, lineBreak: false });
+            x += width;
+          });
+          y += 20;
+        });
+      };
+
+      const month = query.month || rows[0]?.month || "";
+      const year = query.year || rows[0]?.year || "";
+      doc.font("Helvetica-Bold").fontSize(18).fillColor("#0f172a").text("Payroll report", 24, 26);
+      doc.font("Helvetica").fontSize(9).fillColor("#64748b").text(`Period: ${month}/${year}  •  ${rows.length} employee${rows.length === 1 ? "" : "s"}`, 24, 52);
+      drawTable();
+      doc.end();
+    });
+    return { pdfBuffer, count: rows.length };
   }
 
   /**

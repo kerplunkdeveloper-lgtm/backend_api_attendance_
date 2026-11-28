@@ -19,6 +19,12 @@ mockPrisma({
           dateOfBirth: null, dateOfJoining: new Date("2019-01-01T00:00:00.000Z"),
           avatarUrl: "  ", department: null, user: null,
         },
+        {
+          id: "e3", firstName: "Chris", lastName: "Kumar", designation: "Engineer",
+          dateOfBirth: new Date("1990-12-10T00:00:00.000Z"), dateOfJoining: null,
+          avatarUrl: null, avatarStorageKey: "organizations/org-1/avatars/chris.png",
+          department: null, user: null,
+        },
       ];
     },
   },
@@ -40,10 +46,11 @@ describe("celebrations feed", () => {
   });
 
   it("uses a real uploaded photo and never invents one", async () => {
-    const [first, second] = await employeeService.getCelebrations("org-1", "COMPANY_ADMIN");
+    const [first, second, privatePhoto] = await employeeService.getCelebrations("org-1", "COMPANY_ADMIN");
     assert.equal(first.photoUrl, "https://cdn.example/asha.jpg");
     assert.equal(second.photoUrl, null);
     assert.equal(second.birthMonth, null);
+    assert.equal(privatePhoto.photoUrl, "/api/employees/e3/avatar-file");
   });
 
   it("is limited to the caller's company, to working staff, and to people who have a date", async () => {

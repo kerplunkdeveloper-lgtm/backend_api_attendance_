@@ -156,6 +156,19 @@ class PayrollController {
     }
   }
 
+  async generateAsync(req, res) {
+    try {
+      const month = Number(req.body?.month);
+      const year = Number(req.body?.year);
+      if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(year) || year < 2000 || year > 2200) {
+        return res.status(400).json({ success: false, message: "A valid month and year are required" });
+      }
+      const jobs = require("../services/async-job.service");
+      const job = await jobs.createJob({ organizationId: req.user.organizationId, userId: req.user.id, type: "PAYROLL_GENERATE", payload: { month, year } });
+      return res.status(202).json({ success: true, message: "Payroll generation queued", data: job });
+    } catch (err) { return fail(res, err); }
+  }
+
   async getPayslips(req, res) {
     try {
       const result = await payrollService.getPayslips(
@@ -163,6 +176,19 @@ class PayrollController {
         req.query,
       );
       return res.status(200).json({ success: true, data: result });
+    } catch (err) { return fail(res, err); }
+  }
+
+  async getPayrollExportPdf(req, res) {
+    try {
+      const { pdfBuffer, count } = await payrollService.getPayrollExportPdf(req.user.organizationId, req.query);
+      const month = String(req.query.month || "payroll").replace(/[^a-zA-Z0-9_-]/g, "");
+      const year = String(req.query.year || "").replace(/[^a-zA-Z0-9_-]/g, "");
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="payroll-${month}-${year || "report"}.pdf"`);
+      res.setHeader("Content-Length", pdfBuffer.length);
+      res.setHeader("X-Payroll-Export-Count", String(count));
+      return res.status(200).send(pdfBuffer);
     } catch (err) { return fail(res, err); }
   }
 
