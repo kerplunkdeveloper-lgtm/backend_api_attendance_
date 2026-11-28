@@ -248,6 +248,10 @@ app.use("/overtime", overtimeRoutes);
 app.use("/overtime-allocations", overtimeAllocationRoutes);
 app.use("/shift-overrides", shiftOverrideRoutes);
 app.use("/billing", billingRoutes);
+// Backward-compatible alias for platform-owner clients that omit the /api prefix.
+// The frontend/API contract uses /api/admin/billing, but older deployments call
+// /admin/billing directly and otherwise receive Cannot GET /admin/billing/offers.
+app.use("/admin/billing", billingAdminRoutes);
 // Backward-compatible alias for older platform-owner clients that omitted the
 // /api prefix. Keep the same authentication, role, and 2FA guards.
 app.use("/admin/platform", platformAdminRoutes);

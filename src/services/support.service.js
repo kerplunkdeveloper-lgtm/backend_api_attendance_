@@ -44,6 +44,7 @@ const userSelect = {
 };
 
 const ticketInclude = {
+  organization: { select: { id: true, name: true } },
   requester: { select: userSelect },
   assignedTo: { select: userSelect },
   messages: {
@@ -79,6 +80,7 @@ function serializeTicket(ticket, includeInternal = false) {
     closedAt: ticket.closedAt,
     createdAt: ticket.createdAt,
     updatedAt: ticket.updatedAt,
+    organization: ticket.organization ? { id: ticket.organization.id, name: ticket.organization.name } : null,
     requester: ticket.requester
       ? { id: ticket.requester.id, name: personName(ticket.requester), email: ticket.requester.email, role: ticket.requester.role }
       : null,
@@ -143,7 +145,7 @@ async function list(organizationId, user, query = {}) {
       where,
       orderBy: [{ priority: "desc" }, { updatedAt: "desc" }],
       take: MAX_TICKETS,
-      include: { requester: { select: userSelect }, assignedTo: { select: userSelect } },
+      include: { organization: { select: { id: true, name: true } }, requester: { select: userSelect }, assignedTo: { select: userSelect } },
     }),
     prisma.supportTicket.groupBy({ by: ["status"], where, _count: { _all: true } }),
   ]);
@@ -222,7 +224,7 @@ async function update(organizationId, user, id, payload = {}) {
     if (payload.assignedToId === null || payload.assignedToId === "") {
       data.assignedToId = null;
     } else {
-      const assignee = await prisma.user.findFirst({ where: { id: String(payload.assignedToId), isActive: true, role: { in: ["DEVELOPER", "COMPANY_ADMIN", "MANAGER", "HR"] } } });
+      const assignee = await prisma.user.findFirst({ where: { id: String(payload.assignedToId), isActive: true, role: { in: ["DEVELOPER", "COMPANY_ADMIN", "MANAGER", "HR"] }, ...(["SUPER_ADMIN", "DEVELOPER"].includes(user.role) ? {} : { organizationId }) } });
       if (!assignee) fail("The selected assignee is not an active support user.");
       data.assignedToId = assignee.id;
     }

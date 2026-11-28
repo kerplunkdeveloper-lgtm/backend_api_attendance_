@@ -167,6 +167,16 @@ const DOCUMENT_DEFINITIONS = [
   },
 ];
 
+const getDocumentDefinitions = async (organizationId) => {
+  const organization = await prisma.organization.findUnique({ where: { id: organizationId }, select: { hrAccess: true } });
+  const stored = organization?.hrAccess && typeof organization.hrAccess === "object" ? organization.hrAccess : {};
+  const configured = Array.isArray(stored.MANDATORY_EMPLOYEE_DOCUMENTS) ? new Set(stored.MANDATORY_EMPLOYEE_DOCUMENTS) : null;
+  return DOCUMENT_DEFINITIONS.map((definition) => ({
+    ...definition,
+    isMandatory: configured ? configured.has(definition.type) : definition.isMandatory,
+  }));
+};
+
 // --------------------------------------------------
 // Storage adapter
 // --------------------------------------------------
@@ -404,7 +414,8 @@ class EmployeeDocumentService {
       },
       orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
     });
-    const mandatory = DOCUMENT_DEFINITIONS.filter((definition) => definition.isMandatory);
+    const definitions = await getDocumentDefinitions(organizationId);
+    const mandatory = definitions.filter((definition) => definition.isMandatory);
     const rows = employees.map((employee) => {
       const missing = mandatory.filter((definition) => !employee.documents.some((doc) => doc.documentType === definition.type && doc.status === "VERIFIED"));
       const uploaded = mandatory.filter((definition) => employee.documents.some((doc) => doc.documentType === definition.type));
@@ -520,7 +531,8 @@ class EmployeeDocumentService {
       };
     });
 
-    const checklist = DOCUMENT_DEFINITIONS.map((definition) => {
+    const definitions = await getDocumentDefinitions(organizationId);
+    const checklist = definitions.map((definition) => {
       const matchingDocs = enrichedDocuments.filter(
         (document) =>
           document.documentType === definition.type

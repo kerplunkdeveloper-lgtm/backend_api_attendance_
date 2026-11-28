@@ -81,6 +81,10 @@ const nextCode = async (req, res) => {
       req.query.role || "EMPLOYEE"
     ).toUpperCase();
 
+    if (["COMPANY_ADMIN", "SUPER_ADMIN"].includes(role)) {
+      return res.json({ success: true, data: { employeeCode: null } });
+    }
+
     const code = await getNextEmployeeCode(
       req.user.organizationId,
       prisma,

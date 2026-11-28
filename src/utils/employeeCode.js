@@ -39,6 +39,7 @@ const organizationPrefix = (organizationName) => {
  * no slot is free the code goes to the end of the sequence.
  */
 const getNextEmployeeCode = async (organizationId, db, role = "EMPLOYEE", organizationName = "Clocked", joiningDate = null) => {
+  if (["COMPANY_ADMIN", "SUPER_ADMIN"].includes(String(role || "").trim().toUpperCase())) return null;
   const companyPrefix = organizationPrefix(organizationName);
   const employees = await db.employee.findMany({
     where: { organizationId },
