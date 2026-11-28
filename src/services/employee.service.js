@@ -615,12 +615,19 @@ const updateEmployee = async (organizationId, employeeId, data, actor = {}) => {
     targetRole: employee.user?.role,
     allowManagerRole: actorRole === "MANAGER" && (await hasRolesAccess(organizationId, actorRole)) === true,
   }) : employee.user?.role;
-  const organization = await prisma.organization.findUnique({ where: { id: organizationId }, select: { name: true } });
-  const nextEmployeeCode = role
-    ? (["COMPANY_ADMIN", "SUPER_ADMIN"].includes(requestedRole)
-      ? null
-      : employeeCode?.trim() || employee.employeeCode || await getNextEmployeeCode(organizationId, prisma, requestedRole, organization?.name || "Clocked", joiningDateToSet || employee.dateOfJoining))
-    : employeeCode !== undefined ? employeeCode.trim() || null : undefined;
+  let nextEmployeeCode;
+  if (role) {
+    if (["COMPANY_ADMIN", "SUPER_ADMIN"].includes(requestedRole)) {
+      nextEmployeeCode = null;
+    } else if (employeeCode?.trim() || employee.employeeCode) {
+      nextEmployeeCode = employeeCode?.trim() || employee.employeeCode;
+    } else {
+      const organization = await prisma.organization.findUnique({ where: { id: organizationId }, select: { name: true } });
+      nextEmployeeCode = await getNextEmployeeCode(organizationId, prisma, requestedRole, organization?.name || "Clocked", joiningDateToSet || employee.dateOfJoining);
+    }
+  } else if (employeeCode !== undefined) {
+    nextEmployeeCode = employeeCode.trim() || null;
+  }
 
   // Check the code here so a duplicate is a clear message, not an opaque database error.
   if (employeeCode && employeeCode.trim() !== employee.employeeCode) {
